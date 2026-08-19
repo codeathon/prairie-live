@@ -7,6 +7,8 @@ the TCP script port.
 
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 
@@ -29,6 +31,9 @@ class PrairieCom:
 		self.host = host
 		self.password = password
 		self._pl = None
+		self.last_error = ""
+		self._last_wh = None
+		self._last_reconnect = 0.0
 
 	def connect(self) -> None:
 		try:
@@ -91,20 +96,46 @@ class PrairieCom:
 		return int(self._require().LinesPerFrame())
 
 	def get_frame(self, channel: int = 1) -> np.ndarray | None:
-		pl = self._require()
-		w = int(pl.PixelsPerLine())
-		h = int(pl.LinesPerFrame())
-		if w <= 0 or h <= 0:
+		# Do not call PixelsPerLine first: PV 5.8 remote aborts that COM method.
+		pl = self._pl
+		if pl is None:
 			return None
-		raw = None
 		try:
-			raw = pl.GetImage(channel)
+			raw = self._grab_raw(pl, channel)
+		except Exception as e:
+			self.last_error = str(e)
+			self._reconnect_if_dropped(e)
+			return None
+		frame = _as_frame_auto(raw, self._last_wh)
+		if frame is not None:
+			self._last_wh = frame.shape
+			self.last_error = ""
+		return frame
+
+	def _grab_raw(self, pl, channel: int):
+		try:
+			return pl.GetImage(channel)
 		except Exception:
-			try:
-				raw = pl.GetImage_2(channel, w, h)
-			except Exception:
-				return None
-		return _as_frame(raw, w, h)
+			# GetImage_2 wants (channel, pixelsPerLine, linesPerFrame).
+			h, w = self._last_wh if self._last_wh else (512, 512)
+			return pl.GetImage_2(channel, w, h)
+
+	def _reconnect_if_dropped(self, err: Exception) -> None:
+		msg = str(err).lower()
+		if "abort" not in msg and "transport" not in msg:
+			return
+		now = time.monotonic()
+		if now - self._last_reconnect < 2.0:
+			return
+		self._last_reconnect = now
+		try:
+			self.disconnect()
+		except Exception:
+			pass
+		try:
+			self.connect()
+		except Exception:
+			pass
 
 	def _require(self):
 		if self._pl is None:
@@ -112,14 +143,23 @@ class PrairieCom:
 		return self._pl
 
 
-def _as_frame(raw, w: int, h: int) -> np.ndarray | None:
+def _as_frame_auto(raw, last_wh) -> np.ndarray | None:
 	if raw is None:
 		return None
 	arr = np.array(raw)
 	if arr.size == 0:
 		return None
 	arr = arr.astype(np.uint16, copy=False).reshape(-1)
-	if arr.size < w * h:
-		return None
-	# PrairieView hands back row-major samples; MATLAB often transposes.
-	return arr[: w * h].reshape(h, w)
+	n = int(arr.size)
+	if last_wh is not None:
+		h, w = last_wh
+		if w * h == n:
+			return arr.reshape(h, w)
+	side = int(round(n ** 0.5))
+	if side * side == n:
+		return arr.reshape(side, side)
+	return None
+
+
+def _as_frame(raw, w: int, h: int) -> np.ndarray | None:
+	return _as_frame_auto(raw, (h, w))

@@ -89,7 +89,10 @@ def run_viewer(client, interval_ms: int) -> None:
 	def update(_):
 		frame = client.get_frame()
 		if frame is None:
-			return (im,)
+			err = getattr(client, "last_error", "") or "no frame"
+			# Keep the window up; COM aborts must not kill the animation.
+			title.set_text(err[:80])
+			return (im, title)
 		im.set_data(_autoscale(frame))
 		im.set_extent((0, frame.shape[1], frame.shape[0], 0))
 		state["n"] += 1
