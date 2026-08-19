@@ -38,9 +38,26 @@ class PrairieCom:
 		except Exception:
 			pass
 		self._pl = _dispatch()
-		self._pl.Connect(self.host, self.password)
-		# Without this, -TSeries blocks GetImage_2 until the stack finishes.
-		self.send("-DoNotWaitForScans")
+		ok = self._pl.Connect(self.host, self.password)
+		try:
+			connected = bool(self._pl.Connected())
+		except Exception:
+			connected = bool(ok)
+		if not connected:
+			raise RuntimeError(
+				f"PrairieLink Connect({self.host!r}) failed. "
+				"Use the scope IPv4 from the analysis PC, or 127.0.0.1 on the scope PC."
+			)
+		# PV 5.8 aborts the TCP session on this command; only try it for T-series.
+
+	def start_tseries(self) -> dict:
+		# Older PV needed this so -TSeries would not block the COM client.
+		try:
+			self.send("-DoNotWaitForScans")
+		except Exception:
+			pass
+		self.send("-TSeries")
+		return {"ok": True, "cmd": "tseries"}
 
 	def disconnect(self) -> None:
 		if self._pl is None:
@@ -52,10 +69,6 @@ class PrairieCom:
 
 	def send(self, cmd: str) -> None:
 		self._require().SendScriptCommands(cmd)
-
-	def start_tseries(self) -> dict:
-		self.send("-TSeries")
-		return {"ok": True, "cmd": "tseries"}
 
 	def abort(self) -> dict:
 		self.send("-Abort")
@@ -83,10 +96,14 @@ class PrairieCom:
 		h = int(pl.LinesPerFrame())
 		if w <= 0 or h <= 0:
 			return None
+		raw = None
 		try:
-			raw = pl.GetImage_2(channel, w, h)
+			raw = pl.GetImage(channel)
 		except Exception:
-			return None
+			try:
+				raw = pl.GetImage_2(channel, w, h)
+			except Exception:
+				return None
 		return _as_frame(raw, w, h)
 
 	def _require(self):
