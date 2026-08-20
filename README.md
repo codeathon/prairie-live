@@ -1,80 +1,171 @@
 # Prairie live viewer + T-series (Windows)
 
-Python and PrairieView both run on Windows. The viewer uses PrairieLink COM:
-`Connect(scope_ip, password)` then `GetImage_2` in a loop. Press `t` to start
-the T-series that is already configured in PrairieView.
+Live frames and PrairieLink commands for a Bruker PrairieView rig.
+
+**Images only work on the scope PC.** PrairieLink `GetImage` is local-only.
+To watch frames on a second machine, run the **relay** on the scope PC and
+the **viewer** on the analysis PC. Commands (`abort`, `GetState`, …) go
+through the same relay.
+
+Substitute your scope IPv4 for `10.33.107.147`. Password is in PrairieView:
+Tools → Scripts → Edit Scripts (default `0000`).
 
 ```
-[Windows analysis PC]                    [Windows scope PC]
- python -m prairie_live view             PrairieView (Live or T-series)
-        |  COM Connect(ip, password)
-        +-------------------------------- PrairieLink
+[analysis PC]                              [scope PC]
+ python -m prairie_live view --relay …        PrairieView
+        |  TCP 25100 frames / 25101 cmds         python -m prairie_live relay
+        +---------------------------------------- PrairieLink COM (local)
 ```
 
-Same box: `--host 127.0.0.1`. Two boxes: PrairieLink must be installed on
-**both** (the COM object lives on the Python PC; it talks to PrairieView over
-the network). Password is in PrairieView: Tools → Scripts → Edit Scripts
-(default `0000`). Allow TCP 1236 through Windows Firewall on the scope PC.
-
-## Install (Python PC)
+## Install (both PCs)
 
 ```bat
 cd prairie-live
+git fetch origin
+git checkout feat/relay-queries
 pip install -r requirements.txt
-set PYTHONPATH=src
+set PYTHONPATH=%CD%\src
 ```
 
-## Live stream
+PowerShell: `$env:PYTHONPATH = "$PWD\src"` (must be set in every new window).
 
-Start **Live** in PrairieView, or hit `l` after the window opens.
+## Local live stream (scope PC)
+
+Start **Live** in PrairieView first.
 
 ```bat
 python -m prairie_live view --host 127.0.0.1 --password 0000
-python -m prairie_live view --host 192.168.1.50 --password 0000
 ```
 
 Keys: `t` T-series, `a` abort, `l` live scan, `q` quit.
 
-The display keeps updating during a T-series. PV still writes its own TIFFs
-to the path set in PrairieView. Zoom, laser, frame count, and save directory
-are not set here.
+PrairieView still writes its own TIFFs. Zoom, laser, frame count, and save
+directory are not set here.
 
-## T-series without the viewer
+## Relay (scope PC → analysis PC)
+
+### Scope PC — firewall (Administrator, once)
 
 ```bat
-python -m prairie_live tseries --host 192.168.1.50 --password 0000
-python -m prairie_live abort --host 192.168.1.50 --password 0000
+netsh advfirewall firewall add rule name="prairie-live relay" dir=in action=allow protocol=TCP localport=25100-25101
 ```
 
-## If the Python PC does not have PrairieLink
+Or PowerShell:
 
-Run the COM grabber on the scope PC and point the viewer at it:
-
-```bat
-REM scope PC
-python -m prairie_live relay --pv-host 127.0.0.1 --password 0000
-
-REM analysis PC
-python -m prairie_live view --relay 192.168.1.50:25100
+```powershell
+New-NetFirewallRule -DisplayName "prairie-live relay" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 25100-25101 -Profile Any
 ```
 
-## Relay queries (analysis PC)
+### Scope PC — start the relay
 
-Read-only. These call PrairieLink COM on the scope PC and return the value
-over the control socket (port 25101). `SendScriptCommands` cannot do this —
-it only reports success/fail.
+Leave this window open. Ctrl-C or close the window to stop it.
 
 ```bat
-REM analysis PC, relay already running on the scope PC
+set PYTHONPATH=%CD%\src
+python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --fps 12
+```
+
+Success looks like:
+
+```
+frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1
+```
+
+Confirm it is listening:
+
+```bat
+netstat -ano | findstr "25100 25101"
+```
+
+### Analysis PC — reachability
+
+```bat
+python -c "import socket;s=socket.socket();s.settimeout(5);print(s.connect_ex(('10.33.107.147',25100)))"
+python -c "import socket;s=socket.socket();s.settimeout(5);print(s.connect_ex(('10.33.107.147',25101)))"
+```
+
+`0` means the port is open. Timeout means firewall or wrong IP. `10061`
+means nothing is listening (relay not running).
+
+### Analysis PC — frames
+
+Headless check (no matplotlib):
+
+```bat
+set PYTHONPATH=%CD%\src
+python -c "from prairie_live.relay_client import RelayClient; import time; c=RelayClient('10.33.107.147',25100); c.connect(); time.sleep(3); f=c.get_frame(); print(f.shape, f.dtype, f.min(), f.max()); c.disconnect()"
+```
+
+Viewer:
+
+```bat
+python -m prairie_live view --relay 10.33.107.147:25100
+```
+
+## Commands from the analysis PC
+
+Relay must already be running. These talk to port 25101.
+
+### Ping (does nothing to PrairieView)
+
+```bat
+python -c "from prairie_live.relay_client import RelayClient; c=RelayClient('10.33.107.147',25100); c.connect(); print(c.ping()); c.disconnect()"
+```
+
+Expect `{'ok': True, 'cmd': 'ping'}`.
+
+### Read state (`GetState`)
+
+Keys live in PrairieView's environment file under `PVStateShard`.
+
+```bat
 python -m prairie_live get-state --relay 10.33.107.147:25100 --key dwellTime
 python -m prairie_live get-state --relay 10.33.107.147:25100 --key micronsPerPixel --index XAxis
-python -m prairie_live get-motor --relay 10.33.107.147:25100 --axis X
+python -m prairie_live get-state --relay 10.33.107.147:25100 --key micronsPerPixel --index YAxis
 ```
 
-`GetState` keys live in PrairieView's environment file under `PVStateShard`.
-Common ones: `dwellTime`, `micronsPerPixel` (needs `--index XAxis` or `YAxis`).
-`GetMotorPosition` axis is `X`, `Y`, or `Z`.
+### Stage position (`GetMotorPosition`)
 
+```bat
+python -m prairie_live get-motor --relay 10.33.107.147:25100 --axis X
+python -m prairie_live get-motor --relay 10.33.107.147:25100 --axis Y
+python -m prairie_live get-motor --relay 10.33.107.147:25100 --axis Z
+```
+
+### Abort (stops Live or T-series)
+
+```bat
+python -m prairie_live abort --relay 10.33.107.147:25100
+```
+
+### Start T-series (writes files)
+
+Starts whatever T-series is already configured in PrairieView.
+
+```bat
+python -m prairie_live tseries --relay 10.33.107.147:25100
+```
+
+Same commands on the scope PC itself, talking to PrairieView over loopback:
+
+```bat
+python -m prairie_live abort --host 127.0.0.1 --password 0000
+python -m prairie_live tseries --host 127.0.0.1 --password 0000
+python -m prairie_live get-state --host 127.0.0.1 --password 0000 --key dwellTime
+python -m prairie_live get-motor --host 127.0.0.1 --password 0000 --axis X
+```
+
+## Restart the relay
+
+On the scope PC: close the relay window (or Ctrl-C), then:
+
+```bat
+cd prairie-live
+set PYTHONPATH=%CD%\src
+python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --fps 12
+```
+
+## Dry run (no microscope)
 
 ```bat
 python -m prairie_live view --mock
