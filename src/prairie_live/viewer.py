@@ -65,6 +65,24 @@ class MockScope:
 		print("mock live")
 		return {"ok": True, "cmd": "live"}
 
+	def get_state(self, key: str, index=None, subindex=None):
+		return {
+			"ok": True,
+			"cmd": "get_state",
+			"key": key,
+			"index": index,
+			"subindex": subindex,
+			"value": "mock",
+		}
+
+	def get_motor_position(self, axis: str, device=None):
+		return {
+			"ok": True,
+			"cmd": "get_motor_position",
+			"axis": axis.upper(),
+			"value": 0.0,
+		}
+
 
 def run_viewer(client, interval_ms: int) -> None:
 	import matplotlib.pyplot as plt

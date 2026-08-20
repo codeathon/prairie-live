@@ -7,6 +7,7 @@ the TCP script port.
 
 from __future__ import annotations
 
+import threading
 import time
 
 import numpy as np
@@ -34,6 +35,8 @@ class PrairieCom:
 		self.last_error = ""
 		self._last_wh = None
 		self._last_reconnect = 0.0
+		# Grab thread and command thread share one COM object.
+		self._io = threading.Lock()
 
 	def connect(self) -> None:
 		try:
@@ -65,15 +68,55 @@ class PrairieCom:
 		return {"ok": True, "cmd": "tseries"}
 
 	def disconnect(self) -> None:
-		if self._pl is None:
-			return
-		try:
-			self._pl.Disconnect()
-		finally:
-			self._pl = None
+		with self._io:
+			if self._pl is None:
+				return
+			try:
+				self._pl.Disconnect()
+			finally:
+				self._pl = None
 
 	def send(self, cmd: str) -> None:
-		self._require().SendScriptCommands(cmd)
+		with self._io:
+			self._require().SendScriptCommands(cmd)
+
+	def get_state(
+		self, key: str, index: str | None = None, subindex: str | None = None
+	) -> dict:
+		# COM GetState returns the value; SendScriptCommands("-gts") does not.
+		if not key:
+			raise ValueError("GetState requires a key")
+		with self._io:
+			pl = self._require()
+			if index is None:
+				raw = pl.GetState(key)
+			elif subindex is None:
+				raw = pl.GetState(key, index)
+			else:
+				raw = pl.GetState(key, index, subindex)
+		out = {"ok": True, "cmd": "get_state", "key": key, "value": str(raw)}
+		if index is not None:
+			out["index"] = index
+		if subindex is not None:
+			out["subindex"] = subindex
+		return out
+
+	def get_motor_position(self, axis: str, device: str | None = None) -> dict:
+		ax = axis.upper()
+		if ax not in ("X", "Y", "Z"):
+			raise ValueError(f"axis must be X, Y, or Z, not {axis!r}")
+		with self._io:
+			pl = self._require()
+			raw = pl.GetMotorPosition(ax, device) if device else pl.GetMotorPosition(ax)
+		out = {
+			"ok": True,
+			"cmd": "get_motor_position",
+			"axis": ax,
+			"value": float(raw),
+		}
+		if device:
+			out["device"] = device
+		return out
 
 	def abort(self) -> dict:
 		self.send("-Abort")
@@ -101,7 +144,8 @@ class PrairieCom:
 		if pl is None:
 			return None
 		try:
-			raw = self._grab_raw(pl, channel)
+			with self._io:
+				raw = self._grab_raw(pl, channel)
 		except Exception as e:
 			self.last_error = str(e)
 			self._reconnect_if_dropped(e)

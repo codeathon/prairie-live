@@ -64,11 +64,22 @@ class Relay:
 				self.com.start_live()
 			elif cmd == "ping":
 				pass
+			elif cmd == "get_state":
+				return self.com.get_state(
+					payload.get("key", ""),
+					payload.get("index"),
+					payload.get("subindex"),
+				)
+			elif cmd == "get_motor_position":
+				return self.com.get_motor_position(
+					payload.get("axis", ""),
+					payload.get("device"),
+				)
 			else:
 				return {"ok": False, "error": f"unknown cmd {cmd}"}
 			return {"ok": True, "cmd": cmd}
 		except Exception as e:
-			return {"ok": False, "error": str(e)}
+			return {"ok": False, "cmd": cmd, "error": str(e)}
 
 
 def _serve_frames(conn: socket.socket, relay: Relay, fps: float) -> None:
@@ -86,6 +97,13 @@ def _serve_frames(conn: socket.socket, relay: Relay, fps: float) -> None:
 
 
 def _serve_ctrl(conn: socket.socket, relay: Relay) -> None:
+	# This thread calls PrairieLink COM; it needs its own apartment.
+	try:
+		import pythoncom
+
+		pythoncom.CoInitialize()
+	except Exception:
+		pass
 	f = conn.makefile("rwb")
 	try:
 		for line in f:
