@@ -56,6 +56,25 @@ class RelayClient:
 	def start_live(self) -> dict:
 		return self._command({"cmd": "live"})
 
+	def ping(self) -> dict:
+		return self._command({"cmd": "ping"})
+
+	def get_state(
+		self, key: str, index: str | None = None, subindex: str | None = None
+	) -> dict:
+		payload = {"cmd": "get_state", "key": key}
+		if index is not None:
+			payload["index"] = index
+		if subindex is not None:
+			payload["subindex"] = subindex
+		return self._command(payload)
+
+	def get_motor_position(self, axis: str, device: str | None = None) -> dict:
+		payload = {"cmd": "get_motor_position", "axis": axis}
+		if device is not None:
+			payload["device"] = device
+		return self._command(payload)
+
 	def _command(self, payload: dict) -> dict:
 		if self._ctrl_file is None:
 			raise RuntimeError("not connected")

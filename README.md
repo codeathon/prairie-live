@@ -58,7 +58,23 @@ REM analysis PC
 python -m prairie_live view --relay 192.168.1.50:25100
 ```
 
-## Dry run (no microscope)
+## Relay queries (analysis PC)
+
+Read-only. These call PrairieLink COM on the scope PC and return the value
+over the control socket (port 25101). `SendScriptCommands` cannot do this —
+it only reports success/fail.
+
+```bat
+REM analysis PC, relay already running on the scope PC
+python -m prairie_live get-state --relay 10.33.107.147:25100 --key dwellTime
+python -m prairie_live get-state --relay 10.33.107.147:25100 --key micronsPerPixel --index XAxis
+python -m prairie_live get-motor --relay 10.33.107.147:25100 --axis X
+```
+
+`GetState` keys live in PrairieView's environment file under `PVStateShard`.
+Common ones: `dwellTime`, `micronsPerPixel` (needs `--index XAxis` or `YAxis`).
+`GetMotorPosition` axis is `X`, `Y`, or `Z`.
+
 
 ```bat
 python -m prairie_live view --mock
