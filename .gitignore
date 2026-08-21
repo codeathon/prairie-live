@@ -7,3 +7,4 @@ venv/
 .env
 .env.*
 .DS_Store
+labels/

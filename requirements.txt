@@ -1,3 +1,6 @@
 numpy>=1.24
 matplotlib>=3.7
 pywin32>=306; sys_platform == "win32"
+# triage (analysis PC); relay does not import these
+scipy>=1.10
+scikit-learn>=1.3
