@@ -21,8 +21,7 @@ Tools → Scripts → Edit Scripts (default `0000`).
 
 ```bat
 cd prairie-live
-git fetch origin
-git checkout feat/relay-queries
+git pull
 pip install -r requirements.txt
 set PYTHONPATH=%CD%\src
 ```
@@ -169,4 +168,24 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 
 ```bat
 python -m prairie_live view --mock
+python -m prairie_live triage --mock --out labels
 ```
+
+Keys in triage: `y` accept, `n` reject, `.` skip, `d` redetect, `q` quit.
+After 8 labels with both accept and reject, remaining blobs are ranked by
+P(accept). Coefficients print as `criteria: snr +1.8  ...` — those weights
+are the scientist's revealed criteria. Need `scipy` and `scikit-learn`.
+
+## Live cell triage (analysis PC)
+
+Relay must already be running. Auto-proposes blobs; you accept or reject.
+Ranking starts after `--min-labels` (default 8) mixed yes/no.
+
+```bat
+pip install scipy scikit-learn
+python -m prairie_live triage --relay 10.33.107.147:25100 --out labels
+```
+
+`--min-um` / `--max-um` are soma size in microns (scaled by `GetState`
+`micronsPerPixel`). Session log: `labels/session.jsonl` and `labels/criteria.txt`.
+

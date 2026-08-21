@@ -1,4 +1,4 @@
-"""CLI: python -m prairie_live view|relay|tseries|abort|get-state|get-motor"""
+"""CLI: python -m prairie_live view|relay|triage|tseries|abort|get-state|get-motor"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ def main(argv=None) -> None:
 	p = argparse.ArgumentParser(prog="prairie_live")
 	p.add_argument(
 		"command",
-		choices=("view", "relay", "tseries", "abort", "get-state", "get-motor"),
+		choices=("view", "relay", "tseries", "abort", "get-state", "get-motor", "triage"),
 	)
 	args, rest = p.parse_known_args(argv)
 
@@ -24,6 +24,11 @@ def main(argv=None) -> None:
 		from prairie_live.relay import main as relay_main
 
 		relay_main(rest)
+		return
+	if args.command == "triage":
+		from prairie_live.triage import main as triage_main
+
+		triage_main(rest)
 		return
 	_one_shot(args.command, rest)
 
