@@ -1,4 +1,4 @@
-"""Continuous live display. Keys: t T-series, a abort, l live scan, q quit."""
+"""Rolling 8x8 mean-intensity mosaic. Keys: t T-series, a abort, l live scan, q quit."""
 
 from __future__ import annotations
 
@@ -7,14 +7,7 @@ import time
 
 import numpy as np
 
-
-def _autoscale(frame: np.ndarray) -> np.ndarray:
-	# 13–16 bit PMT data looks black if shown as raw uint16.
-	lo, hi = np.percentile(frame, (1.0, 99.5))
-	if hi <= lo:
-		hi = lo + 1
-	scaled = np.clip((frame.astype(np.float32) - lo) / (hi - lo), 0, 1)
-	return scaled
+from prairie_live.grid_traces import TraceBuffer, tile_means
 
 
 def _make_backend(args):
@@ -84,14 +77,67 @@ class MockScope:
 		}
 
 
-def run_viewer(client, interval_ms: int) -> None:
+def _window_samples(window_s: float, interval_ms: int) -> int:
+	return max(int(round(window_s * 1000.0 / max(interval_ms, 1))), 2)
+
+
+def _style_tile(ax, r: int, c: int, grid: int) -> None:
+	# Dense mosaic: ticks only on the left column and bottom row.
+	ax.tick_params(labelsize=6, length=2, pad=1)
+	if c != 0:
+		ax.tick_params(labelleft=False)
+	if r != grid - 1:
+		ax.tick_params(labelbottom=False)
+	ax.margins(x=0)
+
+
+def _build_mosaic(fig, grid: int):
+	gs = fig.add_gridspec(grid, grid, hspace=0.08, wspace=0.08)
+	axes = []
+	lines = []
+	for r in range(grid):
+		for c in range(grid):
+			ax = fig.add_subplot(gs[r, c])
+			(line,) = ax.plot([], [], lw=0.8, color="0.15")
+			_style_tile(ax, r, c, grid)
+			axes.append(ax)
+			lines.append(line)
+	return axes, lines
+
+
+def _set_tile_ylim(ax, y: np.ndarray) -> None:
+	lo = float(y.min())
+	hi = float(y.max())
+	if hi <= lo:
+		hi = lo + 1.0
+	pad = 0.05 * (hi - lo)
+	ax.set_ylim(lo - pad, hi + pad)
+
+
+def _draw_traces(axes, lines, buf: TraceBuffer, dt: float, grid: int) -> None:
+	stack = buf.as_array()
+	if stack.shape[0] == 0:
+		return
+	n = stack.shape[0]
+	x = (np.arange(n) - (n - 1)) * dt
+	for r in range(grid):
+		for c in range(grid):
+			i = r * grid + c
+			y = stack[:, r, c]
+			lines[i].set_data(x, y)
+			axes[i].set_xlim(x[0], 0.0 if n > 1 else dt)
+			_set_tile_ylim(axes[i], y)
+
+
+def run_viewer(client, interval_ms: int, grid: int = 8, window_s: float = 8.0) -> None:
 	import matplotlib.pyplot as plt
 	from matplotlib.animation import FuncAnimation
 
-	fig, ax = plt.subplots()
-	im = ax.imshow(np.zeros((32, 32)), cmap="gray", vmin=0, vmax=1)
-	title = ax.set_title("waiting for frames  (t/a/l/q)")
-	ax.set_axis_off()
+	buf = TraceBuffer(_window_samples(window_s, interval_ms), grid)
+	dt = interval_ms / 1000.0
+	fig = plt.figure(figsize=(10, 10))
+	axes, lines = _build_mosaic(fig, grid)
+	title = fig.suptitle("waiting for frames  (t/a/l/q)", fontsize=10)
 	state = {"n": 0, "t0": time.monotonic()}
 
 	def on_key(event) -> None:
@@ -105,38 +151,47 @@ def run_viewer(client, interval_ms: int) -> None:
 			plt.close(fig)
 
 	def update(_):
-		frame = client.get_frame()
-		if frame is None:
-			err = getattr(client, "last_error", "") or "no frame"
-			# Keep the window up; COM aborts must not kill the animation.
-			title.set_text(err[:80])
-			return (im, title)
-		im.set_data(_autoscale(frame))
-		im.set_extent((0, frame.shape[1], frame.shape[0], 0))
-		state["n"] += 1
-		dt = time.monotonic() - state["t0"]
-		fps = state["n"] / dt if dt > 0 else 0
-		title.set_text(f"{frame.shape[1]}x{frame.shape[0]}  {fps:.1f} fps  t/a/l/q")
-		return im, title
+		_on_frame(client, buf, axes, lines, dt, grid, title, state)
+		return tuple(lines)
 
 	fig.canvas.mpl_connect("key_press_event", on_key)
-	FuncAnimation(fig, update, interval=interval_ms, blit=False, cache_frame_data=False)
+	# Keep a reference; matplotlib only holds a weakref.
+	anim = FuncAnimation(fig, update, interval=interval_ms, blit=False, cache_frame_data=False)
 	plt.show()
+	_ = anim
+
+
+def _on_frame(client, buf, axes, lines, dt, grid, title, state) -> None:
+	frame = client.get_frame()
+	if frame is None:
+		err = getattr(client, "last_error", "") or "no frame"
+		title.set_text(err[:80])
+		return
+	buf.push(tile_means(frame, grid))
+	_draw_traces(axes, lines, buf, dt, grid)
+	state["n"] += 1
+	elapsed = time.monotonic() - state["t0"]
+	fps = state["n"] / elapsed if elapsed > 0 else 0
+	h, w = frame.shape
+	title.set_text(f"{w}x{h}  {grid}x{grid} traces  {fps:.1f} fps  t/a/l/q")
 
 
 def main(argv=None) -> None:
-	p = argparse.ArgumentParser(description="PrairieView live viewer")
+	p = argparse.ArgumentParser(description="PrairieView live rolling-intensity mosaic")
 	p.add_argument("--host", default="127.0.0.1", help="PrairieView IP")
 	p.add_argument("--password", default="0000")
 	p.add_argument("--relay", help="optional host[:port] if this PC has no PrairieLink")
 	p.add_argument("--channel", type=int, default=1)
 	p.add_argument("--interval-ms", type=int, default=50)
+	p.add_argument("--grid", type=int, default=8, help="tiles per FOV axis")
+	p.add_argument("--window-s", type=float, default=8.0, help="rolling trace length in seconds")
 	p.add_argument("--mock", action="store_true")
 	args = p.parse_args(argv)
-
+	if args.grid < 1:
+		raise SystemExit("--grid must be >= 1")
 	client = _make_backend(args)
 	try:
-		run_viewer(client, args.interval_ms)
+		run_viewer(client, args.interval_ms, args.grid, args.window_s)
 	finally:
 		client.disconnect()
 

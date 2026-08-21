@@ -3,8 +3,10 @@
 Live frames and PrairieLink commands for a Bruker PrairieView rig.
 
 **Images only work on the scope PC.** PrairieLink `GetImage` is local-only.
-To watch frames on a second machine, run the **relay** on the scope PC and
-the **viewer** on the analysis PC. Commands (`abort`, `GetState`, …) go
+To watch live intensity on a second machine, run the **relay** on the scope PC
+and the **viewer** on the analysis PC. The viewer does not reconstruct the FOV
+image: it bins each frame into an 8×8 grid of mean PMT counts and draws a
+rolling trace in the matching tile. Commands (`abort`, `GetState`, …) go
 through the same relay.
 
 Substitute your scope IPv4 for `10.33.107.147`. Password is in PrairieView:
@@ -38,6 +40,10 @@ python -m prairie_live view --host 127.0.0.1 --password 0000
 ```
 
 Keys: `t` T-series, `a` abort, `l` live scan, `q` quit.
+
+Each subplot is the mean intensity of that FOV tile vs time (last 8 s,
+raw counts, per-tile y-scale). `--grid 8` and `--window-s 8` change the
+mosaic and the roll length.
 
 PrairieView still writes its own TIFFs. Zoom, laser, frame count, and save
 directory are not set here.
@@ -96,10 +102,11 @@ set PYTHONPATH=%CD%\src
 python -c "from prairie_live.relay_client import RelayClient; import time; c=RelayClient('10.33.107.147',25100); c.connect(); time.sleep(3); f=c.get_frame(); print(f.shape, f.dtype, f.min(), f.max()); c.disconnect()"
 ```
 
-Viewer:
+Viewer (8×8 rolling traces, not a reconstructed image):
 
 ```bat
 python -m prairie_live view --relay 10.33.107.147:25100
+python -m prairie_live view --relay 10.33.107.147:25100 --grid 8 --window-s 8
 ```
 
 ## Commands from the analysis PC
@@ -170,3 +177,5 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 ```bat
 python -m prairie_live view --mock
 ```
+
+Mock frames are moving sines so the 8×8 traces roll without a scope.
