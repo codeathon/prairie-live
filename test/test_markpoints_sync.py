@@ -1,0 +1,149 @@
+"""Unit tests for Mark Points XML + sync-loop grouping (no PrairieView)."""
+
+from __future__ import annotations
+
+import json
+import random
+from pathlib import Path
+
+import numpy as np
+
+from prairie_live.markpoints import (
+	build_group_step,
+	estimate_series_ms,
+	extract_unique_points,
+	groups_to_xml,
+	parse_mark_points,
+	template_meta,
+)
+from prairie_live.sync_loop import (
+	JsonlLog,
+	aggregate_point_scores,
+	disk_mean,
+	form_groups,
+	run_sync_loop,
+	score_group_dff,
+)
+
+FAT_XML = """<?xml version="1.1"?>
+<PVMarkPointSeriesElements Use3D="True" AllPointsAtOnce="True" Iterations="1" IterationDelay="0.00">
+  <PVMarkPointElement Repetitions="1" UncagingLaser="Uncaging" UncagingLaserPower="0.75"
+    TriggerSelection="PFI1" TriggerFrequency="None" TriggerCount="1"
+    AsyncSyncFrequency="None" VoltageOutputCategoryName="None"
+    VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="0.00" InterPointDelay="0.01" Duration="10"
+      SpiralRevolutions="5" Points="Group 1" Indices="1-4">
+      <Point Index="1" X="0.10" Y="0.20" Z="0" IsSpiral="True" SpiralWidth="0.2" SpiralHeight="0.2" SpiralSizeInMicrons="20"/>
+      <Point Index="2" X="0.30" Y="0.40" Z="0" IsSpiral="True" SpiralWidth="0.2" SpiralHeight="0.2" SpiralSizeInMicrons="20"/>
+      <Point Index="3" X="0.50" Y="0.60" Z="0" IsSpiral="True" SpiralWidth="0.2" SpiralHeight="0.2" SpiralSizeInMicrons="20"/>
+      <Point Index="4" X="0.70" Y="0.80" Z="0" IsSpiral="True" SpiralWidth="0.2" SpiralHeight="0.2" SpiralSizeInMicrons="20"/>
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+</PVMarkPointSeriesElements>
+"""
+
+
+def test_parse_and_extract_points():
+	steps = parse_mark_points(FAT_XML)
+	assert len(steps) == 1
+	pts = extract_unique_points(steps)
+	assert [p["id"] for p in pts] == ["1", "2", "3", "4"]
+	assert pts[0]["x"] == 0.10
+
+
+def test_roundtrip_xml_keeps_coords():
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	step = build_group_step(pts[:2], name="Group A", power=0.5, meta=meta)
+	xml = groups_to_xml([step])
+	again = parse_mark_points(xml)
+	assert len(again) == 1
+	assert again[0]["laser_pwr"] == 0.5
+	assert len(again[0]["points"]) == 2
+	assert again[0]["points"][0]["x"] == 0.10
+
+
+def test_form_groups_random_and_scored():
+	pts = [{"id": str(i), "x": i / 10, "y": i / 10} for i in range(1, 9)]
+	rng = random.Random(1)
+	g0 = form_groups(pts, n_groups=2, group_size=3, scores=None, rng=rng)
+	assert len(g0) == 2 and all(len(g) == 3 for g in g0)
+
+	scores = {str(i): float(i) for i in range(1, 9)}
+	rng = random.Random(2)
+	g1 = form_groups(
+		pts, n_groups=2, group_size=3, scores=scores, rng=rng, elite_frac=0.5
+	)
+	# Highest ids should appear among group members when elite_frac is high.
+	ids = {p["id"] for g in g1 for p in g}
+	assert "8" in ids and "7" in ids
+
+
+def test_aggregate_and_dff():
+	trials = [
+		{"point_ids": ["1", "2"], "score": 1.0},
+		{"point_ids": ["1"], "score": 0.0},
+	]
+	agg = aggregate_point_scores(trials)
+	assert agg["1"] == 0.5
+	assert agg["2"] == 1.0
+
+	f0 = np.ones((20, 20), dtype=np.float32) * 10
+	f1 = np.ones((20, 20), dtype=np.float32) * 10
+	# Brighten near normalized (0.5, 0.5).
+	f1[8:12, 8:12] = 20
+	pts = [{"id": "1", "x": 0.5, "y": 0.5}]
+	s = score_group_dff([f0], [f1], pts, radius=2)
+	assert s > 0.4
+	assert disk_mean(f1, 0.5, 0.5, 2) > 10
+
+
+def test_dry_run_writes_jsonl(tmp_path: Path):
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	log_path = tmp_path / "trials.jsonl"
+	scope = str(tmp_path / "trial.xml")
+	log = JsonlLog(log_path)
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=scope,
+			n_iterations=2,
+			n_groups=2,
+			group_size=2,
+			powers=[0.0, 0.75],
+			seed=7,
+			trigger="none",
+			ttl=None,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=None,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=True,
+		)
+	finally:
+		log.close()
+
+	# 2 iterations × 2 groups × 2 powers
+	assert len(rows) == 8
+	assert Path(scope).is_file()
+	lines = log_path.read_text(encoding="utf-8").strip().splitlines()
+	# armed + done per trial
+	assert len(lines) == 16
+	done = [json.loads(ln) for ln in lines if json.loads(ln).get("phase") == "done"]
+	assert done[0]["trial_index"] == 0
+	assert done[0]["score_kind"] == "mock"
+	assert estimate_series_ms(
+		[build_group_step(pts[:2], name="G", power=0.5, meta=meta)]
+	) > 0

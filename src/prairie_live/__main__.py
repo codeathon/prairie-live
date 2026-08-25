@@ -1,4 +1,4 @@
-"""CLI: python -m prairie_live view|relay|tseries|abort|get-state|get-motor"""
+"""CLI: python -m prairie_live view|relay|mp-sync|tseries|abort|…"""
 
 from __future__ import annotations
 
@@ -6,26 +6,44 @@ import argparse
 import sys
 
 
+_COMMANDS = (
+	"view",
+	"relay",
+	"mp-sync",
+	"tseries",
+	"abort",
+	"get-state",
+	"get-motor",
+)
+
+
 def main(argv=None) -> None:
 	argv = list(sys.argv[1:] if argv is None else argv)
-	p = argparse.ArgumentParser(prog="prairie_live")
-	p.add_argument(
-		"command",
-		choices=("view", "relay", "tseries", "abort", "get-state", "get-motor"),
-	)
-	args, rest = p.parse_known_args(argv)
+	# Dispatch before parent --help so `mp-sync --help` reaches the subcommand.
+	if argv and argv[0] in _COMMANDS:
+		command, rest = argv[0], argv[1:]
+	else:
+		p = argparse.ArgumentParser(prog="prairie_live")
+		p.add_argument("command", choices=_COMMANDS)
+		args, rest = p.parse_known_args(argv)
+		command = args.command
 
-	if args.command == "view":
+	if command == "view":
 		from prairie_live.viewer import main as view_main
 
 		view_main(rest)
 		return
-	if args.command == "relay":
+	if command == "relay":
 		from prairie_live.relay import main as relay_main
 
 		relay_main(rest)
 		return
-	_one_shot(args.command, rest)
+	if command == "mp-sync":
+		from prairie_live.sync_loop import main as sync_main
+
+		sync_main(rest)
+		return
+	_one_shot(command, rest)
 
 
 def _one_shot(command: str, rest: list[str]) -> None:

@@ -170,3 +170,39 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 ```bat
 python -m prairie_live view --mock
 ```
+
+## Mark Points sync loop (scope PC)
+
+Maps a pool of FOV points into pseudo-random groups, fires one group×power
+trial at a time (`-LoadMarkPoints` then `-MarkPoints`), authors trial identity
+to a JSONL log (so TTL edge *k* ≡ `trial_index` *k*), optionally pulses serial
+**DTR** for PackIO→PFI, scores on-target ΔF/F from the relay (or `--mock-scores`),
+and rebuilds groups from those scores on the next iteration.
+
+Prefer a fat `MarkPoints.xml` (`PVMarkPointSeriesElements` with nested
+`<Point X Y Z>`). Slim group-name-only series files have no coords to regroup.
+
+```bat
+cd prairie-live
+set PYTHONPATH=%CD%\src
+pip install -r requirements.txt
+
+REM Inspect points pool (no TCP):
+python -m prairie_live mp-sync --series E:\path\to\MarkPoints.xml --scope-xml C:\temp\mp_trial.xml --inspect
+
+REM Dry run (XML + JSONL only):
+python -m prairie_live mp-sync --series E:\path\to\MarkPoints.xml --scope-xml C:\temp\mp_trial.xml --log trials.jsonl --dry-run --mock-scores --iterations 2 --n-groups 2 --group-size 9 --powers 0,0.75
+
+REM Live on scope (software trigger, no serial):
+python -m prairie_live mp-sync --series E:\path\to\MarkPoints.xml --scope-xml C:\temp\mp_trial.xml --host 127.0.0.1 --port 1236 --password 0000 --iterations 3 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger none --mock-scores
+
+REM PFI1 wait + DTR pulse on COM3 (wire DTR → PFI1):
+python -m prairie_live mp-sync --series E:\path\to\MarkPoints.xml --scope-xml C:\temp\mp_trial.xml --trigger serial --serial COM3 --iterations 3 --n-groups 2 --group-size 9 --powers 0,0.75 --mock-scores
+```
+
+`--scope-xml` must be a path PrairieView can read (local on the scope PC, or a
+share). Tempfiles on an analysis PC will not work for `-LoadMarkPoints`.
+
+Optional `--relay host:25100` enables disk ΔF/F scoring around each point
+instead of `--mock-scores`. `--trigger wait` arms for PFI without pulsing DTR
+(external PsychoPy/PackIO provides the edge).
