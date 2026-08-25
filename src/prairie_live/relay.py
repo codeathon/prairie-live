@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import socket
 import sys
+import tempfile
 import threading
 import time
 
 from prairie_live.com_backend import PrairieCom
+from prairie_live.prairie_link import PrairieLink
 from prairie_live.protocol import pack_frame
+from prairie_live.tcp_backend import DEFAULT_PORT as PV_SCRIPT_PORT
 
 DEFAULT_PORT = 25100
 
@@ -24,12 +28,15 @@ DEFAULT_PORT = 25100
 class Relay:
 	def __init__(self, pv_host: str, password: str, channel: int):
 		self.channel = channel
+		self.password = password
 		self.com = PrairieCom(pv_host, password)
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
 		# Pause frame grabs while running script cmds so COM is not wedged.
 		self._pause_grab = threading.Event()
+		# Serialize TCP script cmds (-lmp / -mp) on port 1236.
+		self._script_lock = threading.Lock()
 
 	def start(self) -> None:
 		self.com.connect()
@@ -98,18 +105,48 @@ class Relay:
 					payload.get("device"),
 				)
 			elif cmd == "load_mark_points":
-				# Analysis pushes XML; scope writes a local file PV can open.
-				return self.com.load_mark_points_xml(
+				# Write locally, then -lmp over TCP:1236 (COM SendScriptCommands hangs).
+				return self._load_mark_points_tcp(
 					payload.get("xml", ""),
 					payload.get("path"),
 				)
 			elif cmd == "mark_points":
-				return self.com.mark_points()
+				self._script_command("-MarkPoints")
+				return {"ok": True, "cmd": "mark_points"}
 			else:
 				return {"ok": False, "error": f"unknown cmd {cmd}"}
 			return {"ok": True, "cmd": cmd}
 		except Exception as e:
 			return {"ok": False, "cmd": cmd, "error": str(e)}
+
+	def _load_mark_points_tcp(self, xml: str, path: str | None) -> dict:
+		if not xml or not str(xml).strip():
+			raise ValueError("load_mark_points requires xml content")
+		if path is None:
+			path = os.path.join(tempfile.gettempdir(), "prairie_live_mp_trial.xml")
+		parent = os.path.dirname(path)
+		if parent:
+			os.makedirs(parent, exist_ok=True)
+		with open(path, "w", encoding="utf-8") as f:
+			f.write(xml)
+		print(f"load_mark_points → {path} ({len(xml)} bytes)")
+		raw = self._script_command("-LoadMarkPoints", path)
+		print("load_mark_points DONE")
+		return {"ok": True, "cmd": "load_mark_points", "path": path, "pv": raw}
+
+	def _script_command(self, *parts: str) -> str:
+		"""Official Mark Points cmds via PrairieLink TCP (not COM)."""
+		with self._script_lock:
+			pl = PrairieLink(
+				host=self.com.host,
+				port=PV_SCRIPT_PORT,
+				password=self.password,
+				timeout=30.0,
+			)
+			try:
+				return pl.send_command(*parts)
+			finally:
+				pl.close()
 
 
 def _serve_frames(conn: socket.socket, relay: Relay, fps: float) -> None:
