@@ -87,24 +87,16 @@ def test_get_motor_position_bad_axis_is_error():
 
 def test_load_mark_points_and_mark_points(tmp_path):
 	r = _relay()
-	# Unit tests stub TCP script port (no PrairieView on CI).
-	calls = []
-
-	def _script(*parts):
-		calls.append(parts)
-		return "ACK\nDONE"
-
-	r._script_command = _script
 	xml = "<PVMarkPointSeriesElements/>"
 	path = str(tmp_path / "trial.xml")
 	out = r.handle_command({"cmd": "load_mark_points", "xml": xml, "path": path})
 	assert out["ok"] is True
 	assert out["cmd"] == "load_mark_points"
 	assert out["path"] == path
-	assert calls[0] == ("-LoadMarkPoints", path)
+	assert r.com.calls[0][0] == "load_mark_points_xml"
 	out = r.handle_command({"cmd": "mark_points"})
 	assert out == {"ok": True, "cmd": "mark_points"}
-	assert calls[1] == ("-MarkPoints",)
+	assert r.com.calls[1] == "mark_points"
 
 
 def test_unknown_command_is_rejected():

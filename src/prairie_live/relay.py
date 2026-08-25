@@ -111,7 +111,7 @@ class Relay:
 					payload.get("path"),
 				)
 			elif cmd == "mark_points":
-				self._script_command("-MarkPoints")
+				self.com.mark_points()
 				return {"ok": True, "cmd": "mark_points"}
 			else:
 				return {"ok": False, "error": f"unknown cmd {cmd}"}
@@ -123,6 +123,7 @@ class Relay:
 		if not xml or not str(xml).strip():
 			raise ValueError("load_mark_points requires xml content")
 		if path is None:
+			# Short fixed path under Temp; PV on this PC must read it locally.
 			path = os.path.join(tempfile.gettempdir(), "prairie_live_mp_trial.xml")
 		parent = os.path.dirname(path)
 		if parent:
@@ -130,18 +131,27 @@ class Relay:
 		with open(path, "w", encoding="utf-8") as f:
 			f.write(xml)
 		print(f"load_mark_points → {path} ({len(xml)} bytes)")
+		# Grab loop is paused; COM is reliable on scope when TCP script port stalls.
+		try:
+			out = self.com.load_mark_points_xml(xml, path)
+			print(f"load_mark_points COM OK → {out.get('path', path)}")
+			return out
+		except Exception as com_err:
+			print(f"load_mark_points COM failed ({com_err}); trying TCP :1236 …")
 		raw = self._script_command("-LoadMarkPoints", path)
-		print("load_mark_points DONE")
+		print(f"load_mark_points TCP DONE: {raw[:200]!r}")
 		return {"ok": True, "cmd": "load_mark_points", "path": path, "pv": raw}
 
 	def _script_command(self, *parts: str) -> str:
-		"""Official Mark Points cmds via PrairieLink TCP (not COM)."""
+		"""Mark Points cmds via PrairieLink TCP when COM is unavailable."""
+		cmd = SOH.join(parts)
+		print(f"script TCP send: {cmd[:120]!r}")
 		with self._script_lock:
 			pl = PrairieLink(
 				host=self.com.host,
 				port=PV_SCRIPT_PORT,
 				password=self.password,
-				timeout=30.0,
+				timeout=120.0,
 			)
 			try:
 				return pl.send_command(*parts)

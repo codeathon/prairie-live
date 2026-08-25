@@ -8,6 +8,7 @@ live images still need COM or the relay.
 from __future__ import annotations
 
 import socket
+import time
 
 from prairie_live.tcp_backend import DEFAULT_PORT
 
@@ -22,31 +23,21 @@ class PrairieLink:
 		host: str = "127.0.0.1",
 		port: int = DEFAULT_PORT,
 		password: str = "0000",
-		timeout: float = 10.0,
+		timeout: float = 120.0,
 	):
 		self.host = host
 		self.port = port
 		self.password = password
+		self.timeout = timeout
 		self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.sock.settimeout(timeout)
 		self.sock.connect((host, port))
 		# Password must be first on the wire or PV drops the socket.
 		self._send_raw(self.password)
 		try:
-			self._readline()
+			self._recv_until_done(max_wait=min(timeout, 5.0))
 		except OSError:
 			pass
-
-	def _readline(self) -> str:
-		buf = bytearray()
-		while True:
-			ch = self.sock.recv(1)
-			if not ch:
-				break
-			buf += ch
-			if ch == b"\n":
-				break
-		return buf.decode("ascii", errors="replace").strip()
 
 	def _send_raw(self, text: str) -> None:
 		self.sock.sendall((text + "\r\n").encode("ascii"))
@@ -56,13 +47,34 @@ class PrairieLink:
 		if not parts:
 			raise ValueError("empty command")
 		self._send_raw(SOH.join(parts))
-		lines = []
-		while True:
-			line = self._readline()
-			lines.append(line)
-			if line == "DONE":
+		return self._recv_until_done(max_wait=self.timeout)
+
+	def _recv_until_done(self, max_wait: float) -> str:
+		"""Read until DONE appears or max_wait elapses (PV can be slow on -lmp)."""
+		deadline = time.monotonic() + max_wait
+		buf = b""
+		while time.monotonic() < deadline:
+			remaining = deadline - time.monotonic()
+			self.sock.settimeout(max(remaining, 0.1))
+			try:
+				chunk = self.sock.recv(4096)
+			except TimeoutError:
+				if b"DONE" in buf:
+					break
+				continue
+			if not chunk:
 				break
-		return "\n".join(lines)
+			buf += chunk
+			if b"DONE" in buf:
+				break
+		text = buf.decode("ascii", errors="replace").strip()
+		if b"DONE" not in buf and time.monotonic() >= deadline:
+			preview = text[:300] if text else "(no data)"
+			raise TimeoutError(
+				f"PrairieLink timed out after {max_wait:.0f}s waiting for DONE; "
+				f"got: {preview!r}"
+			)
+		return text
 
 	def query(self, *parts: str) -> str:
 		"""Send a command; return data lines between ACK and DONE."""
@@ -75,8 +87,8 @@ class PrairieLink:
 		return "\n".join(data_lines).strip()
 
 	def close(self) -> None:
+		# Do not send -Exit here; it can hang while PV is busy and wedged the relay.
 		try:
-			self.send_command("-Exit")
+			self.sock.close()
 		except OSError:
 			pass
-		self.sock.close()
