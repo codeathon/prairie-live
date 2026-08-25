@@ -176,7 +176,14 @@ python -m prairie_live view --mock
 Script: `test/test_prairie_view_closed_loop.py`. Talks to PrairieLink TCP
 on **port 1236** (not the relay). Uses official commands only:
 `-LoadMarkPoints` / `-MarkPoints`. There is no `-GetMarkPoints` — pass a
-saved Mark Points series `.xml` with `--series`.
+saved Mark Points **series** `.xml` with `--series` (not a `.gpl`).
+
+**Prefer a fat series like `MarkPoints.xml`:** root
+`PVMarkPointSeriesElements` with nested `<Point X= Y= Z= …>` under each
+`PVGalvoPointElement`. That file is self-contained (coords + groups + power).
+
+Slim `PVSavedMarkPointSeriesElements` files (group name only, no `<Point>`)
+still parse, but need the point list already loaded in PrairieView.
 
 PrairieView must be running. Password is under Tools → Scripts → Edit Scripts.
 
@@ -184,11 +191,11 @@ PrairieView must be running. Password is under Tools → Scripts → Edit Script
 cd prairie-live
 set PYTHONPATH=%CD%\src
 
-REM Inspect groups from the XML (no TCP):
-python test\test_prairie_view_closed_loop.py --series C:\path\to\series.xml --inspect
+REM Inspect (no TCP) — use the MarkPoints.xml-style series:
+python test\test_prairie_view_closed_loop.py --series E:\path\to\MarkPoints.xml --inspect
 
 REM Run closed loop on this PC:
-python test\test_prairie_view_closed_loop.py --series C:\path\to\series.xml --host 127.0.0.1 --port 1236 --password 0000 --iterations 10 --delay 0.5 --strategy repeat_active
+python test\test_prairie_view_closed_loop.py --series E:\path\to\MarkPoints.xml --host 127.0.0.1 --port 1236 --password 0000 --iterations 10 --delay 0.5 --strategy repeat_active
 ```
 
 Strategies: `repeat_active` (default), `rotate`, `always_all`.
