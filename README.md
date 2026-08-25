@@ -170,3 +170,56 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 ```bat
 python -m prairie_live view --mock
 ```
+
+## Mark Points sync loop (analysis PC + scope relay)
+
+Maps FOV points into groups, fires one group×power trial at a time, authors
+`trial_index` to JSONL, and optionally pulses serial **DTR** on the analysis
+PC (PackIO→PFI). **No Windows file share is required** when using `--via-relay`:
+the analysis PC pushes the trial XML over the relay; the scope writes it
+locally and runs `-LoadMarkPoints` / `-MarkPoints`.
+
+Prefer a fat `MarkPoints.xml` (`PVMarkPointSeriesElements` with nested
+`<Point X Y Z>`). Copy that file to the analysis PC once (USB/email) for
+`--series`.
+
+Paste one line at a time in **PowerShell**. (Cmd.exe: use `set PYTHONPATH=%CD%\src` instead of `$env:PYTHONPATH`.)
+
+### Scope PC — start the relay
+
+```powershell
+cd C:\Users\schollab\code\prairie-live
+git fetch origin
+git checkout feat/markpoints-sync-loop
+git pull
+$env:PYTHONPATH = "$PWD\src"
+python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --fps 12
+```
+
+Leave that window open. Success looks like: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101`.
+
+### Analysis PC — run the loop (TTL stays here)
+
+```powershell
+cd C:\Users\schollab\code\prairie-live
+git fetch origin
+git checkout feat/markpoints-sync-loop
+git pull
+$env:PYTHONPATH = "$PWD\src"
+```
+
+Software trigger (no serial) — one paste:
+
+```powershell
+python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger none --mock-scores --log trials.jsonl
+```
+
+DTR photostim on COM3 (wire DTR to PFI1) — one paste:
+
+```powershell
+python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger serial --serial COM3 --mock-scores --log trials.jsonl
+```
+
+`--via-relay` replaces `--scope-xml` + direct port 1236 for Mark Points. The
+relay must already be running on the scope. PrairieView script password is
+still `0000` on the relay process (`--password`), not a Windows share login.

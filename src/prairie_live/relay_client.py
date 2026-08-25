@@ -27,6 +27,9 @@ class RelayClient:
 	def connect(self) -> None:
 		self._frame_sock = socket.create_connection((self.host, self.port), timeout=5)
 		self._ctrl_sock = socket.create_connection((self.host, self.port + 1), timeout=5)
+		# create_connection leaves a short timeout on the sock; Mark Points
+		# -lmp via COM can take longer than 5s under load.
+		self._ctrl_sock.settimeout(120.0)
 		self._ctrl_file = self._ctrl_sock.makefile("rwb")
 		self._stop.clear()
 		threading.Thread(target=self._recv_loop, daemon=True).start()
@@ -74,6 +77,17 @@ class RelayClient:
 		if device is not None:
 			payload["device"] = device
 		return self._command(payload)
+
+	def load_mark_points(self, xml: str, path: str | None = None) -> dict:
+		"""Push Mark Points series XML; relay writes it locally and -lmp."""
+		payload = {"cmd": "load_mark_points", "xml": xml}
+		if path is not None:
+			payload["path"] = path
+		return self._command(payload)
+
+	def mark_points(self) -> dict:
+		"""Run current Mark Points series on the scope (-MarkPoints)."""
+		return self._command({"cmd": "mark_points"})
 
 	def _command(self, payload: dict) -> dict:
 		if self._ctrl_file is None:
