@@ -170,3 +170,29 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 ```bat
 python -m prairie_live view --mock
 ```
+
+## Closed-loop Mark Points (scope PC)
+
+Script: `test/test_prairie_view_closed_loop.py`. Talks to PrairieLink TCP
+on **port 1236** (not the relay). Uses official commands only:
+`-LoadMarkPoints` / `-MarkPoints`. There is no `-GetMarkPoints` — pass a
+saved Mark Points series `.xml` with `--series`.
+
+PrairieView must be running. Password is under Tools → Scripts → Edit Scripts.
+
+```bat
+cd prairie-live
+set PYTHONPATH=%CD%\src
+
+REM Inspect groups from the XML (no TCP):
+python test\test_prairie_view_closed_loop.py --series C:\path\to\series.xml --inspect
+
+REM Run closed loop on this PC:
+python test\test_prairie_view_closed_loop.py --series C:\path\to\series.xml --host 127.0.0.1 --port 1236 --password 0000 --iterations 10 --delay 0.5 --strategy repeat_active
+```
+
+Strategies: `repeat_active` (default), `rotate`, `always_all`.
+
+If `-LoadMarkPoints` must see a fixed path (shared drive or a path you
+control), pass `--scope-xml C:\path\to\prairie_live_trial.xml`. Otherwise a
+local tempfile is used (fine when the script runs on the scope PC).
