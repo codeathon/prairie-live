@@ -183,28 +183,40 @@ Prefer a fat `MarkPoints.xml` (`PVMarkPointSeriesElements` with nested
 `<Point X Y Z>`). Copy that file to the analysis PC once (USB/email) for
 `--series`.
 
+Paste one line at a time in **PowerShell**. (Cmd.exe: use `set PYTHONPATH=%CD%\src` instead of `$env:PYTHONPATH`.)
+
 ### Scope PC — start the relay
 
-```bat
-cd prairie-live
+```powershell
+cd C:\Users\schollab\code\prairie-live
 git fetch origin
 git checkout feat/markpoints-sync-loop
-set PYTHONPATH=%CD%\src
+git pull
+$env:PYTHONPATH = "$PWD\src"
 python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --fps 12
 ```
 
+Leave that window open. Success looks like: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101`.
+
 ### Analysis PC — run the loop (TTL stays here)
 
-```bat
-cd prairie-live
+```powershell
+cd C:\Users\schollab\code\prairie-live
 git fetch origin
 git checkout feat/markpoints-sync-loop
-set PYTHONPATH=%CD%\src
+git pull
+$env:PYTHONPATH = "$PWD\src"
+```
 
-REM Software trigger (no serial):
+Software trigger (no serial) — one paste:
+
+```powershell
 python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger none --mock-scores --log trials.jsonl
+```
 
-REM DTR photostim on COM3 (wire DTR → PFI1):
+DTR photostim on COM3 (wire DTR to PFI1) — one paste:
+
+```powershell
 python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger serial --serial COM3 --mock-scores --log trials.jsonl
 ```
 
