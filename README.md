@@ -223,3 +223,49 @@ python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.
 `--via-relay` replaces `--scope-xml` + direct port 1236 for Mark Points. The
 relay must already be running on the scope. PrairieView script password is
 still `0000` on the relay process (`--password`), not a Windows share login.
+
+### Trial log (`trials.jsonl`)
+
+Written on the **analysis PC** in the directory where you run `mp-sync`
+(default: `--log trials.jsonl` → `.\trials.jsonl` under that folder).
+Each run **appends** lines; delete or rename the file between experiments.
+
+One JSON object per line. Each trial produces two rows:
+
+| `phase` | When |
+|---------|------|
+| `armed` | Identity written; `-lmp` / `-mp` sent to scope |
+| `done` | Trial finished — **use these rows** for results |
+
+Key fields on `done` rows:
+
+| Field | Meaning |
+|-------|---------|
+| `trial_index` | Trial number (0, 1, 2, …). **Same as TTL edge index** when using `--trigger serial`. |
+| `group_name` | Group label in the trial XML (e.g. `PL_t0002_g2`) |
+| `group_index` | 0-based group slot this iteration |
+| `point_ids` | FOV point indices stimulated this trial |
+| `power` | `UncagingLaserPower` for this trial (e.g. `0.0`, `0.75`) |
+| `trigger` | `none`, `serial`, or `wait` |
+| `trigger_selection` | `None` or `PFI1` (external trigger line in XML) |
+| `t_cmd` | Unix time when Mark Points commands were sent |
+| `t_ttl` | Stim time: equals `t_cmd` for `none`; **DTR pulse time** for `serial` |
+| `score` | Group-level mean ΔF/F (one number per trial) |
+| `score_kind` | `mock`, `relay_disk_dff`, or `none` |
+
+**What is stored:** trial identity, TTL timing, and **one group-mean score**
+per trial. Per-point ΔF/F is used in-memory to regroup on the next iteration
+but is **not** written to a separate file. Relay frames are not saved.
+
+Read completed trials in PowerShell:
+
+```powershell
+Get-Content trials.jsonl |
+  ForEach-Object { $_ | ConvertFrom-Json } |
+  Where-Object { $_.phase -eq "done" } |
+  Select-Object trial_index, group_name, power, trigger_selection, score, score_kind, t_ttl
+```
+
+Without `--mock-scores`, scoring uses live relay frames (`score_kind`:
+`relay_disk_dff`). Drop `--mock-scores` and keep the relay running with
+Live/T-series frames available.
