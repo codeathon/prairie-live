@@ -18,37 +18,47 @@ import threading
 import time
 
 from prairie_live.com_backend import PrairieCom
-from prairie_live.prairie_link import PrairieLink
+from prairie_live.prairie_link import SOH, PrairieLink
 from prairie_live.protocol import pack_frame
 from prairie_live.tcp_backend import DEFAULT_PORT as PV_SCRIPT_PORT
 
 DEFAULT_PORT = 25100
+# After pausing grab, wait for an in-flight GetImage to release the COM lock.
+_GRAB_DRAIN_S = 0.35
+# COM script calls must not block the relay ctrl socket forever.
+_COM_SCRIPT_TIMEOUT_S = 45.0
 
 
 class Relay:
 	def __init__(self, pv_host: str, password: str, channel: int):
 		self.channel = channel
 		self.password = password
+		self.pv_host = pv_host
 		self.com = PrairieCom(pv_host, password)
+		# Separate COM session for scripts so GetImage never blocks -lmp/-mp.
+		self.script_com: PrairieCom | None = None
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
-		# Pause frame grabs while running script cmds so COM is not wedged.
 		self._pause_grab = threading.Event()
-		# Serialize TCP script cmds (-lmp / -mp) on port 1236.
 		self._script_lock = threading.Lock()
 
 	def start(self) -> None:
 		self.com.connect()
+		self.script_com = PrairieCom(self.pv_host, self.password)
+		self.script_com.connect()
 		threading.Thread(target=self._grab_loop, daemon=True).start()
 
 	def stop(self) -> None:
 		self._stop.set()
 		self._pause_grab.set()
-		try:
-			self.com.disconnect()
-		except Exception:
-			pass
+		for c in (self.com, self.script_com):
+			if c is None:
+				continue
+			try:
+				c.disconnect()
+			except Exception:
+				pass
 
 	def _grab_loop(self) -> None:
 		# win32com must be CoInitialized on every thread that calls COM.
@@ -75,43 +85,78 @@ class Relay:
 
 	def handle_command(self, payload: dict) -> dict:
 		cmd = payload.get("cmd")
-		# Hold off GetImage so -LoadMarkPoints / -MarkPoints can take the COM lock.
 		self._pause_grab.set()
+		time.sleep(_GRAB_DRAIN_S)
 		try:
 			return self._dispatch(cmd, payload)
 		finally:
 			if not self._stop.is_set():
 				self._pause_grab.clear()
 
+	def _script(self) -> PrairieCom:
+		if self.script_com is None:
+			raise RuntimeError("relay script COM not connected")
+		return self.script_com
+
+	def _run_script_com(self, fn, *, timeout: float = _COM_SCRIPT_TIMEOUT_S):
+		"""Run a script COM call with a wall-clock timeout."""
+		box: list = []
+		err: list[BaseException] = []
+
+		def _worker() -> None:
+			try:
+				import pythoncom
+
+				pythoncom.CoInitialize()
+			except Exception:
+				pass
+			try:
+				box.append(fn())
+			except BaseException as e:
+				err.append(e)
+
+		t = threading.Thread(target=_worker, daemon=True)
+		t.start()
+		t.join(timeout)
+		if t.is_alive():
+			raise TimeoutError(f"COM script timed out after {timeout:.0f}s")
+		if err:
+			raise err[0]
+		return box[0]
+
 	def _dispatch(self, cmd, payload: dict) -> dict:
 		try:
+			sc = self._script()
 			if cmd == "tseries":
-				self.com.start_tseries()
+				self._run_script_com(sc.start_tseries)
 			elif cmd == "abort":
-				self.com.abort()
+				self._run_script_com(sc.abort)
 			elif cmd == "live":
-				self.com.start_live()
+				self._run_script_com(sc.start_live)
 			elif cmd == "ping":
 				pass
 			elif cmd == "get_state":
-				return self.com.get_state(
-					payload.get("key", ""),
-					payload.get("index"),
-					payload.get("subindex"),
+				return self._run_script_com(
+					lambda: sc.get_state(
+						payload.get("key", ""),
+						payload.get("index"),
+						payload.get("subindex"),
+					)
 				)
 			elif cmd == "get_motor_position":
-				return self.com.get_motor_position(
-					payload.get("axis", ""),
-					payload.get("device"),
+				return self._run_script_com(
+					lambda: sc.get_motor_position(
+						payload.get("axis", ""),
+						payload.get("device"),
+					)
 				)
 			elif cmd == "load_mark_points":
-				# Write locally, then -lmp over TCP:1236 (COM SendScriptCommands hangs).
-				return self._load_mark_points_tcp(
+				return self._load_mark_points(
 					payload.get("xml", ""),
 					payload.get("path"),
 				)
 			elif cmd == "mark_points":
-				self.com.mark_points()
+				self._run_script_com(sc.mark_points)
 				return {"ok": True, "cmd": "mark_points"}
 			else:
 				return {"ok": False, "error": f"unknown cmd {cmd}"}
@@ -119,21 +164,18 @@ class Relay:
 		except Exception as e:
 			return {"ok": False, "cmd": cmd, "error": str(e)}
 
-	def _load_mark_points_tcp(self, xml: str, path: str | None) -> dict:
+	def _load_mark_points(self, xml: str, path: str | None) -> dict:
 		if not xml or not str(xml).strip():
 			raise ValueError("load_mark_points requires xml content")
 		if path is None:
-			# Short fixed path under Temp; PV on this PC must read it locally.
 			path = os.path.join(tempfile.gettempdir(), "prairie_live_mp_trial.xml")
-		parent = os.path.dirname(path)
-		if parent:
-			os.makedirs(parent, exist_ok=True)
-		with open(path, "w", encoding="utf-8") as f:
-			f.write(xml)
+		sc = self._script()
 		print(f"load_mark_points → {path} ({len(xml)} bytes)")
-		# Grab loop is paused; COM is reliable on scope when TCP script port stalls.
 		try:
-			out = self.com.load_mark_points_xml(xml, path)
+			out = self._run_script_com(
+				lambda: sc.load_mark_points_xml(xml, path),
+				timeout=_COM_SCRIPT_TIMEOUT_S,
+			)
 			print(f"load_mark_points COM OK → {out.get('path', path)}")
 			return out
 		except Exception as com_err:
@@ -148,10 +190,10 @@ class Relay:
 		print(f"script TCP send: {cmd[:120]!r}")
 		with self._script_lock:
 			pl = PrairieLink(
-				host=self.com.host,
+				host=self.pv_host,
 				port=PV_SCRIPT_PORT,
 				password=self.password,
-				timeout=120.0,
+				timeout=60.0,
 			)
 			try:
 				return pl.send_command(*parts)

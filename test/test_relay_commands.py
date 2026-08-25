@@ -50,7 +50,9 @@ class FakeCom:
 
 def _relay():
 	r = Relay("127.0.0.1", "0000", 1)
-	r.com = FakeCom()
+	fake = FakeCom()
+	r.com = fake
+	r.script_com = fake
 	return r
 
 
