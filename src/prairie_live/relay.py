@@ -171,19 +171,69 @@ def _serve_ctrl(conn: socket.socket, relay: Relay) -> None:
 		pythoncom.CoInitialize()
 	except Exception:
 		pass
+	peer = "?"
+	try:
+		peer = f"{conn.getpeername()[0]}:{conn.getpeername()[1]}"
+	except OSError:
+		pass
+	print(f"ctrl client connected {peer}")
 	f = conn.makefile("rwb")
 	try:
 		for line in f:
 			if relay._stop.is_set():
 				break
-			payload = json.loads(line.decode("utf-8"))
+			raw = line.decode("utf-8", errors="replace")
+			try:
+				payload = json.loads(raw)
+			except json.JSONDecodeError as e:
+				print(f"ctrl recv from {peer} (bad JSON): {raw[:500]!r} err={e}")
+				reply = {"ok": False, "error": f"bad json: {e}"}
+				f.write((json.dumps(reply) + "\n").encode("utf-8"))
+				f.flush()
+				continue
+			print(f"ctrl recv from {peer}: {_fmt_payload(payload)}")
 			reply = relay.handle_command(payload)
+			print(f"ctrl reply to {peer}: {_fmt_reply(reply)}")
 			f.write((json.dumps(reply) + "\n").encode("utf-8"))
 			f.flush()
-	except (ConnectionError, OSError, ValueError):
-		pass
+	except (ConnectionError, OSError, ValueError) as e:
+		print(f"ctrl client {peer} closed: {e}")
 	finally:
 		conn.close()
+		print(f"ctrl client disconnected {peer}")
+
+
+def _fmt_payload(payload: dict) -> str:
+	"""Loggable summary; truncate Mark Points XML so the console stays readable."""
+	cmd = payload.get("cmd")
+	if cmd == "load_mark_points":
+		xml = payload.get("xml") or ""
+		path = payload.get("path")
+		preview = xml[:240].replace("\n", " ")
+		more = "…" if len(xml) > 240 else ""
+		return (
+			f"cmd=load_mark_points path={path!r} xml_bytes={len(xml)} "
+			f"xml_preview={preview!r}{more}"
+		)
+	# Small commands: show the full dict.
+	try:
+		s = json.dumps(payload, sort_keys=True)
+	except TypeError:
+		s = str(payload)
+	if len(s) > 500:
+		return s[:500] + "…"
+	return s
+
+
+def _fmt_reply(reply: dict) -> str:
+	try:
+		s = json.dumps(reply, sort_keys=True)
+	except TypeError:
+		s = str(reply)
+	# PV ACK/DONE blobs can be noisy; keep a short cap.
+	if len(s) > 400:
+		return s[:400] + "…"
+	return s
 
 
 def _accept_loop(sock: socket.socket, stop: threading.Event, handler, *args) -> None:
