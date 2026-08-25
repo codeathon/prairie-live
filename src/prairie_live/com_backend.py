@@ -130,14 +130,21 @@ class PrairieCom:
 
 		Used by the relay so the analysis PC can push XML without SMB shares.
 		COM SendScriptCommands uses spaces (TCP port 1236 uses SOH).
+
+		Always uses a fresh path (or overwrites path after unlink) so PrairieView
+		does not pop "file exists / replace?" dialogs.
 		"""
 		if not xml or not str(xml).strip():
 			raise ValueError("load_mark_points_xml requires xml content")
-		if path is None:
-			path = os.path.join(tempfile.gettempdir(), "prairie_live_mp_trial.xml")
+		path = _unique_mp_path(path)
 		parent = os.path.dirname(path)
 		if parent:
 			os.makedirs(parent, exist_ok=True)
+		# Unlink first so Windows/PV never see a same-name collision dialog.
+		try:
+			os.unlink(path)
+		except FileNotFoundError:
+			pass
 		with open(path, "w", encoding="utf-8") as f:
 			f.write(xml)
 		# Quote path so spaces in Temp dirs do not break the command line.
@@ -212,6 +219,15 @@ class PrairieCom:
 		if self._pl is None:
 			raise RuntimeError("not connected")
 		return self._pl
+
+
+def _unique_mp_path(path: str | None) -> str:
+	"""Prefer a new tempfile each load; fixed path → still rewrite after unlink."""
+	if path:
+		return path
+	fd, p = tempfile.mkstemp(prefix="prairie_live_mp_", suffix=".xml")
+	os.close(fd)
+	return p
 
 
 def _as_frame_auto(raw, last_wh) -> np.ndarray | None:

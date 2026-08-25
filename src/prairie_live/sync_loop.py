@@ -155,11 +155,15 @@ class JsonlLog:
 
 
 def write_scope_xml(groups: list[dict], path: str) -> None:
-	"""Write series XML to a path PrairieView can read (often on the scope)."""
+	"""Write series XML; unlink first so PV never gets a replace-file dialog."""
 	xml = groups_to_xml(groups)
 	parent = os.path.dirname(path)
 	if parent:
 		os.makedirs(parent, exist_ok=True)
+	try:
+		os.unlink(path)
+	except FileNotFoundError:
+		pass
 	with open(path, "w", encoding="utf-8") as f:
 		f.write(xml)
 
@@ -233,7 +237,9 @@ def run_sync_loop(
 
 		for gi, gpts in enumerate(groups_pts):
 			for power in powers:
-				gname = f"Group {gi + 1}"
+				# Unique Points= name each trial so PV does not ask
+				# "Mark Points already exists / replace?"
+				gname = f"PL_t{trial_index:04d}_g{gi + 1}"
 				step = build_group_step(
 					gpts,
 					name=gname,

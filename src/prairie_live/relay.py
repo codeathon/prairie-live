@@ -167,22 +167,33 @@ class Relay:
 	def _load_mark_points(self, xml: str, path: str | None) -> dict:
 		if not xml or not str(xml).strip():
 			raise ValueError("load_mark_points requires xml content")
-		if path is None:
-			path = os.path.join(tempfile.gettempdir(), "prairie_live_mp_trial.xml")
 		sc = self._script()
-		print(f"load_mark_points → {path} ({len(xml)} bytes)")
+		# Unique path by default — avoids PV "replace existing file?" dialogs.
+		print(f"load_mark_points xml_bytes={len(xml)} path={path!r}")
 		try:
 			out = self._run_script_com(
 				lambda: sc.load_mark_points_xml(xml, path),
 				timeout=_COM_SCRIPT_TIMEOUT_S,
 			)
-			print(f"load_mark_points COM OK → {out.get('path', path)}")
+			print(f"load_mark_points COM OK → {out.get('path')}")
 			return out
 		except Exception as com_err:
 			print(f"load_mark_points COM failed ({com_err}); trying TCP :1236 …")
-		raw = self._script_command("-LoadMarkPoints", path)
-		print(f"load_mark_points TCP DONE: {raw[:200]!r}")
-		return {"ok": True, "cmd": "load_mark_points", "path": path, "pv": raw}
+		from prairie_live.com_backend import _unique_mp_path
+
+		disk = _unique_mp_path(path)
+		parent = os.path.dirname(disk)
+		if parent:
+			os.makedirs(parent, exist_ok=True)
+		try:
+			os.unlink(disk)
+		except FileNotFoundError:
+			pass
+		with open(disk, "w", encoding="utf-8") as f:
+			f.write(xml)
+		raw = self._script_command("-LoadMarkPoints", disk)
+		print(f"load_mark_points TCP DONE path={disk} {raw[:200]!r}")
+		return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
 
 	def _script_command(self, *parts: str) -> str:
 		"""Mark Points cmds via PrairieLink TCP when COM is unavailable."""
