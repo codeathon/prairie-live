@@ -448,11 +448,22 @@ def main(argv: list[str] | None = None) -> None:
 
 	print(f"points pool: {len(points)}  powers={powers}  trigger={args.trigger}")
 	if args.inspect:
+		zero = 0
 		for pt in points:
 			print(
 				f"  Point {pt['id']}  ({pt['x']:.4f}, {pt['y']:.4f}, "
 				f"{pt.get('z', 0)})"
 			)
+			if float(pt.get("x", 0)) == 0.0 and float(pt.get("y", 0)) == 0.0:
+				zero += 1
+		if zero:
+			print(
+				f"WARNING: {zero}/{len(points)} points at (0,0) — "
+				"file may be slim/group-name-only or a bad copy. "
+				"Prefer a fat MarkPoints.xml with nested <Point X Y Z>."
+			)
+		else:
+			print(f"OK: {len(points)} points with FOV coordinates.")
 		return
 
 	via_relay = bool(args.via_relay)

@@ -14,9 +14,6 @@ import time
 
 import numpy as np
 
-# Script tokens on the wire/COM path are SOH-separated (same as TCP port 1236).
-_SOH = "\x01"
-
 
 def _dispatch():
 	import win32com.client
@@ -132,6 +129,7 @@ class PrairieCom:
 		Write series XML on this PC and -LoadMarkPoints it.
 
 		Used by the relay so the analysis PC can push XML without SMB shares.
+		COM SendScriptCommands uses spaces (TCP port 1236 uses SOH).
 		"""
 		if not xml or not str(xml).strip():
 			raise ValueError("load_mark_points_xml requires xml content")
@@ -142,7 +140,8 @@ class PrairieCom:
 			os.makedirs(parent, exist_ok=True)
 		with open(path, "w", encoding="utf-8") as f:
 			f.write(xml)
-		self.send(_SOH.join(["-LoadMarkPoints", path]))
+		# Quote path so spaces in Temp dirs do not break the command line.
+		self.send(f'-LoadMarkPoints "{path}"')
 		return {"ok": True, "cmd": "load_mark_points", "path": path}
 
 	def mark_points(self) -> dict:

@@ -64,8 +64,8 @@ def parse_mark_points(xml_string: str) -> list[dict]:
 
 
 def load_mark_points_file(path: str) -> list[dict]:
-	"""Read stim steps from a local series .xml."""
-	with open(path, encoding="utf-8") as f:
+	"""Read stim steps from a local series .xml (utf-8-sig strips Windows BOM)."""
+	with open(path, encoding="utf-8-sig") as f:
 		return parse_mark_points(f.read())
 
 

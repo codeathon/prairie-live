@@ -27,6 +27,9 @@ class RelayClient:
 	def connect(self) -> None:
 		self._frame_sock = socket.create_connection((self.host, self.port), timeout=5)
 		self._ctrl_sock = socket.create_connection((self.host, self.port + 1), timeout=5)
+		# create_connection leaves a short timeout on the sock; Mark Points
+		# -lmp via COM can take longer than 5s under load.
+		self._ctrl_sock.settimeout(120.0)
 		self._ctrl_file = self._ctrl_sock.makefile("rwb")
 		self._stop.clear()
 		threading.Thread(target=self._recv_loop, daemon=True).start()

@@ -24,6 +24,8 @@ class Relay:
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
+		# Pause frame grabs while running script cmds so COM is not wedged.
+		self._pause_grab = threading.Event()
 
 	def start(self) -> None:
 		self.com.connect()
@@ -42,6 +44,9 @@ class Relay:
 		except Exception:
 			pass
 		while not self._stop.is_set():
+			if self._pause_grab.is_set():
+				time.sleep(0.01)
+				continue
 			frame = self.com.get_frame(self.channel)
 			if frame is not None:
 				with self._lock:
@@ -55,6 +60,14 @@ class Relay:
 
 	def handle_command(self, payload: dict) -> dict:
 		cmd = payload.get("cmd")
+		# Hold off GetImage so -LoadMarkPoints / -MarkPoints can take the COM lock.
+		self._pause_grab.set()
+		try:
+			return self._dispatch(cmd, payload)
+		finally:
+			self._pause_grab.clear()
+
+	def _dispatch(self, cmd, payload: dict) -> dict:
 		try:
 			if cmd == "tseries":
 				self.com.start_tseries()
