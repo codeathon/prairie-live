@@ -1,13 +1,17 @@
 """Optional relay when the viewer PC does not have PrairieLink installed.
 
 Run on the scope PC. Frames on --port, JSON commands on --port+1.
+Ctrl+C (or Ctrl+Break on Windows) stops cleanly by closing listen sockets
+so accept() cannot hang forever.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import signal
 import socket
+import sys
 import threading
 import time
 
@@ -33,7 +37,11 @@ class Relay:
 
 	def stop(self) -> None:
 		self._stop.set()
-		self.com.disconnect()
+		self._pause_grab.set()
+		try:
+			self.com.disconnect()
+		except Exception:
+			pass
 
 	def _grab_loop(self) -> None:
 		# win32com must be CoInitialized on every thread that calls COM.
@@ -65,7 +73,8 @@ class Relay:
 		try:
 			return self._dispatch(cmd, payload)
 		finally:
-			self._pause_grab.clear()
+			if not self._stop.is_set():
+				self._pause_grab.clear()
 
 	def _dispatch(self, cmd, payload: dict) -> dict:
 		try:
@@ -106,7 +115,7 @@ class Relay:
 def _serve_frames(conn: socket.socket, relay: Relay, fps: float) -> None:
 	period = 1.0 / max(fps, 1.0)
 	try:
-		while True:
+		while not relay._stop.is_set():
 			frame = relay.latest_frame()
 			if frame is not None:
 				conn.sendall(pack_frame(frame, extra=relay.channel))
@@ -128,6 +137,8 @@ def _serve_ctrl(conn: socket.socket, relay: Relay) -> None:
 	f = conn.makefile("rwb")
 	try:
 		for line in f:
+			if relay._stop.is_set():
+				break
 			payload = json.loads(line.decode("utf-8"))
 			reply = relay.handle_command(payload)
 			f.write((json.dumps(reply) + "\n").encode("utf-8"))
@@ -138,9 +149,16 @@ def _serve_ctrl(conn: socket.socket, relay: Relay) -> None:
 		conn.close()
 
 
-def _accept_loop(sock: socket.socket, handler, *args) -> None:
-	while True:
-		conn, addr = sock.accept()
+def _accept_loop(sock: socket.socket, stop: threading.Event, handler, *args) -> None:
+	# Timed accept so Ctrl+C / stop can be noticed on Windows.
+	sock.settimeout(1.0)
+	while not stop.is_set():
+		try:
+			conn, addr = sock.accept()
+		except TimeoutError:
+			continue
+		except OSError:
+			break
 		print(f"{handler.__name__} {addr[0]}:{addr[1]}")
 		threading.Thread(target=handler, args=(conn,) + args, daemon=True).start()
 
@@ -148,15 +166,42 @@ def _accept_loop(sock: socket.socket, handler, *args) -> None:
 def listen(relay: Relay, bind: str, port: int, fps: float) -> None:
 	frame_srv = _bind(bind, port)
 	ctrl_srv = _bind(bind, port + 1)
+	servers = (frame_srv, ctrl_srv)
+
+	def _shutdown(*_args) -> None:
+		# First Ctrl+C: close listen socks (unblocks accept) and stop COM grab.
+		if relay._stop.is_set():
+			print("force exit")
+			sys.exit(1)
+		print("\nstopping (Ctrl+C) …")
+		relay._stop.set()
+		relay._pause_grab.set()
+		for s in servers:
+			try:
+				s.close()
+			except OSError:
+				pass
+
+	signal.signal(signal.SIGINT, _shutdown)
+	# Windows console Ctrl+Break
+	if hasattr(signal, "SIGBREAK"):
+		signal.signal(signal.SIGBREAK, _shutdown)
+
 	print(f"frames {bind}:{port}  ctrl {bind}:{port + 1}  PV={relay.com.host}")
+	print("Ctrl+C to stop")
 	threading.Thread(
-		target=_accept_loop, args=(frame_srv, _serve_frames, relay, fps), daemon=True
+		target=_accept_loop,
+		args=(frame_srv, relay._stop, _serve_frames, relay, fps),
+		daemon=True,
 	).start()
 	try:
-		_accept_loop(ctrl_srv, _serve_ctrl, relay)
+		_accept_loop(ctrl_srv, relay._stop, _serve_ctrl, relay)
 	finally:
-		frame_srv.close()
-		ctrl_srv.close()
+		for s in servers:
+			try:
+				s.close()
+			except OSError:
+				pass
 
 
 def _bind(bind: str, port: int) -> socket.socket:
@@ -182,9 +227,10 @@ def main(argv=None) -> None:
 	try:
 		listen(relay, args.bind, args.port, args.fps)
 	except KeyboardInterrupt:
-		print("stopping")
+		print("\nstopping (KeyboardInterrupt) …")
 	finally:
 		relay.stop()
+		print("relay stopped")
 
 
 if __name__ == "__main__":
