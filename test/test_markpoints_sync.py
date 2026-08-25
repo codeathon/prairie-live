@@ -125,6 +125,7 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 			pad_ms=0.0,
 			mock_scores=True,
 			relay=None,
+			via_relay=False,
 			f0_s=0.0,
 			f1_s=0.0,
 			frame_poll_s=0.01,
@@ -147,3 +148,59 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 	assert estimate_series_ms(
 		[build_group_step(pts[:2], name="G", power=0.5, meta=meta)]
 	) > 0
+
+
+class _FakeRelayMp:
+	def __init__(self):
+		self.calls = []
+
+	def load_mark_points(self, xml, path=None):
+		self.calls.append(("load", xml[:40], path))
+		return {"ok": True, "cmd": "load_mark_points", "path": "x.xml"}
+
+	def mark_points(self):
+		self.calls.append("mark")
+		return {"ok": True, "cmd": "mark_points"}
+
+	def get_frame(self):
+		return None
+
+
+def test_via_relay_fires_without_scope_xml(tmp_path: Path):
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	log = JsonlLog(tmp_path / "t.jsonl")
+	relay = _FakeRelayMp()
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=None,
+			n_iterations=1,
+			n_groups=1,
+			group_size=2,
+			powers=[0.75],
+			seed=1,
+			trigger="none",
+			ttl=None,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+		)
+	finally:
+		log.close()
+	assert len(rows) == 1
+	assert relay.calls[0][0] == "load"
+	assert relay.calls[1] == "mark"

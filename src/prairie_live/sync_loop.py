@@ -170,7 +170,7 @@ def run_sync_loop(
 	meta: dict[str, Any],
 	pl: PrairieLink | None,
 	log: JsonlLog,
-	scope_xml: str,
+	scope_xml: str | None,
 	n_iterations: int,
 	n_groups: int,
 	group_size: int,
@@ -183,6 +183,7 @@ def run_sync_loop(
 	pad_ms: float,
 	mock_scores: bool,
 	relay: Any | None,
+	via_relay: bool,
 	f0_s: float,
 	f1_s: float,
 	frame_poll_s: float,
@@ -198,6 +199,9 @@ def run_sync_loop(
 	  none   — TriggerSelection=None; -mp fires immediately; log t_cmd
 	  serial — TriggerSelection from meta (e.g. PFI1); -mp arms, then DTR pulse
 	  wait   — same as serial but no DTR (external PsychoPy/PackIO provides TTL)
+
+	via_relay:
+	  True — push XML + -lmp/-mp through the relay (no SMB share needed)
 	"""
 	rng = random.Random(seed)
 	scores: dict[str, float] | None = None
@@ -254,27 +258,34 @@ def run_sync_loop(
 					"score_kind": None,
 				}
 
-				write_scope_xml(series, scope_xml)
+				xml = groups_to_xml(series)
+				if scope_xml:
+					write_scope_xml(series, scope_xml)
 				row["t_cmd"] = time.time()
 				log.write({**row, "phase": "armed"})
 
-				if dry_run or pl is None:
+				if dry_run:
 					print(
 						f"  [dry] trial {trial_index}: {gname} "
 						f"power={power} pts={point_ids}"
 					)
 				else:
-					pl.send_command("-LoadMarkPoints", scope_xml)
+					_fire_mark_points(
+						xml=xml,
+						scope_xml=scope_xml,
+						pl=pl,
+						relay=relay,
+						via_relay=via_relay,
+					)
 					print(
 						f"  trial {trial_index}: -lmp/-mp {gname} "
 						f"power={power} pts={point_ids}"
 					)
-					pl.send_command("-MarkPoints")
 
 				# Capture F0 before TTL when relay scoring is on.
 				f0_frames: list[np.ndarray] = []
 				f1_frames: list[np.ndarray] = []
-				if relay is not None and not dry_run:
+				if relay is not None and not dry_run and not mock_scores:
 					f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
 
 				if trigger == "serial" and ttl is not None and not dry_run:
@@ -288,7 +299,7 @@ def run_sync_loop(
 					row["t_ttl"] = time.time()
 
 				wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
-				if relay is not None and not dry_run:
+				if relay is not None and not dry_run and not mock_scores:
 					f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
 				else:
 					time.sleep(max(wait_s, 0.0))
@@ -325,6 +336,31 @@ def run_sync_loop(
 	return all_trials
 
 
+def _fire_mark_points(
+	*,
+	xml: str,
+	scope_xml: str | None,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+) -> None:
+	"""Load + fire one series; prefer relay push when via_relay (no SMB)."""
+	if via_relay:
+		if relay is None:
+			raise RuntimeError("via_relay set but relay client is not connected")
+		out = relay.load_mark_points(xml)
+		if not out.get("ok", False):
+			raise RuntimeError(f"relay load_mark_points failed: {out}")
+		out = relay.mark_points()
+		if not out.get("ok", False):
+			raise RuntimeError(f"relay mark_points failed: {out}")
+		return
+	if pl is None or not scope_xml:
+		raise RuntimeError("need PrairieLink + --scope-xml, or --via-relay")
+	pl.send_command("-LoadMarkPoints", scope_xml)
+	pl.send_command("-MarkPoints")
+
+
 def _collect_frames(relay, duration_s: float, poll_s: float) -> list[np.ndarray]:
 	frames: list[np.ndarray] = []
 	t_end = time.monotonic() + max(duration_s, 0.0)
@@ -347,8 +383,14 @@ def main(argv: list[str] | None = None) -> None:
 	)
 	p.add_argument(
 		"--scope-xml",
-		required=True,
-		help="Writable path PrairieView loads via -LoadMarkPoints",
+		help="Writable path PrairieView loads via -LoadMarkPoints (SMB/share). "
+		"Not needed with --via-relay.",
+	)
+	p.add_argument(
+		"--via-relay",
+		metavar="HOST[:PORT]",
+		help="Push trial XML over prairie_live relay (no file share). "
+		"Example: 10.33.107.147:25100",
 	)
 	p.add_argument("--log", default="markpoints_trials.jsonl", help="JSONL trial log")
 	p.add_argument("--host", default="127.0.0.1")
@@ -379,7 +421,10 @@ def main(argv: list[str] | None = None) -> None:
 		action="store_true",
 		help="Fake per-trial scores so regrouping works without imaging",
 	)
-	p.add_argument("--relay", help="host[:port] for optional disk ΔF/F scoring")
+	p.add_argument(
+		"--relay",
+		help="host[:port] for disk ΔF/F scoring (defaults to --via-relay if set)",
+	)
 	p.add_argument("--f0-s", type=float, default=0.5, help="pre-TTL baseline window")
 	p.add_argument("--f1-s", type=float, default=1.0, help="post-TTL response window")
 	p.add_argument("--frame-poll", type=float, default=0.05)
@@ -410,6 +455,10 @@ def main(argv: list[str] | None = None) -> None:
 			)
 		return
 
+	via_relay = bool(args.via_relay)
+	if not args.dry_run and not via_relay and not args.scope_xml:
+		raise SystemExit("need --via-relay HOST:PORT or --scope-xml PATH")
+
 	ttl = None
 	pl = None
 	relay = None
@@ -422,14 +471,16 @@ def main(argv: list[str] | None = None) -> None:
 
 			ttl = SerialTtl(args.serial)
 
-		if args.relay and not args.dry_run:
+		relay_addr = args.via_relay or args.relay
+		if relay_addr and not args.dry_run:
 			from prairie_live.relay_client import RelayClient
 
-			host, _, port = args.relay.partition(":")
+			host, _, port = relay_addr.partition(":")
 			relay = RelayClient(host, int(port or 25100))
 			relay.connect()
 
-		if not args.dry_run:
+		# Direct PrairieLink only when not pushing XML through the relay.
+		if not args.dry_run and not via_relay:
 			pl = PrairieLink(host=args.host, port=args.port, password=args.password)
 
 		run_sync_loop(
@@ -450,6 +501,7 @@ def main(argv: list[str] | None = None) -> None:
 			pad_ms=args.pad_ms,
 			mock_scores=args.mock_scores,
 			relay=relay,
+			via_relay=via_relay,
 			f0_s=args.f0_s,
 			f1_s=args.f1_s,
 			frame_poll_s=args.frame_poll,

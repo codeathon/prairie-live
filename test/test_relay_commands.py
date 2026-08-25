@@ -37,6 +37,16 @@ class FakeCom:
 			"value": 12.5,
 		}
 
+	def load_mark_points_xml(self, xml, path=None):
+		self.calls.append(("load_mark_points_xml", xml[:20], path))
+		if not xml.strip():
+			raise ValueError("empty xml")
+		return {"ok": True, "cmd": "load_mark_points", "path": path or "tmp.xml"}
+
+	def mark_points(self):
+		self.calls.append("mark_points")
+		return {"ok": True, "cmd": "mark_points"}
+
 
 def _relay():
 	r = Relay("127.0.0.1", "0000", 1)
@@ -73,6 +83,18 @@ def test_get_motor_position_bad_axis_is_error():
 	out = r.handle_command({"cmd": "get_motor_position", "axis": "Q"})
 	assert out["ok"] is False
 	assert "axis" in out["error"]
+
+
+def test_load_mark_points_and_mark_points():
+	r = _relay()
+	xml = "<PVMarkPointSeriesElements/>"
+	out = r.handle_command({"cmd": "load_mark_points", "xml": xml})
+	assert out["ok"] is True
+	assert out["cmd"] == "load_mark_points"
+	out = r.handle_command({"cmd": "mark_points"})
+	assert out == {"ok": True, "cmd": "mark_points"}
+	assert r.com.calls[0][0] == "load_mark_points_xml"
+	assert r.com.calls[1] == "mark_points"
 
 
 def test_unknown_command_is_rejected():

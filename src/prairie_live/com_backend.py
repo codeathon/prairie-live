@@ -7,10 +7,15 @@ the TCP script port.
 
 from __future__ import annotations
 
+import os
+import tempfile
 import threading
 import time
 
 import numpy as np
+
+# Script tokens on the wire/COM path are SOH-separated (same as TCP port 1236).
+_SOH = "\x01"
 
 
 def _dispatch():
@@ -121,6 +126,29 @@ class PrairieCom:
 	def abort(self) -> dict:
 		self.send("-Abort")
 		return {"ok": True, "cmd": "abort"}
+
+	def load_mark_points_xml(self, xml: str, path: str | None = None) -> dict:
+		"""
+		Write series XML on this PC and -LoadMarkPoints it.
+
+		Used by the relay so the analysis PC can push XML without SMB shares.
+		"""
+		if not xml or not str(xml).strip():
+			raise ValueError("load_mark_points_xml requires xml content")
+		if path is None:
+			path = os.path.join(tempfile.gettempdir(), "prairie_live_mp_trial.xml")
+		parent = os.path.dirname(path)
+		if parent:
+			os.makedirs(parent, exist_ok=True)
+		with open(path, "w", encoding="utf-8") as f:
+			f.write(xml)
+		self.send(_SOH.join(["-LoadMarkPoints", path]))
+		return {"ok": True, "cmd": "load_mark_points", "path": path}
+
+	def mark_points(self) -> dict:
+		"""Run the current Mark Point series (-MarkPoints)."""
+		self.send("-MarkPoints")
+		return {"ok": True, "cmd": "mark_points"}
 
 	def start_live(self) -> dict:
 		# Command name differs across PrairieView versions.

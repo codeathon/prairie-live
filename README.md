@@ -171,38 +171,43 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 python -m prairie_live view --mock
 ```
 
-## Mark Points sync loop (scope PC)
+## Mark Points sync loop (analysis PC + scope relay)
 
-Maps a pool of FOV points into pseudo-random groups, fires one group×power
-trial at a time (`-LoadMarkPoints` then `-MarkPoints`), authors trial identity
-to a JSONL log (so TTL edge *k* ≡ `trial_index` *k*), optionally pulses serial
-**DTR** for PackIO→PFI, scores on-target ΔF/F from the relay (or `--mock-scores`),
-and rebuilds groups from those scores on the next iteration.
+Maps FOV points into groups, fires one group×power trial at a time, authors
+`trial_index` to JSONL, and optionally pulses serial **DTR** on the analysis
+PC (PackIO→PFI). **No Windows file share is required** when using `--via-relay`:
+the analysis PC pushes the trial XML over the relay; the scope writes it
+locally and runs `-LoadMarkPoints` / `-MarkPoints`.
 
 Prefer a fat `MarkPoints.xml` (`PVMarkPointSeriesElements` with nested
-`<Point X Y Z>`). Slim group-name-only series files have no coords to regroup.
+`<Point X Y Z>`). Copy that file to the analysis PC once (USB/email) for
+`--series`.
+
+### Scope PC — start the relay
 
 ```bat
 cd prairie-live
+git fetch origin
+git checkout feat/markpoints-sync-loop
 set PYTHONPATH=%CD%\src
-pip install -r requirements.txt
-
-REM Inspect points pool (no TCP):
-python -m prairie_live mp-sync --series E:\path\to\MarkPoints.xml --scope-xml C:\temp\mp_trial.xml --inspect
-
-REM Dry run (XML + JSONL only):
-python -m prairie_live mp-sync --series E:\path\to\MarkPoints.xml --scope-xml C:\temp\mp_trial.xml --log trials.jsonl --dry-run --mock-scores --iterations 2 --n-groups 2 --group-size 9 --powers 0,0.75
-
-REM Live on scope (software trigger, no serial):
-python -m prairie_live mp-sync --series E:\path\to\MarkPoints.xml --scope-xml C:\temp\mp_trial.xml --host 127.0.0.1 --port 1236 --password 0000 --iterations 3 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger none --mock-scores
-
-REM PFI1 wait + DTR pulse on COM3 (wire DTR → PFI1):
-python -m prairie_live mp-sync --series E:\path\to\MarkPoints.xml --scope-xml C:\temp\mp_trial.xml --trigger serial --serial COM3 --iterations 3 --n-groups 2 --group-size 9 --powers 0,0.75 --mock-scores
+python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --fps 12
 ```
 
-`--scope-xml` must be a path PrairieView can read (local on the scope PC, or a
-share). Tempfiles on an analysis PC will not work for `-LoadMarkPoints`.
+### Analysis PC — run the loop (TTL stays here)
 
-Optional `--relay host:25100` enables disk ΔF/F scoring around each point
-instead of `--mock-scores`. `--trigger wait` arms for PFI without pulsing DTR
-(external PsychoPy/PackIO provides the edge).
+```bat
+cd prairie-live
+git fetch origin
+git checkout feat/markpoints-sync-loop
+set PYTHONPATH=%CD%\src
+
+REM Software trigger (no serial):
+python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger none --mock-scores --log trials.jsonl
+
+REM DTR photostim on COM3 (wire DTR → PFI1):
+python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger serial --serial COM3 --mock-scores --log trials.jsonl
+```
+
+`--via-relay` replaces `--scope-xml` + direct port 1236 for Mark Points. The
+relay must already be running on the scope. PrairieView script password is
+still `0000` on the relay process (`--password`), not a Windows share login.

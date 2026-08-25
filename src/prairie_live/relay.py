@@ -75,6 +75,14 @@ class Relay:
 					payload.get("axis", ""),
 					payload.get("device"),
 				)
+			elif cmd == "load_mark_points":
+				# Analysis pushes XML; scope writes a local file PV can open.
+				return self.com.load_mark_points_xml(
+					payload.get("xml", ""),
+					payload.get("path"),
+				)
+			elif cmd == "mark_points":
+				return self.com.mark_points()
 			else:
 				return {"ok": False, "error": f"unknown cmd {cmd}"}
 			return {"ok": True, "cmd": cmd}

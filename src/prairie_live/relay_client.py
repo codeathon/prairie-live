@@ -75,6 +75,17 @@ class RelayClient:
 			payload["device"] = device
 		return self._command(payload)
 
+	def load_mark_points(self, xml: str, path: str | None = None) -> dict:
+		"""Push Mark Points series XML; relay writes it locally and -lmp."""
+		payload = {"cmd": "load_mark_points", "xml": xml}
+		if path is not None:
+			payload["path"] = path
+		return self._command(payload)
+
+	def mark_points(self) -> dict:
+		"""Run current Mark Points series on the scope (-MarkPoints)."""
+		return self._command({"cmd": "mark_points"})
+
 	def _command(self, payload: dict) -> dict:
 		if self._ctrl_file is None:
 			raise RuntimeError("not connected")
