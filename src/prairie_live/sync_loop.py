@@ -988,6 +988,7 @@ def main(argv: list[str] | None = None) -> None:
 		)
 	if opt.get("inspect"):
 		zero = 0
+		oob_n = 0
 		for pt in points:
 			print(
 				f"  Point {pt['id']}  ({pt['x']:.4f}, {pt['y']:.4f}, "
@@ -995,14 +996,27 @@ def main(argv: list[str] | None = None) -> None:
 			)
 			if float(pt.get("x", 0)) == 0.0 and float(pt.get("y", 0)) == 0.0:
 				zero += 1
+			if not (
+				0.0 <= float(pt["x"]) <= 1.0 and 0.0 <= float(pt["y"]) <= 1.0
+			):
+				oob_n += 1
 		if zero:
 			print(
 				f"WARNING: {zero}/{len(points)} points at (0,0) — "
 				"file may be slim/group-name-only or a bad copy. "
 				"Prefer a fat MarkPoints.xml with nested <Point X Y Z>."
 			)
-		else:
-			print(f"OK: {len(points)} points with FOV coordinates.")
+		if oob_n:
+			print(
+				f"WARNING: {oob_n}/{len(points)} points have X/Y outside 0–1. "
+				"Those land outside the visible imaging FOV — you will not see "
+				"spots on the PV display. Re-export points from the UI while "
+				"looking at the FOV, or fix the .gpl/.xml."
+			)
+		elif not zero:
+			print(
+				f"OK: {len(points)} points with X/Y inside visible FOV (0–1)."
+			)
 		return
 
 	via_relay = bool(opt.get("via_relay"))
