@@ -830,7 +830,7 @@ def main(argv: list[str] | None = None) -> None:
 	p.add_argument(
 		"--powers",
 		default=None,
-		help="Comma-separated UncagingLaserPower values per group",
+		help="Comma-separated UncagingLaserPower values (UI scale: 0,75,140 — not 0–1)",
 	)
 	p.add_argument("--seed", type=int, default=None)
 	p.add_argument(

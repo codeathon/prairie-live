@@ -83,9 +83,9 @@ def load_experiment(path: str | Path | None) -> dict[str, Any]:
 
 
 def powers_to_list(powers: Any) -> list[float]:
-	"""Accept [0, 0.75] or \"0,0.75\" from JSON / CLI."""
+	"""Accept [0, 75, 140] or \"0,75,140\" — UI-scale %, not 0–1."""
 	if powers is None:
-		return [0.0, 0.75]
+		return [0.0, 75.0]
 	if isinstance(powers, (list, tuple)):
 		return [float(x) for x in powers]
 	return [float(x) for x in str(powers).split(",") if str(x).strip()]
@@ -167,7 +167,7 @@ def merge_cli_over_config(args_ns: Any, cfg: dict[str, Any]) -> dict[str, Any]:
 	if "powers" in out:
 		out["powers"] = powers_to_list(out["powers"])
 	elif "powers" not in out:
-		out["powers"] = [0.0, 0.75]
+		out["powers"] = [0.0, 75.0]
 	# Stim keys: CLI has no flags yet; config-only for now.
 	for k in _STIM_KEYS:
 		if k in cfg and k not in out:

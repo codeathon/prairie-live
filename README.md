@@ -215,13 +215,13 @@ $env:PYTHONPATH = "$PWD\src"
 Software trigger (no serial) — one paste:
 
 ```powershell
-python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger none --mock-scores --log trials.jsonl
+python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,75 --trigger none --mock-scores --log trials.jsonl
 ```
 
 DTR photostim on COM3 (wire DTR to PFI1) — one paste:
 
 ```powershell
-python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger serial --serial COM3 --mock-scores --log trials.jsonl
+python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,75 --trigger serial --serial COM3 --mock-scores --log trials.jsonl
 ```
 
 `--via-relay` replaces `--scope-xml` + direct port 1236 for Mark Points. The
@@ -275,7 +275,7 @@ Key fields on `done` rows:
 | `group_name` | Group label in the trial XML (e.g. `PL_t0002_g2`) |
 | `group_index` | 0-based group slot this iteration |
 | `point_ids` | FOV point indices stimulated this trial |
-| `power` | `UncagingLaserPower` for this trial (e.g. `0.0`, `0.75`) |
+| `power` | `UncagingLaserPower` for this trial (UI scale, e.g. `0`, `75`, `140`) |
 | `trigger` | `none`, `serial`, or `wait` |
 | `trigger_selection` | `None` or `PFI1` (external trigger line in XML) |
 | `t_cmd` | Unix time when Mark Points commands were sent |
