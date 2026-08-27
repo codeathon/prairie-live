@@ -260,35 +260,53 @@ Written on the **analysis PC** in the directory where you run `mp-sync`
 (default: `--log trials.jsonl` → `.\trials.jsonl` under that folder).
 Each run **appends** lines; delete or rename the file between experiments.
 
-One JSON object per line. Each trial produces two rows:
-
-| `phase` | When |
-|---------|------|
-| `armed` | Identity written; series `-lmp`/`-mp` or SLM `-slm` sent |
-| `done` | Trial finished — **use these rows** for results |
-
-Key fields on `done` rows:
+**How to read a `done` row (what matters):**
 
 | Field | Meaning |
 |-------|---------|
-| `trial_index` | Trial number (0, 1, 2, …). **Same as TTL edge index** when using `--trigger serial`. |
-| `group_name` | Group label in the trial XML (e.g. `PL_t0002_g2`) |
-| `group_index` | 0-based group slot this iteration |
-| `point_ids` | FOV point indices stimulated this trial |
-| `power` | `UncagingLaserPower` for this trial (UI scale, e.g. `0`, `75`, `140`) |
-| `trigger` | `none`, `serial`, or `wait` |
-| `trigger_selection` | `None` or `PFI1` (external trigger line in XML) |
-| `t_cmd` | Unix time when Mark Points commands were sent |
-| `t_ttl` | Stim time: equals `t_cmd` for `none`; **DTR pulse time** for `serial` |
-| `score` | Group-level mean ΔF/F (one number per trial) |
-| `score_kind` | `mock`, `relay_disk_dff`, or `none` |
+| `summary` | One-line human digest — start here |
+| `trial_index` | Trial number (0, 1, 2, …). Same as TTL edge index for `--trigger serial` |
+| `trigger_index` / `n_triggers` | Which packed SLM pulse this was (0-based) / how many pulses in the batch |
+| `point_ids` | **The FOV indices that actually fired** this pulse (e.g. `1,4,8`) |
+| `power` | Prairie UI `UncagingLaserPower` (e.g. `140`) |
+| `score` / `score_kind` | Group mean ΔF/F; `relay_disk_dff`, `mock`, or `none` |
+| `image_paths` | Folder with `f0.png` / `f1.png` / `dff.png` |
+| `record_paths` | Pretty `trial.json` + `readable.txt` beside those PNGs |
 
-**What is stored:** trial identity, TTL timing, and **one group-mean score**
-per trial. Per-point ΔF/F is used in-memory to regroup on the next iteration
-but is **not** written to a separate file. With `images_dir` / `--images-dir`,
-mean F0/F1/ΔF/F PNGs are saved under
-`<images_dir>/<run_id>/tXXXX/{f0,f1,dff}.png` (paths in JSONL `image_paths`);
-needs relay `--grab` and Live/T-series. Otherwise relay frames are discarded.
+Phases:
+
+| `phase` | When |
+|---------|------|
+| `slm_packed` | Once per power batch: full `group_trigger_map` + raw `slm_parts` (argv dump) |
+| `armed` | Trial identity recorded before stim / TTL |
+| `done` | Trial finished — **use these rows** for results |
+
+The giant `slm_parts` array is **only** on `slm_packed` (not on every trial).
+Per-trial folders also get:
+
+```
+trial_images/run_…/t0004/
+  f0.png  f1.png  dff.png
+  trial.json      ← pretty JSON
+  readable.txt    ← plain-English block
+trial_images/run_…/summary.txt   ← one line per trial
+trial_images/run_…/pulse_map.txt ← pulse → points for the packed batch
+```
+
+Example `done` line (lean):
+
+```json
+{
+  "phase": "done",
+  "summary": "trial 4 · pulse 4/4 · points [1,4,8] · power 140.0 · mode slm · ΔF/F 0.0096 (relay_disk_dff)",
+  "trial_index": 4,
+  "trigger_index": 4,
+  "point_ids": ["1", "4", "8"],
+  "power": 140.0,
+  "score": 0.0096,
+  "score_kind": "relay_disk_dff"
+}
+```
 
 Read completed trials in PowerShell:
 
@@ -296,8 +314,10 @@ Read completed trials in PowerShell:
 Get-Content trials.jsonl |
   ForEach-Object { $_ | ConvertFrom-Json } |
   Where-Object { $_.phase -eq "done" } |
-  Select-Object trial_index, group_name, power, trigger_selection, score, score_kind, t_ttl
+  Select-Object summary, trial_index, point_ids, power, score, score_kind
 ```
+
+Or open `trial_images\run_*\t0004\readable.txt`.
 
 Without `--mock-scores`, scoring uses live relay frames (`score_kind`:
 `relay_disk_dff`). Drop `--mock-scores` and keep the relay running with
