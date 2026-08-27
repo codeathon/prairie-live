@@ -62,39 +62,93 @@ def format_trial_summary(row: dict[str, Any]) -> str:
 
 
 def format_trial_readable(row: dict[str, Any]) -> str:
-	"""Multi-line block for readable.txt next to trial PNGs."""
+	"""Multi-line block for trials.txt / readable.txt (human log)."""
 	pts = ", ".join(str(p) for p in row.get("point_ids") or [])
 	trig = row.get("trigger_index")
 	n = row.get("n_triggers")
-	pulse = (
-		f"pulse {trig} of {int(n) - 1} (0-based; {n} groups in packed -slm)"
-		if trig is not None and n is not None
-		else "n/a"
-	)
+	if trig is not None and n is not None:
+		pulse = f"{trig} of {int(n) - 1}  (0-based pulse index among {n} packed groups)"
+	else:
+		pulse = "n/a (series mode or single trial)"
 	score = row.get("score")
 	score_s = (
-		f"{float(score):.6f} ({row.get('score_kind')})"
+		f"{float(score):.6f}  ({row.get('score_kind')})"
 		if score is not None
 		else str(row.get("score_kind") or "none")
 	)
 	imgs = row.get("image_paths") or {}
 	img_dir = imgs.get("trial_dir") or "(none)"
+	ti = row.get("trial_index")
+	bar = "=" * 60
 	lines = [
-		f"Trial {row.get('trial_index')}",
-		f"  summary:   {row.get('summary') or format_trial_summary(row)}",
-		f"  group:     {row.get('group_name')}",
-		f"  points:    {pts}  ← these are the FOV indices that fired",
-		f"  power:     {row.get('power')} (Prairie UI UncagingLaserPower)",
-		f"  stim_mode: {row.get('stim_mode')}  trigger={row.get('trigger')} "
+		bar,
+		f"TRIAL {ti}",
+		bar,
+		f"  Fired points:  {pts}",
+		f"  Group name:    {row.get('group_name')}",
+		f"  Laser power:   {row.get('power')}  (Prairie UI UncagingLaserPower)",
+		f"  Stim mode:     {row.get('stim_mode')}   trigger={row.get('trigger')}  "
 		f"line={row.get('trigger_selection')}",
-		f"  TTL/pulse: {pulse}",
-		f"  score:     {score_s}",
-		f"  images:    {img_dir}",
+		f"  TTL / pulse:   {pulse}",
+		f"  ΔF/F score:    {score_s}",
+		f"  Images:        {img_dir}",
+		f"  One-liner:     {row.get('summary') or format_trial_summary(row)}",
 		"",
-		"Ignore raw -MarkAllPoints argv dumps; see phase=slm_packed in trials.jsonl",
-		"for the one packed command + full pulse→group map for this power batch.",
 	]
-	return "\n".join(lines) + "\n"
+	return "\n".join(lines)
+
+
+def format_packed_readable(row: dict[str, Any]) -> str:
+	"""Human block for a packed -slm batch (no argv dump)."""
+	bar = "-" * 60
+	power = row.get("power")
+	n = row.get("n_triggers")
+	lines = [
+		bar,
+		f"PACKED SLM  power={power}  pulses={n}",
+		bar,
+		row.get("summary") or "",
+		"",
+		format_packed_map(row.get("group_trigger_map") or []).rstrip(),
+		"",
+		"(Raw -MarkAllPoints argv is only in trials.jsonl phase=slm_packed.)",
+		"",
+	]
+	return "\n".join(lines)
+
+
+def readable_log_path(jsonl_path: str | Path) -> Path:
+	"""trials.jsonl → trials.txt (same folder, always openable in Notepad)."""
+	p = Path(jsonl_path)
+	return p.with_suffix(".txt") if p.suffix.lower() == ".jsonl" else Path(str(p) + ".txt")
+
+
+class ReadableLog:
+	"""Append-only plain-text twin of JsonlLog for humans."""
+
+	def __init__(self, path: str | Path):
+		self.path = Path(path)
+		self.path.parent.mkdir(parents=True, exist_ok=True)
+		self._fp = open(self.path, "a", encoding="utf-8")
+		# Session banner so successive mp-sync runs are separable.
+		from datetime import datetime, timezone
+
+		now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+		self._fp.write(f"\n##### mp-sync session {now} #####\n\n")
+		self._fp.flush()
+
+	def write_row(self, row: dict[str, Any]) -> None:
+		phase = row.get("phase")
+		if phase == "done":
+			self._fp.write(format_trial_readable(row))
+		elif phase == "slm_packed":
+			self._fp.write(format_packed_readable(row))
+		else:
+			return
+		self._fp.flush()
+
+	def close(self) -> None:
+		self._fp.close()
 
 
 def order_trial_row(row: dict[str, Any]) -> dict[str, Any]:

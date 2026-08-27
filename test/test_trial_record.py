@@ -85,3 +85,48 @@ def test_format_log_table(tmp_path: Path):
 	assert "1,4,8" in table
 	assert "0.0096" in table
 	main([str(path)])
+
+
+def test_jsonl_writes_readable_txt(tmp_path: Path):
+	from prairie_live.sync_loop import JsonlLog
+
+	log_path = tmp_path / "trials.jsonl"
+	log = JsonlLog(log_path)
+	try:
+		log.write(
+			{
+				"phase": "slm_packed",
+				"power": 140,
+				"n_triggers": 1,
+				"summary": "packed",
+				"group_trigger_map": [
+					{
+						"trigger_index": 0,
+						"group_name": "g1",
+						"point_ids": ["1", "2", "3"],
+					}
+				],
+			}
+		)
+		log.write(
+			{
+				"phase": "done",
+				"trial_index": 0,
+				"group_name": "g1",
+				"point_ids": ["1", "2", "3"],
+				"power": 140,
+				"score": 0.1,
+				"score_kind": "mock",
+				"stim_mode": "slm",
+				"trigger": "none",
+				"trigger_selection": "PFI1",
+				"summary": "trial 0 · points [1,2,3]",
+			}
+		)
+	finally:
+		log.close()
+	txt = log.txt_path.read_text(encoding="utf-8")
+	assert "TRIAL 0" in txt
+	assert "Fired points:  1, 2, 3" in txt
+	assert "PACKED SLM" in txt
+	assert log_path.is_file()

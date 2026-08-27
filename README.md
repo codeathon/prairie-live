@@ -260,11 +260,36 @@ Written on the **analysis PC** in the directory where you run `mp-sync`
 (default: `--log trials.jsonl` → `.\trials.jsonl` under that folder).
 Each run **appends** lines; delete or rename the file between experiments.
 
-**How to read a `done` row (what matters):**
+**How to read results:** open **`trials.txt`** (plain text next to `trials.jsonl`).
+That file is written automatically — Notepad-friendly blocks, not JSON.
+
+```
+trials.jsonl   ← machine (keep for analysis)
+trials.txt     ← human (open this)
+```
+
+Example `trials.txt` block:
+
+```
+============================================================
+TRIAL 4
+============================================================
+  Fired points:  1, 4, 8
+  Group name:    PL_t0004_g5
+  Laser power:   140.0  (Prairie UI UncagingLaserPower)
+  Stim mode:     slm   trigger=serial  line=PFI1
+  TTL / pulse:   4 of 4  (0-based pulse index among 5 packed groups)
+  ΔF/F score:    0.009619  (relay_disk_dff)
+  Images:        ...\trial_images\run_...\t0004
+```
+
+Also: `python -m prairie_live show-log` prints a table from the JSONL.
+
+**JSONL fields (for scripts):**
 
 | Field | Meaning |
 |-------|---------|
-| `summary` | One-line human digest — start here |
+| `summary` | One-line human digest |
 | `trial_index` | Trial number (0, 1, 2, …). Same as TTL edge index for `--trigger serial` |
 | `trigger_index` / `n_triggers` | Which packed SLM pulse this was (0-based) / how many pulses in the batch |
 | `point_ids` | **The FOV indices that actually fired** this pulse (e.g. `1,4,8`) |
@@ -288,34 +313,10 @@ Per-trial folders also get:
 trial_images/run_…/t0004/
   f0.png  f1.png  dff.png
   trial.json      ← pretty JSON
-  readable.txt    ← plain-English block
+  readable.txt    ← same block as in trials.txt
 trial_images/run_…/summary.txt   ← one line per trial
 trial_images/run_…/pulse_map.txt ← pulse → points for the packed batch
 ```
-
-Example `done` line (lean):
-
-```json
-{
-  "phase": "done",
-  "summary": "trial 4 · pulse 4/4 · points [1,4,8] · power 140.0 · mode slm · ΔF/F 0.0096 (relay_disk_dff)",
-  "trial_index": 4,
-  "trigger_index": 4,
-  "point_ids": ["1", "4", "8"],
-  "power": 140.0,
-  "score": 0.0096,
-  "score_kind": "relay_disk_dff"
-}
-```
-
-Read completed trials (one command — no PowerShell piping):
-
-```powershell
-python -m prairie_live show-log
-python -m prairie_live show-log trials.jsonl --packed
-```
-
-Or open `trial_images\run_*\t0004\readable.txt`.
 
 Without `--mock-scores`, scoring uses live relay frames (`score_kind`:
 `relay_disk_dff`). Drop `--mock-scores` and keep the relay running with

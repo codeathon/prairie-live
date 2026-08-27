@@ -158,12 +158,16 @@ def score_group_dff(
 
 
 class JsonlLog:
-	"""Append-only trial log; trial_index is the join key to TTL edge k."""
+	"""Append-only JSONL + plain-text twin (trials.jsonl + trials.txt)."""
 
 	def __init__(self, path: str | Path):
+		from prairie_live.trial_record import ReadableLog, readable_log_path
+
 		self.path = Path(path)
 		self.path.parent.mkdir(parents=True, exist_ok=True)
 		self._fp = open(self.path, "a", encoding="utf-8")
+		self.txt_path = readable_log_path(self.path)
+		self._txt = ReadableLog(self.txt_path)
 		self.n_written = 0
 
 	def write(self, row: dict) -> None:
@@ -173,10 +177,12 @@ class JsonlLog:
 		payload = row if row.get("phase") == "slm_packed" else order_trial_row(row)
 		self._fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 		self._fp.flush()
+		self._txt.write_row(payload if row.get("phase") == "slm_packed" else row)
 		self.n_written += 1
 
 	def close(self) -> None:
 		self._fp.close()
+		self._txt.close()
 
 
 def write_scope_xml(groups: list[dict], path: str) -> None:
