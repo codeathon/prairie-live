@@ -199,6 +199,7 @@ def run_sync_loop(
 	elite_frac: float,
 	dry_run: bool,
 	stim_mode: str = "series",
+	images_dir: str | None = None,
 	on_trial: Callable[[dict], None] | None = None,
 ) -> list[dict]:
 	"""
@@ -207,6 +208,10 @@ def run_sync_loop(
 	stim_mode:
 	  series — -LoadMarkPoints + -MarkPoints (XML group)
 	  slm    — packed -MarkAllPoints (-slm); one cmd per power, TTL per group
+
+	images_dir:
+	  If set, save <images_dir>/<run_id>/tXXXX/{f0,f1,dff}.png per trial
+	  (needs relay --grab and live frames).
 
 	trigger:
 	  none   — TriggerSelection=None; fires immediately; log t_cmd
@@ -217,6 +222,7 @@ def run_sync_loop(
 	  True — push cmds through the relay (no SMB / local :1236 from analysis)
 	"""
 	from prairie_live.mark_all_points import stim_params_from_meta
+	from prairie_live.trial_images import run_dir as make_run_dir
 
 	rng = random.Random(seed)
 	scores: dict[str, float] | None = None
@@ -224,6 +230,11 @@ def run_sync_loop(
 	trial_index = 0
 	mode = str(stim_mode or "series").lower()
 	slm_params = stim_params_from_meta(meta) if mode == "slm" else {}
+	# One folder per mp-sync invocation; trials nest underneath.
+	run_root: Path | None = None
+	if images_dir:
+		run_root = make_run_dir(images_dir)
+		print(f"trial images → {run_root}")
 
 	trig_sel = str(meta.get("trigger_selection", "None"))
 	if trigger == "none":
@@ -277,6 +288,7 @@ def run_sync_loop(
 					f1_s=f1_s,
 					frame_poll_s=frame_poll_s,
 					disk_radius=disk_radius,
+					run_root=run_root,
 					on_trial=on_trial,
 				)
 				iter_trials.extend(batch)
@@ -309,6 +321,7 @@ def run_sync_loop(
 						f1_s=f1_s,
 						frame_poll_s=frame_poll_s,
 						disk_radius=disk_radius,
+						run_root=run_root,
 						on_trial=on_trial,
 					)
 					iter_trials.append(row)
@@ -324,6 +337,63 @@ def run_sync_loop(
 			print("  no scores this iteration — next groups stay random")
 
 	return all_trials
+
+
+def _want_frames(
+	*,
+	relay: Any | None,
+	dry_run: bool,
+	mock_scores: bool,
+	run_root: Path | None,
+) -> bool:
+	"""Grab F0/F1 when scoring for real or when saving trial PNGs."""
+	if relay is None or dry_run:
+		return False
+	return (not mock_scores) or (run_root is not None)
+
+
+def _finish_trial_frames(
+	row: dict,
+	*,
+	gpts: list[dict],
+	f0_frames: list[np.ndarray],
+	f1_frames: list[np.ndarray],
+	mock_scores: bool,
+	relay: Any | None,
+	disk_radius: int,
+	run_root: Path | None,
+	it: int,
+) -> None:
+	"""Score + optional PNG dump into <run>/tXXXX/."""
+	if mock_scores:
+		row["score"] = (
+			abs(hash((tuple(row["point_ids"]), row["power"], it))) % 1000 / 1000.0
+		)
+		row["score_kind"] = "mock"
+	elif relay is not None and f0_frames and f1_frames:
+		row["score"] = score_group_dff(
+			f0_frames, f1_frames, gpts, radius=disk_radius
+		)
+		row["score_kind"] = "relay_disk_dff"
+	else:
+		row["score_kind"] = "none"
+
+	if run_root is not None and f0_frames and f1_frames:
+		from prairie_live.trial_images import save_trial_images
+
+		paths = save_trial_images(
+			run_root,
+			trial_index=int(row["trial_index"]),
+			frames_f0=f0_frames,
+			frames_f1=f1_frames,
+			points=gpts,
+			radius=disk_radius,
+		)
+		row["image_paths"] = paths
+		print(f"  saved images → {paths['trial_dir']}")
+	elif run_root is not None:
+		row["image_paths"] = None
+		print("  images_dir set but no frames (relay --grab + Live/T-series?)")
 
 
 def _run_slm_packed_batch(
@@ -351,6 +421,7 @@ def _run_slm_packed_batch(
 	f1_s: float,
 	frame_poll_s: float,
 	disk_radius: int,
+	run_root: Path | None,
 	on_trial: Callable[[dict], None] | None,
 ) -> list[dict]:
 	"""
@@ -418,6 +489,7 @@ def _run_slm_packed_batch(
 			"group_trigger_map": group_map,
 			"slm_parts": slm_parts,
 			"t_cmd": t_cmd,
+			"run_root": str(run_root) if run_root else None,
 		}
 	)
 
@@ -441,6 +513,9 @@ def _run_slm_packed_batch(
 		+ float(slm_params.get("initial_delay_ms") or 0)
 		+ pad_ms
 	) / 1000.0
+	want = _want_frames(
+		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
+	)
 	rows: list[dict] = []
 	for gi, gpts in enumerate(groups_pts):
 		entry = group_map[gi]
@@ -463,12 +538,13 @@ def _run_slm_packed_batch(
 			"t_ttl": None,
 			"score": None,
 			"score_kind": None,
+			"image_paths": None,
 		}
 		log.write({**row, "phase": "armed"})
 
 		f0_frames: list[np.ndarray] = []
 		f1_frames: list[np.ndarray] = []
-		if relay is not None and not dry_run and not mock_scores:
+		if want:
 			f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
 
 		if trigger == "serial" and ttl is not None and not dry_run:
@@ -493,23 +569,22 @@ def _run_slm_packed_batch(
 				f"pts={entry['point_ids']}"
 			)
 
-		if relay is not None and not dry_run and not mock_scores:
+		if want:
 			f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
 		else:
 			time.sleep(max(wait_s, 0.0))
 
-		if mock_scores:
-			row["score"] = (
-				abs(hash((tuple(entry["point_ids"]), power, it))) % 1000 / 1000.0
-			)
-			row["score_kind"] = "mock"
-		elif relay is not None and f0_frames and f1_frames:
-			row["score"] = score_group_dff(
-				f0_frames, f1_frames, gpts, radius=disk_radius
-			)
-			row["score_kind"] = "relay_disk_dff"
-		else:
-			row["score_kind"] = "none"
+		_finish_trial_frames(
+			row,
+			gpts=gpts,
+			f0_frames=f0_frames,
+			f1_frames=f1_frames,
+			mock_scores=mock_scores,
+			relay=relay,
+			disk_radius=disk_radius,
+			run_root=run_root,
+			it=it,
+		)
 
 		log.write({**row, "phase": "done"})
 		if on_trial:
@@ -545,6 +620,7 @@ def _run_series_trial(
 	f1_s: float,
 	frame_poll_s: float,
 	disk_radius: int,
+	run_root: Path | None,
 	on_trial: Callable[[dict], None] | None,
 ) -> dict:
 	"""One group × power via -LoadMarkPoints / -MarkPoints."""
@@ -572,6 +648,7 @@ def _run_series_trial(
 		"t_ttl": None,
 		"score": None,
 		"score_kind": None,
+		"image_paths": None,
 	}
 	xml = groups_to_xml(series)
 	if scope_xml:
@@ -592,9 +669,12 @@ def _run_series_trial(
 		)
 		print(f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids}")
 
+	want = _want_frames(
+		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
+	)
 	f0_frames: list[np.ndarray] = []
 	f1_frames: list[np.ndarray] = []
-	if relay is not None and not dry_run and not mock_scores:
+	if want:
 		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
 
 	if trigger == "serial" and ttl is not None and not dry_run:
@@ -606,21 +686,22 @@ def _run_series_trial(
 		row["t_ttl"] = time.time()
 
 	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
-	if relay is not None and not dry_run and not mock_scores:
+	if want:
 		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
 	else:
 		time.sleep(max(wait_s, 0.0))
 
-	if mock_scores:
-		row["score"] = abs(hash((tuple(point_ids), power, it))) % 1000 / 1000.0
-		row["score_kind"] = "mock"
-	elif relay is not None and f0_frames and f1_frames:
-		row["score"] = score_group_dff(
-			f0_frames, f1_frames, gpts, radius=disk_radius
-		)
-		row["score_kind"] = "relay_disk_dff"
-	else:
-		row["score_kind"] = "none"
+	_finish_trial_frames(
+		row,
+		gpts=gpts,
+		f0_frames=f0_frames,
+		f1_frames=f1_frames,
+		mock_scores=mock_scores,
+		relay=relay,
+		disk_radius=disk_radius,
+		run_root=run_root,
+		it=it,
+	)
 
 	log.write({**row, "phase": "done"})
 	if on_trial:
@@ -777,6 +858,12 @@ def main(argv: list[str] | None = None) -> None:
 	p.add_argument("--f1-s", type=float, default=None, help="post-TTL response window")
 	p.add_argument("--frame-poll", type=float, default=None)
 	p.add_argument("--disk-radius", type=int, default=None)
+	p.add_argument(
+		"--images-dir",
+		default=None,
+		help="Save F0/F1/ΔF/F PNGs under <dir>/<run_id>/tXXXX/ "
+		"(needs relay --grab + live frames)",
+	)
 	p.add_argument(
 		"--dry-run",
 		action="store_true",
@@ -940,6 +1027,7 @@ def main(argv: list[str] | None = None) -> None:
 			elite_frac=float(opt["elite_frac"]),
 			dry_run=bool(opt.get("dry_run")),
 			stim_mode=stim_mode,
+			images_dir=opt.get("images_dir"),
 		)
 	finally:
 		log.close()

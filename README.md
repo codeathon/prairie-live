@@ -285,7 +285,10 @@ Key fields on `done` rows:
 
 **What is stored:** trial identity, TTL timing, and **one group-mean score**
 per trial. Per-point ΔF/F is used in-memory to regroup on the next iteration
-but is **not** written to a separate file. Relay frames are not saved.
+but is **not** written to a separate file. With `images_dir` / `--images-dir`,
+mean F0/F1/ΔF/F PNGs are saved under
+`<images_dir>/<run_id>/tXXXX/{f0,f1,dff}.png` (paths in JSONL `image_paths`);
+needs relay `--grab` and Live/T-series. Otherwise relay frames are discarded.
 
 Read completed trials in PowerShell:
 

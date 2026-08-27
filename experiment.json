@@ -27,6 +27,8 @@
 	"disk_radius": 3,
 	"dry_run": false,
 	"inspect": false,
+	"images_dir": "trial_images",
+	"_images_note": "Each mp-sync run → trial_images/run_YYYYMMDD_HHMMSS/tXXXX/{f0,f1,dff}.png (needs relay --grab)",
 	"stim_mode": "slm",
 	"laser": "Monaco",
 	"use_3d": false,

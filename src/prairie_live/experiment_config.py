@@ -36,6 +36,7 @@ _CLI_KEYS = (
 	"dry_run",
 	"inspect",
 	"stim_mode",
+	"images_dir",
 )
 
 # Mark Points / -slm geometry (mostly config-only; stim_mode also has a CLI flag).
