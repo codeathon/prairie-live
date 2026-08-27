@@ -237,12 +237,15 @@ python -m prairie_live mp-sync --config experiment.json
 python -m prairie_live mp-sync --config experiment.json --iterations 2
 ```
 
-SLM-oriented fields in the file: `stim_mode`, `laser` (`Monaco`), `use_3d`,
-`spiral`, `spiral_size_um` (54.5), `spiral_revolutions` (8),
-`trigger_selection` (`PFI1`), `fov_width_um` (for converting µm → FOV
-fraction when `-MarkAllPoints` lands). Runtime still uses series `-lmp`/`-mp`
-until `stim_mode=slm` fire path is implemented; meta/laser/spiral overlays
-already apply.
+SLM-oriented fields: `stim_mode` (`series` | `slm`), `laser` (`Monaco`),
+`use_3d`, `spiral`, `spiral_size_um` (54.5), `spiral_revolutions` (8),
+`trigger_selection` (`PFI1`), `fov_width_um` (required for spiral when
+`stim_mode=slm` — converts µm → FOV fraction for `-MarkAllPoints` / `-slm`).
+
+- `stim_mode=series` (default): `-LoadMarkPoints` + `-MarkPoints` per trial
+- `stim_mode=slm`: simultaneous hologram via `-MarkAllPoints` (no XML load);
+  CLI: `--stim-mode slm`. Spiral needs `fov_width_um` set to the optical FOV
+  width in µm.
 
 ### Trial log (`trials.jsonl`)
 
@@ -254,7 +257,7 @@ One JSON object per line. Each trial produces two rows:
 
 | `phase` | When |
 |---------|------|
-| `armed` | Identity written; `-lmp` / `-mp` sent to scope |
+| `armed` | Identity written; series `-lmp`/`-mp` or SLM `-slm` sent |
 | `done` | Trial finished — **use these rows** for results |
 
 Key fields on `done` rows:

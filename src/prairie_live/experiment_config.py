@@ -35,9 +35,10 @@ _CLI_KEYS = (
 	"disk_radius",
 	"dry_run",
 	"inspect",
+	"stim_mode",
 )
 
-# Mark Points / -slm geometry (not all are argparse flags yet).
+# Mark Points / -slm geometry (mostly config-only; stim_mode also has a CLI flag).
 _STIM_KEYS = (
 	"stim_mode",
 	"laser",
@@ -110,8 +111,10 @@ def apply_stim_to_meta(meta: dict[str, Any], cfg: dict[str, Any]) -> dict[str, A
 		out["duration"] = float(cfg["duration_ms"])
 	# UI shows ms; series XML commonly stores InitialDelay/InterPointDelay in seconds.
 	if cfg.get("initial_delay_ms") is not None:
+		out["initial_delay_ms"] = float(cfg["initial_delay_ms"])
 		out["initial_delay"] = str(float(cfg["initial_delay_ms"]) / 1000.0)
 	if cfg.get("inter_point_delay_ms") is not None:
+		out["inter_point_delay_ms"] = float(cfg["inter_point_delay_ms"])
 		out["inter_point_delay"] = str(float(cfg["inter_point_delay_ms"]) / 1000.0)
 	if cfg.get("trigger_selection") is not None:
 		out["trigger_selection"] = str(cfg["trigger_selection"])

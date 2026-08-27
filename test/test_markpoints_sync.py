@@ -181,6 +181,10 @@ class _FakeRelayMp:
 		self.calls.append("mark")
 		return {"ok": True, "cmd": "mark_points"}
 
+	def mark_all_points(self, parts, *, wait_ms=0.0):
+		self.calls.append(("slm", list(parts), wait_ms))
+		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts)}
+
 	def get_frame(self):
 		return None
 
@@ -223,3 +227,106 @@ def test_via_relay_fires_without_scope_xml(tmp_path: Path):
 	assert len(rows) == 1
 	assert relay.calls[0][0] == "load"
 	assert relay.calls[1] == "mark"
+
+
+def test_slm_dry_run_no_xml(tmp_path: Path):
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 545.0
+	meta["spiral_size_um"] = "54.5"
+	meta["is_spiral"] = "True"
+	meta["initial_delay_ms"] = 22.1
+	log_path = tmp_path / "slm.jsonl"
+	scope = tmp_path / "should_not_exist.xml"
+	log = JsonlLog(log_path)
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=str(scope),
+			n_iterations=1,
+			n_groups=1,
+			group_size=2,
+			powers=[0.75],
+			seed=1,
+			trigger="none",
+			ttl=None,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=None,
+			via_relay=False,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=True,
+			stim_mode="slm",
+		)
+	finally:
+		log.close()
+	assert len(rows) == 1
+	assert rows[0]["stim_mode"] == "slm"
+	assert rows[0]["slm_parts"][0] == "-MarkAllPoints"
+	assert not scope.exists()
+	done = [
+		json.loads(ln)
+		for ln in log_path.read_text(encoding="utf-8").splitlines()
+		if json.loads(ln).get("phase") == "done"
+	]
+	assert done[0]["stim_mode"] == "slm"
+
+
+def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 545.0
+	meta["spiral_size_um"] = "54.5"
+	meta["is_spiral"] = "True"
+	meta["initial_delay_ms"] = 22.1
+	log = JsonlLog(tmp_path / "slm_relay.jsonl")
+	relay = _FakeRelayMp()
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=None,
+			n_iterations=1,
+			n_groups=1,
+			group_size=2,
+			powers=[0.75],
+			seed=1,
+			trigger="none",
+			ttl=None,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+			stim_mode="slm",
+		)
+	finally:
+		log.close()
+	assert len(rows) == 1
+	assert len(relay.calls) == 1
+	kind, parts, wait_ms = relay.calls[0]
+	assert kind == "slm"
+	assert parts[0] == "-MarkAllPoints"
+	assert wait_ms == 22.1
+	# No series load/mark on SLM path.
+	assert all(c[0] != "load" for c in relay.calls if isinstance(c, tuple))

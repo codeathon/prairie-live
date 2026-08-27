@@ -194,30 +194,44 @@ def run_sync_loop(
 	disk_radius: int,
 	elite_frac: float,
 	dry_run: bool,
+	stim_mode: str = "series",
 	on_trial: Callable[[dict], None] | None = None,
 ) -> list[dict]:
 	"""
 	Run mapping iterations. Returns all trial rows written this session.
 
+	stim_mode:
+	  series — -LoadMarkPoints + -MarkPoints (XML group)
+	  slm    — -MarkAllPoints (-slm) simultaneous hologram; no XML load
+
 	trigger:
-	  none   — TriggerSelection=None; -mp fires immediately; log t_cmd
-	  serial — TriggerSelection from meta (e.g. PFI1); -mp arms, then DTR pulse
-	  wait   — same as serial but no DTR (external PsychoPy/PackIO provides TTL)
+	  none   — TriggerSelection=None; fires immediately; log t_cmd
+	  serial — PFI1 (or meta); arm then DTR pulse
+	  wait   — same as serial but no DTR (external TTL)
 
 	via_relay:
-	  True — push XML + -lmp/-mp through the relay (no SMB share needed)
+	  True — push cmds through the relay (no SMB / local :1236 from analysis)
 	"""
+	from prairie_live.mark_all_points import (
+		build_mark_all_points_parts,
+		stim_params_from_meta,
+	)
+
 	rng = random.Random(seed)
 	scores: dict[str, float] | None = None
 	all_trials: list[dict] = []
 	trial_index = 0
+	mode = str(stim_mode or "series").lower()
+	slm_params = stim_params_from_meta(meta) if mode == "slm" else {}
 
 	trig_sel = str(meta.get("trigger_selection", "None"))
 	if trigger == "none":
 		trig_sel = "None"
 	elif trigger in ("serial", "wait") and trig_sel in ("", "None", "none"):
-		# Series waits for hardware; default PFI1 matches common PackIO wiring.
+		# Series / SLM wait for hardware; default PFI1 matches PackIO wiring.
 		trig_sel = "PFI1"
+	if mode == "slm":
+		slm_params["trigger_selection"] = trig_sel
 
 	for it in range(n_iterations):
 		groups_pts = form_groups(
@@ -231,14 +245,14 @@ def run_sync_loop(
 		print(
 			f"\n=== iteration {it + 1}/{n_iterations}  "
 			f"groups={n_groups} size={group_size}  "
-			f"scored={'yes' if scores else 'random'} ==="
+			f"scored={'yes' if scores else 'random'}  "
+			f"stim_mode={mode} ==="
 		)
 		iter_trials: list[dict] = []
 
 		for gi, gpts in enumerate(groups_pts):
 			for power in powers:
-				# Unique Points= name each trial so PV does not ask
-				# "Mark Points already exists / replace?"
+				# Unique label for logging / series XML (series mode only).
 				gname = f"PL_t{trial_index:04d}_g{gi + 1}"
 				step = build_group_step(
 					gpts,
@@ -258,21 +272,59 @@ def run_sync_loop(
 					"power": power,
 					"trigger": trigger,
 					"trigger_selection": trig_sel,
+					"stim_mode": mode,
 					"t_cmd": None,
 					"t_ttl": None,
 					"score": None,
 					"score_kind": None,
 				}
 
-				xml = groups_to_xml(series)
-				if scope_xml:
-					write_scope_xml(series, scope_xml)
+				slm_parts: list[str] | None = None
+				xml = ""
+				if mode == "slm":
+					slm_parts = build_mark_all_points_parts(
+						gpts,
+						power=power,
+						laser=slm_params["laser"],
+						duration_ms=slm_params["duration_ms"],
+						use_3d=slm_params["use_3d"],
+						spiral=slm_params["spiral"],
+						spiral_size_um=slm_params["spiral_size_um"],
+						spiral_revolutions=slm_params["spiral_revolutions"],
+						fov_width_um=slm_params["fov_width_um"],
+						trigger_selection=trig_sel,
+					)
+					row["slm_parts"] = slm_parts
+				else:
+					xml = groups_to_xml(series)
+					if scope_xml:
+						write_scope_xml(series, scope_xml)
+
 				row["t_cmd"] = time.time()
 				log.write({**row, "phase": "armed"})
 
 				if dry_run:
+					if mode == "slm":
+						print(
+							f"  [dry] trial {trial_index}: -slm "
+							f"power={power} pts={point_ids} "
+							f"cmd={' '.join(slm_parts or [])}"
+						)
+					else:
+						print(
+							f"  [dry] trial {trial_index}: {gname} "
+							f"power={power} pts={point_ids}"
+						)
+				elif mode == "slm":
+					_fire_mark_all_points(
+						parts=slm_parts or [],
+						wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+						pl=pl,
+						relay=relay,
+						via_relay=via_relay,
+					)
 					print(
-						f"  [dry] trial {trial_index}: {gname} "
+						f"  trial {trial_index}: -slm "
 						f"power={power} pts={point_ids}"
 					)
 				else:
@@ -301,10 +353,17 @@ def run_sync_loop(
 					# Software fire: treat command time as stim time.
 					row["t_ttl"] = row["t_cmd"]
 				else:
-					# wait: external TTL; still stamp wall clock near -mp.
+					# wait: external TTL; still stamp wall clock near fire.
 					row["t_ttl"] = time.time()
 
-				wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
+				if mode == "slm":
+					wait_s = (
+						float(slm_params.get("duration_ms") or 0)
+						+ float(slm_params.get("initial_delay_ms") or 0)
+						+ pad_ms
+					) / 1000.0
+				else:
+					wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
 				if relay is not None and not dry_run and not mock_scores:
 					f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
 				else:
@@ -340,6 +399,30 @@ def run_sync_loop(
 			print("  no scores this iteration — next groups stay random")
 
 	return all_trials
+
+
+def _fire_mark_all_points(
+	*,
+	parts: list[str],
+	wait_ms: float,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+) -> None:
+	"""Send -MarkAllPoints (-slm); prefer relay when via_relay."""
+	if via_relay:
+		if relay is None:
+			raise RuntimeError("via_relay set but relay client is not connected")
+		out = relay.mark_all_points(parts, wait_ms=wait_ms)
+		if not out.get("ok", False):
+			raise RuntimeError(f"relay mark_all_points failed: {out}")
+		return
+	if pl is None:
+		raise RuntimeError("need PrairieLink or --via-relay for stim_mode=slm")
+	# TCP path: optional -Wait then -MarkAllPoints as separate commands.
+	if wait_ms and float(wait_ms) > 0:
+		pl.send_command("-Wait", f"{float(wait_ms):.3f}")
+	pl.send_command(*parts)
 
 
 def _fire_mark_points(
@@ -474,6 +557,12 @@ def main(argv: list[str] | None = None) -> None:
 		action="store_true",
 		help="Print points pool from --series and exit",
 	)
+	p.add_argument(
+		"--stim-mode",
+		choices=("series", "slm"),
+		default=None,
+		help="series=-LoadMarkPoints/-MarkPoints; slm=-MarkAllPoints simultaneous",
+	)
 	# Parse full argv (includes --config) so --help lists every flag once.
 	args = p.parse_args(argv)
 
@@ -514,16 +603,24 @@ def main(argv: list[str] | None = None) -> None:
 		for pt in points:
 			pt["is_spiral"] = "True" if bool(opt["spiral"]) else "False"
 
-	stim_mode = str(opt.get("stim_mode", "series"))
+	stim_mode = str(opt.get("stim_mode", "series")).lower()
+	if stim_mode not in ("series", "slm"):
+		raise SystemExit(f"stim_mode must be 'series' or 'slm', got {stim_mode!r}")
 	print(
 		f"points pool: {len(points)}  powers={powers}  trigger={opt['trigger']}  "
 		f"stim_mode={stim_mode}  laser={meta.get('uncaging_laser')}"
 	)
 	if stim_mode == "slm":
-		# Fire path still uses -lmp/-mp until --stim-mode slm is implemented.
+		# Spiral µm→FOV fraction needs optical FOV width (not in MarkPoints XML).
+		spiral_on = str(meta.get("is_spiral", "True")).lower() in ("true", "1", "yes")
+		if spiral_on and meta.get("fov_width_um") in (None, ""):
+			raise SystemExit(
+				"stim_mode=slm with spiral requires fov_width_um in experiment.json "
+				"(µm across the FOV; used to convert spiral_size_um → -slm fraction)"
+			)
 		print(
-			"NOTE: stim_mode=slm recorded in config/meta; "
-			"runtime still uses series -lmp/-mp until MarkAllPoints lands."
+			"stim_mode=slm → -MarkAllPoints (-slm) per trial "
+			"(no -LoadMarkPoints); set fov_width_um for spiral sizing"
 		)
 	if opt.get("inspect"):
 		zero = 0
@@ -545,8 +642,12 @@ def main(argv: list[str] | None = None) -> None:
 		return
 
 	via_relay = bool(opt.get("via_relay"))
-	if not opt.get("dry_run") and not via_relay and not opt.get("scope_xml"):
-		raise SystemExit("need --via-relay HOST:PORT or --scope-xml PATH (or config)")
+	# series needs a writable XML path or relay; slm only needs relay or TCP.
+	if not opt.get("dry_run") and not via_relay:
+		if stim_mode == "series" and not opt.get("scope_xml"):
+			raise SystemExit(
+				"need --via-relay HOST:PORT or --scope-xml PATH (or config)"
+			)
 
 	ttl = None
 	pl = None
@@ -602,6 +703,7 @@ def main(argv: list[str] | None = None) -> None:
 			disk_radius=int(opt["disk_radius"]),
 			elite_frac=float(opt["elite_frac"]),
 			dry_run=bool(opt.get("dry_run")),
+			stim_mode=stim_mode,
 		)
 	finally:
 		log.close()

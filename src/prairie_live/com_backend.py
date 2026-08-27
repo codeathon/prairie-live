@@ -156,6 +156,22 @@ class PrairieCom:
 		self.send("-MarkPoints")
 		return {"ok": True, "cmd": "mark_points"}
 
+	def mark_all_points(self, parts: list[str], *, wait_ms: float = 0.0) -> dict:
+		"""
+		Fire simultaneous SLM spots via -MarkAllPoints (-slm).
+
+		parts: token list from build_mark_all_points_parts (includes -MarkAllPoints).
+		wait_ms: optional -Wait before fire (maps UI Initial Delay).
+		"""
+		from prairie_live.mark_all_points import parts_to_com_command
+
+		if wait_ms and float(wait_ms) > 0:
+			# -Wait / -wt takes milliseconds.
+			self.send(f"-Wait {float(wait_ms):.3f}")
+		cmd = parts_to_com_command(parts)
+		self.send(cmd)
+		return {"ok": True, "cmd": "mark_all_points", "parts": parts}
+
 	def start_live(self) -> dict:
 		# Official script help: only -LiveScan (-lv); -Live is not a command.
 		self.send("-LiveScan")

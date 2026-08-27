@@ -47,6 +47,10 @@ class FakeCom:
 		self.calls.append("mark_points")
 		return {"ok": True, "cmd": "mark_points"}
 
+	def mark_all_points(self, parts, *, wait_ms=0.0):
+		self.calls.append(("mark_all_points", list(parts), wait_ms))
+		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts)}
+
 
 def _relay():
 	r = Relay("127.0.0.1", "0000", 1)
@@ -99,6 +103,17 @@ def test_load_mark_points_and_mark_points(tmp_path):
 	out = r.handle_command({"cmd": "mark_points"})
 	assert out == {"ok": True, "cmd": "mark_points"}
 	assert r.com.calls[1] == "mark_points"
+
+
+def test_mark_all_points_dispatch():
+	r = _relay()
+	parts = ["-MarkAllPoints", "1", "False", "0.1", "0.2", "10", "Monaco", "0.75", "PFI1"]
+	out = r.handle_command(
+		{"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1}
+	)
+	assert out["ok"] is True
+	assert out["cmd"] == "mark_all_points"
+	assert r.com.calls[0] == ("mark_all_points", parts, 22.1)
 
 
 def test_unknown_command_is_rejected():

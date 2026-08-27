@@ -158,6 +158,14 @@ class Relay:
 			elif cmd == "mark_points":
 				self._run_script_com(sc.mark_points)
 				return {"ok": True, "cmd": "mark_points"}
+			elif cmd == "mark_all_points":
+				parts = payload.get("parts") or []
+				if not isinstance(parts, list) or not parts:
+					raise ValueError("mark_all_points requires non-empty parts list")
+				wait_ms = float(payload.get("wait_ms") or 0.0)
+				return self._run_script_com(
+					lambda: sc.mark_all_points(parts, wait_ms=wait_ms)
+				)
 			else:
 				return {"ok": False, "error": f"unknown cmd {cmd}"}
 			return {"ok": True, "cmd": cmd}
