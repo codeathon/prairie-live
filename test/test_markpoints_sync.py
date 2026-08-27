@@ -319,12 +319,11 @@ def test_gpl_slm_dry_run(tmp_path: Path):
 	assert len(rows) == 2
 	assert all(r["stim_mode"] == "slm" for r in rows)
 	assert all(len(r["point_ids"]) == 3 for r in rows)
-	# One packed command shared by both trials; trigger_index maps pulse → group.
-	assert rows[0]["slm_parts"] == rows[1]["slm_parts"]
-	assert rows[0]["slm_parts"][0] == "-MarkAllPoints"
+	assert "summary" in rows[0]
+	assert "slm_parts" not in rows[0]
+	assert "group_trigger_map" not in rows[0]
 	assert rows[0]["trigger_index"] == 0
 	assert rows[1]["trigger_index"] == 1
-	assert rows[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
 	packed = [
 		json.loads(ln)
 		for ln in log_path.read_text(encoding="utf-8").splitlines()
@@ -332,6 +331,8 @@ def test_gpl_slm_dry_run(tmp_path: Path):
 	]
 	assert len(packed) == 1
 	assert packed[0]["n_triggers"] == 2
+	assert packed[0]["slm_parts"][0] == "-MarkAllPoints"
+	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
 	assert scope.is_file()
 	assert "PVMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
 
@@ -440,7 +441,13 @@ def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
 	assert relay.calls[0][0] == "slm"
 	assert len(ttl.pulses) == 2
 	assert [r["trigger_index"] for r in rows] == [0, 1]
-	assert rows[0]["point_ids"] == rows[0]["group_trigger_map"][0]["point_ids"]
-	assert rows[1]["point_ids"] == rows[1]["group_trigger_map"][1]["point_ids"]
+	assert "summary" in rows[0]
+	packed = [
+		json.loads(ln)
+		for ln in (tmp_path / "slm_pack.jsonl").read_text(encoding="utf-8").splitlines()
+		if json.loads(ln).get("phase") == "slm_packed"
+	]
+	assert packed[0]["group_trigger_map"][0]["point_ids"] == rows[0]["point_ids"]
+	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
 	# Packed string contains two PFI1 tokens (one per set) + Delay between.
 	assert relay.calls[0][1].count("PFI1") == 2

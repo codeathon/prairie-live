@@ -260,43 +260,62 @@ Written on the **analysis PC** in the directory where you run `mp-sync`
 (default: `--log trials.jsonl` → `.\trials.jsonl` under that folder).
 Each run **appends** lines; delete or rename the file between experiments.
 
-One JSON object per line. Each trial produces two rows:
+**How to read results:** open **`trials.txt`** (plain text next to `trials.jsonl`).
+That file is written automatically — Notepad-friendly blocks, not JSON.
 
-| `phase` | When |
-|---------|------|
-| `armed` | Identity written; series `-lmp`/`-mp` or SLM `-slm` sent |
-| `done` | Trial finished — **use these rows** for results |
+```
+trials.jsonl   ← machine (keep for analysis)
+trials.txt     ← human (open this)
+```
 
-Key fields on `done` rows:
+Example `trials.txt` block:
+
+```
+============================================================
+TRIAL 4
+============================================================
+  Fired points:  1, 4, 8
+  Group name:    PL_t0004_g5
+  Laser power:   140.0  (Prairie UI UncagingLaserPower)
+  Stim mode:     slm   trigger=serial  line=PFI1
+  TTL / pulse:   4 of 4  (0-based pulse index among 5 packed groups)
+  ΔF/F score:    0.009619  (relay_disk_dff)
+  Images:        ...\trial_images\run_...\t0004
+```
+
+Also: `python -m prairie_live show-log` prints a table from the JSONL.
+
+**JSONL fields (for scripts):**
 
 | Field | Meaning |
 |-------|---------|
-| `trial_index` | Trial number (0, 1, 2, …). **Same as TTL edge index** when using `--trigger serial`. |
-| `group_name` | Group label in the trial XML (e.g. `PL_t0002_g2`) |
-| `group_index` | 0-based group slot this iteration |
-| `point_ids` | FOV point indices stimulated this trial |
-| `power` | `UncagingLaserPower` for this trial (UI scale, e.g. `0`, `75`, `140`) |
-| `trigger` | `none`, `serial`, or `wait` |
-| `trigger_selection` | `None` or `PFI1` (external trigger line in XML) |
-| `t_cmd` | Unix time when Mark Points commands were sent |
-| `t_ttl` | Stim time: equals `t_cmd` for `none`; **DTR pulse time** for `serial` |
-| `score` | Group-level mean ΔF/F (one number per trial) |
-| `score_kind` | `mock`, `relay_disk_dff`, or `none` |
+| `summary` | One-line human digest |
+| `trial_index` | Trial number (0, 1, 2, …). Same as TTL edge index for `--trigger serial` |
+| `trigger_index` / `n_triggers` | Which packed SLM pulse this was (0-based) / how many pulses in the batch |
+| `point_ids` | **The FOV indices that actually fired** this pulse (e.g. `1,4,8`) |
+| `power` | Prairie UI `UncagingLaserPower` (e.g. `140`) |
+| `score` / `score_kind` | Group mean ΔF/F; `relay_disk_dff`, `mock`, or `none` |
+| `image_paths` | Folder with `f0.png` / `f1.png` / `dff.png` |
+| `record_paths` | Pretty `trial.json` + `readable.txt` beside those PNGs |
 
-**What is stored:** trial identity, TTL timing, and **one group-mean score**
-per trial. Per-point ΔF/F is used in-memory to regroup on the next iteration
-but is **not** written to a separate file. With `images_dir` / `--images-dir`,
-mean F0/F1/ΔF/F PNGs are saved under
-`<images_dir>/<run_id>/tXXXX/{f0,f1,dff}.png` (paths in JSONL `image_paths`);
-needs relay `--grab` and Live/T-series. Otherwise relay frames are discarded.
+Phases:
 
-Read completed trials in PowerShell:
+| `phase` | When |
+|---------|------|
+| `slm_packed` | Once per power batch: full `group_trigger_map` + raw `slm_parts` (argv dump) |
+| `armed` | Trial identity recorded before stim / TTL |
+| `done` | Trial finished — **use these rows** for results |
 
-```powershell
-Get-Content trials.jsonl |
-  ForEach-Object { $_ | ConvertFrom-Json } |
-  Where-Object { $_.phase -eq "done" } |
-  Select-Object trial_index, group_name, power, trigger_selection, score, score_kind, t_ttl
+The giant `slm_parts` array is **only** on `slm_packed` (not on every trial).
+Per-trial folders also get:
+
+```
+trial_images/run_…/t0004/
+  f0.png  f1.png  dff.png
+  trial.json      ← pretty JSON
+  readable.txt    ← same block as in trials.txt
+trial_images/run_…/summary.txt   ← one line per trial
+trial_images/run_…/pulse_map.txt ← pulse → points for the packed batch
 ```
 
 Without `--mock-scores`, scoring uses live relay frames (`score_kind`:

@@ -158,21 +158,31 @@ def score_group_dff(
 
 
 class JsonlLog:
-	"""Append-only trial log; trial_index is the join key to TTL edge k."""
+	"""Append-only JSONL + plain-text twin (trials.jsonl + trials.txt)."""
 
 	def __init__(self, path: str | Path):
+		from prairie_live.trial_record import ReadableLog, readable_log_path
+
 		self.path = Path(path)
 		self.path.parent.mkdir(parents=True, exist_ok=True)
 		self._fp = open(self.path, "a", encoding="utf-8")
+		self.txt_path = readable_log_path(self.path)
+		self._txt = ReadableLog(self.txt_path)
 		self.n_written = 0
 
 	def write(self, row: dict) -> None:
-		self._fp.write(json.dumps(row, sort_keys=True) + "\n")
+		# Keep insertion order (summary first); do not alpha-sort keys.
+		from prairie_live.trial_record import order_trial_row
+
+		payload = row if row.get("phase") == "slm_packed" else order_trial_row(row)
+		self._fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 		self._fp.flush()
+		self._txt.write_row(payload if row.get("phase") == "slm_packed" else row)
 		self.n_written += 1
 
 	def close(self) -> None:
 		self._fp.close()
+		self._txt.close()
 
 
 def write_scope_xml(groups: list[dict], path: str) -> None:
@@ -423,6 +433,44 @@ def _finish_trial_frames(
 		print("  images_dir set but no frames (relay --grab + Live/T-series?)")
 
 
+def _finalize_trial_log(row: dict, *, log: Any, run_root: Path | None) -> None:
+	"""Attach summary, write lean JSONL + pretty sidecars, print one line."""
+	from prairie_live.trial_record import (
+		append_run_summary,
+		format_trial_summary,
+		write_trial_sidecars,
+	)
+
+	row["summary"] = format_trial_summary(row)
+	# Drop argv spam from per-trial rows (still on phase=slm_packed).
+	row.pop("slm_parts", None)
+	row.pop("group_trigger_map", None)
+
+	trial_dir = None
+	paths = row.get("image_paths") or {}
+	if paths.get("trial_dir"):
+		trial_dir = Path(paths["trial_dir"])
+	elif run_root is not None:
+		trial_dir = Path(run_root) / f"t{int(row['trial_index']):04d}"
+
+	if trial_dir is not None:
+		try:
+			row["record_paths"] = write_trial_sidecars(
+				{**row, "phase": "done"}, trial_dir
+			)
+		except Exception as exc:
+			row["record_paths"] = None
+			print(f"  trial record save failed: {exc}")
+	if run_root is not None:
+		try:
+			append_run_summary(Path(run_root), row)
+		except Exception as exc:
+			print(f"  run summary append failed: {exc}")
+
+	log.write({**row, "phase": "done"})
+	print(f"  done: {row['summary']}")
+
+
 def _run_slm_packed_batch(
 	*,
 	groups_pts: list[list[dict]],
@@ -509,6 +557,13 @@ def _run_slm_packed_batch(
 	log.write(
 		{
 			"phase": "slm_packed",
+			"summary": (
+				f"packed -slm · power {power} · {n} pulses · "
+				+ "; ".join(
+					f"p{e['trigger_index']}=[{','.join(e['point_ids'])}]"
+					for e in group_map
+				)
+			),
 			"iteration": it,
 			"power": power,
 			"stim_mode": "slm",
@@ -519,6 +574,15 @@ def _run_slm_packed_batch(
 			"run_root": str(run_root) if run_root else None,
 		}
 	)
+	if run_root is not None:
+		from prairie_live.trial_record import format_packed_map
+
+		try:
+			(Path(run_root) / "pulse_map.txt").write_text(
+				format_packed_map(group_map), encoding="utf-8"
+			)
+		except Exception as exc:
+			print(f"  pulse_map.txt save failed: {exc}")
 
 	if dry_run:
 		print(
@@ -534,6 +598,12 @@ def _run_slm_packed_batch(
 			via_relay=via_relay,
 		)
 		print(f"  packed -slm power={power} n_groups={n} (awaiting {n} triggers)")
+		print("  pulse map:")
+		for e in group_map:
+			print(
+				f"    pulse {e['trigger_index']}: "
+				f"{e['group_name']} points={e['point_ids']}"
+			)
 
 	wait_s = (
 		float(slm_params.get("duration_ms") or 0)
@@ -559,8 +629,6 @@ def _run_slm_packed_batch(
 			"trigger": trigger,
 			"trigger_selection": trig_sel,
 			"stim_mode": "slm",
-			"slm_parts": slm_parts,
-			"group_trigger_map": group_map,
 			"t_cmd": t_cmd,
 			"t_ttl": None,
 			"score": None,
@@ -613,7 +681,7 @@ def _run_slm_packed_batch(
 			it=it,
 		)
 
-		log.write({**row, "phase": "done"})
+		_finalize_trial_log(row, log=log, run_root=run_root)
 		if on_trial:
 			on_trial(row)
 		rows.append(row)
@@ -730,7 +798,7 @@ def _run_series_trial(
 		it=it,
 	)
 
-	log.write({**row, "phase": "done"})
+	_finalize_trial_log(row, log=log, run_root=run_root)
 	if on_trial:
 		on_trial(row)
 	if inter_trial_s > 0:

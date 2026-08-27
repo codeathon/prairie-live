@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Sample fat Mark Points series: 8 FOV points (X/Y in 0–1). Good for stim_mode=slm. -->
+<PVMarkPointSeriesElements Iterations="1" IterationDelay="0.00" CalcFunctMap="False" AllPointsAtOnce="True" Use3D="False">
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="14" SpiralRevolutions="8" PreviousPoints="Group 1" />
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="16.92" SpiralRevolutions="8" Points="Point 1" Indices="1">
+      <Point Index="1" X="0.344782034346103" Y="0.248348745046235" IsSpiral="True" SpiralWidth="0.0479420306826551" SpiralHeight="0.0479420306826551" SpiralSizeInMicrons="54.4934378147202" />
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="16.92" SpiralRevolutions="8" Points="Point 2" Indices="2">
+      <Point Index="2" X="0.731836195508586" Y="0.250990752972259" IsSpiral="True" SpiralWidth="0.0479420306826551" SpiralHeight="0.0479420306826551" SpiralSizeInMicrons="54.4934378147202" />
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="16.92" SpiralRevolutions="8" Points="Point 3" Indices="3">
+      <Point Index="3" X="0.508586525759577" Y="0.639365918097754" IsSpiral="True" SpiralWidth="0.0479420306826551" SpiralHeight="0.0479420306826551" SpiralSizeInMicrons="54.4934378147202" />
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="16.92" SpiralRevolutions="8" Points="Point 4" Indices="4">
+      <Point Index="4" X="0.483487450462351" Y="0.143989431968296" IsSpiral="True" SpiralWidth="0.0479420306826551" SpiralHeight="0.0479420306826551" SpiralSizeInMicrons="54.4934378147202" />
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="16.92" SpiralRevolutions="8" Points="Point 5" Indices="5">
+      <Point Index="5" X="0.755614266842801" Y="0.450462351387054" IsSpiral="True" SpiralWidth="0.0479420306826551" SpiralHeight="0.0479420306826551" SpiralSizeInMicrons="54.4934378147202" />
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="16.92" SpiralRevolutions="8" Points="Point 6" Indices="6">
+      <Point Index="6" X="0.30779392338177" Y="0.490092470277411" IsSpiral="True" SpiralWidth="0.0479420306826551" SpiralHeight="0.0479420306826551" SpiralSizeInMicrons="54.4934378147202" />
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="16.92" SpiralRevolutions="8" Points="Point 7" Indices="7">
+      <Point Index="7" X="0.303830911492735" Y="0.727873183619551" IsSpiral="True" SpiralWidth="0.0479420306826551" SpiralHeight="0.0479420306826551" SpiralSizeInMicrons="54.4934378147202" />
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="8" UncagingLaser="Monaco" UncagingLaserPower="0" TriggerFrequency="None" TriggerSelection="PFI1" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None" parameterSet="CurrentSettings">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="16.92" SpiralRevolutions="8" Points="Point 8" Indices="8">
+      <Point Index="8" X="0.780713342140026" Y="0.74108322324967" IsSpiral="True" SpiralWidth="0.0479420306826551" SpiralHeight="0.0479420306826551" SpiralSizeInMicrons="54.4934378147202" />
+    </PVGalvoPointElement>
+  </PVMarkPointElement>
+</PVMarkPointSeriesElements>
