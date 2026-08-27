@@ -65,6 +65,9 @@ set PYTHONPATH=%CD%\src
 python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --fps 12
 ```
 
+Grab/streaming is **off by default** (COM GetImage can surface PV errors like
+`Unexpected parameter <address>`). Add `--grab` only for the live viewer.
+
 Success looks like:
 
 ```

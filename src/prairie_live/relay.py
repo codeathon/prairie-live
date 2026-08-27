@@ -37,7 +37,7 @@ class Relay:
 		channel: int,
 		*,
 		image_wh=(512, 512),
-		grab: bool = True,
+		grab: bool = False,
 	):
 		self.channel = channel
 		self.password = password
@@ -49,6 +49,8 @@ class Relay:
 		# Same COM as grab — a second Connect races password vs -gi on port 1236
 		# ("unexpected parameter 0000-gi"). Scripts pause grab via _pause_grab.
 		self.script_com: PrairieCom | None = None
+		# Default off: GetImage_2 maps to script -gi with process/buffer addresses
+		# and PV then reports "Unexpected parameter <huge number>".
 		self._grab_enabled = bool(grab)
 		self._latest = None
 		self._lock = threading.Lock()
@@ -63,8 +65,9 @@ class Relay:
 			# Let Connect finish before the first GetImage_2.
 			time.sleep(0.3)
 			threading.Thread(target=self._grab_loop, daemon=True).start()
+			print("grab ON (GetImage_2); use without --grab if PV shows -gi errors")
 		else:
-			print("grab disabled (--no-grab); frames will stay empty")
+			print("grab OFF (default); pass --grab only when you need live frames")
 
 	def stop(self) -> None:
 		self._stop.set()
@@ -398,18 +401,24 @@ def main(argv=None) -> None:
 	p.add_argument("--width", type=int, default=512, help="pixelsPerLine for GetImage_2")
 	p.add_argument("--height", type=int, default=512, help="linesPerFrame for GetImage_2")
 	p.add_argument(
+		"--grab",
+		action="store_true",
+		help="Enable GetImage_2 frame streaming (off by default; can trip PV -gi errors)",
+	)
+	p.add_argument(
 		"--no-grab",
 		action="store_true",
-		help="Do not call GetImage (stim/script only; avoids 0000-gi races)",
+		help=argparse.SUPPRESS,  # backward alias; grab is already off by default
 	)
 	args = p.parse_args(argv)
 
+	do_grab = bool(args.grab) and not bool(args.no_grab)
 	relay = Relay(
 		args.pv_host,
 		args.password,
 		args.channel,
 		image_wh=(args.height, args.width),
-		grab=not args.no_grab,
+		grab=do_grab,
 	)
 	relay.start()
 	try:
