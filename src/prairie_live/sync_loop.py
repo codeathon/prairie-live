@@ -421,7 +421,8 @@ def _fire_mark_all_points(
 		raise RuntimeError("need PrairieLink or --via-relay for stim_mode=slm")
 	# TCP path: optional -Wait then -MarkAllPoints as separate commands.
 	if wait_ms and float(wait_ms) > 0:
-		pl.send_command("-Wait", f"{float(wait_ms):.3f}")
+		# PV requires integer ms for -Wait.
+		pl.send_command("-Wait", str(int(round(float(wait_ms)))))
 	pl.send_command(*parts)
 
 

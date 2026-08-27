@@ -166,8 +166,8 @@ class PrairieCom:
 		from prairie_live.mark_all_points import parts_to_com_command
 
 		if wait_ms and float(wait_ms) > 0:
-			# -Wait / -wt takes milliseconds.
-			self.send(f"-Wait {float(wait_ms):.3f}")
+			# PV -Wait / -wt requires an integer millisecond count (rejects 22.100).
+			self.send(f"-Wait {int(round(float(wait_ms)))}")
 		cmd = parts_to_com_command(parts)
 		self.send(cmd)
 		return {"ok": True, "cmd": "mark_all_points", "parts": parts}
