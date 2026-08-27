@@ -48,6 +48,10 @@ _STIM_KEYS = (
 	"spiral_size_um",
 	"spiral_revolutions",
 	"fov_width_um",
+	"fov_height_um",
+	"image_width_px",
+	"image_height_px",
+	"pixel_size_um",
 	"duration_ms",
 	"initial_delay_ms",
 	"inter_point_delay_ms",
@@ -125,6 +129,14 @@ def apply_stim_to_meta(meta: dict[str, Any], cfg: dict[str, Any]) -> dict[str, A
 		out["spiral_size_um"] = str(cfg["spiral_size_um"])
 	if cfg.get("fov_width_um") is not None:
 		out["fov_width_um"] = float(cfg["fov_width_um"])
+	if cfg.get("fov_height_um") is not None:
+		out["fov_height_um"] = float(cfg["fov_height_um"])
+	if cfg.get("image_width_px") is not None:
+		out["image_width_px"] = int(cfg["image_width_px"])
+	if cfg.get("image_height_px") is not None:
+		out["image_height_px"] = int(cfg["image_height_px"])
+	if cfg.get("pixel_size_um") is not None:
+		out["pixel_size_um"] = float(cfg["pixel_size_um"])
 	if cfg.get("stim_mode") is not None:
 		out["stim_mode"] = str(cfg["stim_mode"])
 	return out
