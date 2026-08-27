@@ -379,49 +379,77 @@ def _collect_frames(relay, duration_s: float, poll_s: float) -> list[np.ndarray]
 
 
 def main(argv: list[str] | None = None) -> None:
+	from prairie_live.experiment_config import (
+		apply_stim_to_meta,
+		default_config_path,
+		load_experiment,
+		merge_cli_over_config,
+	)
+
+	# Pass 1: resolve --config without consuming the rest of the flags.
+	pre = argparse.ArgumentParser(add_help=False)
+	pre.add_argument("--config", "-c", default=None)
+	pre_args, _rest = pre.parse_known_args(argv)
+	cfg_path = pre_args.config
+	if cfg_path is None and default_config_path().is_file():
+		cfg_path = str(default_config_path())
+	cfg: dict = {}
+	if cfg_path is not None:
+		cfg = load_experiment(cfg_path)
+		print(f"config: {cfg_path}")
+
+	# Pass 2: CLI defaults=None so omitted flags do not clobber experiment.json.
 	p = argparse.ArgumentParser(
 		description="Mark Points sync loop: random groups, TTL, JSONL, regroup"
 	)
 	p.add_argument(
+		"--config",
+		"-c",
+		default=None,
+		help="JSON experiment file (default: ./experiment.json if it exists)",
+	)
+	p.add_argument(
 		"--series",
-		required=True,
+		default=None,
 		help="Source MarkPoints.xml (points pool; fat nested <Point> preferred)",
 	)
 	p.add_argument(
 		"--scope-xml",
+		default=None,
 		help="Writable path PrairieView loads via -LoadMarkPoints (SMB/share). "
 		"Not needed with --via-relay.",
 	)
 	p.add_argument(
 		"--via-relay",
+		default=None,
 		metavar="HOST[:PORT]",
 		help="Push trial XML over prairie_live relay (no file share). "
 		"Example: 10.33.107.147:25100",
 	)
-	p.add_argument("--log", default="markpoints_trials.jsonl", help="JSONL trial log")
-	p.add_argument("--host", default="127.0.0.1")
-	p.add_argument("--port", type=int, default=DEFAULT_PORT)
-	p.add_argument("--password", default="0000")
-	p.add_argument("--iterations", type=int, default=3)
-	p.add_argument("--n-groups", type=int, default=2)
-	p.add_argument("--group-size", type=int, default=9)
+	p.add_argument("--log", default=None, help="JSONL trial log")
+	p.add_argument("--host", default=None)
+	p.add_argument("--port", type=int, default=None)
+	p.add_argument("--password", default=None)
+	p.add_argument("--iterations", type=int, default=None)
+	p.add_argument("--n-groups", type=int, default=None)
+	p.add_argument("--group-size", type=int, default=None)
 	p.add_argument(
 		"--powers",
-		default="0,0.75",
+		default=None,
 		help="Comma-separated UncagingLaserPower values per group",
 	)
-	p.add_argument("--seed", type=int, default=0)
+	p.add_argument("--seed", type=int, default=None)
 	p.add_argument(
 		"--trigger",
 		choices=("none", "serial", "wait"),
-		default="none",
+		default=None,
 		help="none=software fire; serial=DTR after -mp; wait=external TTL",
 	)
-	p.add_argument("--serial", help="COM port for DTR photostim pulse (e.g. COM3)")
-	p.add_argument("--ttl-width", type=float, default=0.01)
-	p.add_argument("--inter-trial", type=float, default=0.5)
-	p.add_argument("--pad-ms", type=float, default=100.0)
-	p.add_argument("--elite-frac", type=float, default=0.4)
+	p.add_argument("--serial", default=None, help="COM port for DTR (e.g. COM3)")
+	p.add_argument("--ttl-width", type=float, default=None)
+	p.add_argument("--inter-trial", type=float, default=None)
+	p.add_argument("--pad-ms", type=float, default=None)
+	p.add_argument("--elite-frac", type=float, default=None)
 	p.add_argument(
 		"--mock-scores",
 		action="store_true",
@@ -429,12 +457,13 @@ def main(argv: list[str] | None = None) -> None:
 	)
 	p.add_argument(
 		"--relay",
+		default=None,
 		help="host[:port] for disk ΔF/F scoring (defaults to --via-relay if set)",
 	)
-	p.add_argument("--f0-s", type=float, default=0.5, help="pre-TTL baseline window")
-	p.add_argument("--f1-s", type=float, default=1.0, help="post-TTL response window")
-	p.add_argument("--frame-poll", type=float, default=0.05)
-	p.add_argument("--disk-radius", type=int, default=3)
+	p.add_argument("--f0-s", type=float, default=None, help="pre-TTL baseline window")
+	p.add_argument("--f1-s", type=float, default=None, help="post-TTL response window")
+	p.add_argument("--frame-poll", type=float, default=None)
+	p.add_argument("--disk-radius", type=int, default=None)
 	p.add_argument(
 		"--dry-run",
 		action="store_true",
@@ -445,15 +474,58 @@ def main(argv: list[str] | None = None) -> None:
 		action="store_true",
 		help="Print points pool from --series and exit",
 	)
+	# Parse full argv (includes --config) so --help lists every flag once.
 	args = p.parse_args(argv)
 
-	steps = load_mark_points_file(args.series)
-	points = extract_unique_points(steps)
-	meta = template_meta(steps)
-	powers = [float(x) for x in args.powers.split(",") if x.strip()]
+	opt = merge_cli_over_config(args, cfg)
+	# Hard fallbacks when neither CLI nor config set a value.
+	opt.setdefault("log", "markpoints_trials.jsonl")
+	opt.setdefault("host", "127.0.0.1")
+	opt.setdefault("port", DEFAULT_PORT)
+	opt.setdefault("password", "0000")
+	opt.setdefault("iterations", 3)
+	opt.setdefault("n_groups", 2)
+	opt.setdefault("group_size", 9)
+	opt.setdefault("seed", 0)
+	opt.setdefault("trigger", "none")
+	opt.setdefault("ttl_width", 0.01)
+	opt.setdefault("inter_trial", 0.5)
+	opt.setdefault("pad_ms", 100.0)
+	opt.setdefault("elite_frac", 0.4)
+	opt.setdefault("f0_s", 0.5)
+	opt.setdefault("f1_s", 1.0)
+	opt.setdefault("frame_poll", 0.05)
+	opt.setdefault("disk_radius", 3)
+	opt.setdefault("stim_mode", "series")
 
-	print(f"points pool: {len(points)}  powers={powers}  trigger={args.trigger}")
-	if args.inspect:
+	series = opt.get("series")
+	if not series:
+		raise SystemExit("need --series PATH or series in experiment.json")
+
+	steps = load_mark_points_file(series)
+	points = extract_unique_points(steps)
+	meta = apply_stim_to_meta(template_meta(steps), opt)
+	powers = opt["powers"]
+	# Point spiral size from experiment when cloning pool points.
+	if opt.get("spiral_size_um") is not None:
+		for pt in points:
+			pt["spiral_size_um"] = str(opt["spiral_size_um"])
+	if opt.get("spiral") is not None:
+		for pt in points:
+			pt["is_spiral"] = "True" if bool(opt["spiral"]) else "False"
+
+	stim_mode = str(opt.get("stim_mode", "series"))
+	print(
+		f"points pool: {len(points)}  powers={powers}  trigger={opt['trigger']}  "
+		f"stim_mode={stim_mode}  laser={meta.get('uncaging_laser')}"
+	)
+	if stim_mode == "slm":
+		# Fire path still uses -lmp/-mp until --stim-mode slm is implemented.
+		print(
+			"NOTE: stim_mode=slm recorded in config/meta; "
+			"runtime still uses series -lmp/-mp until MarkAllPoints lands."
+		)
+	if opt.get("inspect"):
 		zero = 0
 		for pt in points:
 			print(
@@ -472,59 +544,64 @@ def main(argv: list[str] | None = None) -> None:
 			print(f"OK: {len(points)} points with FOV coordinates.")
 		return
 
-	via_relay = bool(args.via_relay)
-	if not args.dry_run and not via_relay and not args.scope_xml:
-		raise SystemExit("need --via-relay HOST:PORT or --scope-xml PATH")
+	via_relay = bool(opt.get("via_relay"))
+	if not opt.get("dry_run") and not via_relay and not opt.get("scope_xml"):
+		raise SystemExit("need --via-relay HOST:PORT or --scope-xml PATH (or config)")
 
 	ttl = None
 	pl = None
 	relay = None
-	log = JsonlLog(args.log)
+	log_path = str(opt["log"])
+	log = JsonlLog(log_path)
 	try:
-		if args.trigger == "serial" and not args.dry_run:
-			if not args.serial:
-				raise SystemExit("--trigger serial requires --serial COMx")
+		if opt["trigger"] == "serial" and not opt.get("dry_run"):
+			if not opt.get("serial"):
+				raise SystemExit("--trigger serial requires --serial COMx (or config)")
 			from prairie_live.ttl_serial import SerialTtl
 
-			ttl = SerialTtl(args.serial)
+			ttl = SerialTtl(str(opt["serial"]))
 
-		relay_addr = args.via_relay or args.relay
-		if relay_addr and not args.dry_run:
+		relay_addr = opt.get("via_relay") or opt.get("relay")
+		if relay_addr and not opt.get("dry_run"):
 			from prairie_live.relay_client import RelayClient
 
-			host, _, port = relay_addr.partition(":")
+			host, _, port = str(relay_addr).partition(":")
 			relay = RelayClient(host, int(port or 25100))
 			relay.connect()
 
 		# Direct PrairieLink only when not pushing XML through the relay.
-		if not args.dry_run and not via_relay:
-			pl = PrairieLink(host=args.host, port=args.port, password=args.password)
+		if not opt.get("dry_run") and not via_relay:
+			pl = PrairieLink(
+				host=str(opt["host"]),
+				port=int(opt["port"]),
+				password=str(opt["password"]),
+			)
 
 		run_sync_loop(
 			points=points,
 			meta=meta,
 			pl=pl,
 			log=log,
-			scope_xml=args.scope_xml,
-			n_iterations=args.iterations,
-			n_groups=args.n_groups,
-			group_size=args.group_size,
+			scope_xml=opt.get("scope_xml"),
+			n_iterations=int(opt["iterations"]),
+			n_groups=int(opt["n_groups"]),
+			group_size=int(opt["group_size"]),
 			powers=powers,
-			seed=args.seed,
-			trigger=args.trigger,
+			seed=int(opt["seed"]),
+			trigger=str(opt["trigger"]),
 			ttl=ttl,
-			ttl_width_s=args.ttl_width,
-			inter_trial_s=args.inter_trial,
-			pad_ms=args.pad_ms,
-			mock_scores=args.mock_scores,
+			ttl_width_s=float(opt["ttl_width"]),
+			inter_trial_s=float(opt["inter_trial"]),
+			pad_ms=float(opt["pad_ms"]),
+			mock_scores=bool(opt.get("mock_scores")),
 			relay=relay,
 			via_relay=via_relay,
-			f0_s=args.f0_s,
-			f1_s=args.f1_s,
-			frame_poll_s=args.frame_poll,
-			disk_radius=args.disk_radius,
-			elite_frac=args.elite_frac,
-			dry_run=args.dry_run,
+			f0_s=float(opt["f0_s"]),
+			f1_s=float(opt["f1_s"]),
+			frame_poll_s=float(opt["frame_poll"]),
+			disk_radius=int(opt["disk_radius"]),
+			elite_frac=float(opt["elite_frac"]),
+			dry_run=bool(opt.get("dry_run")),
 		)
 	finally:
 		log.close()
@@ -534,7 +611,7 @@ def main(argv: list[str] | None = None) -> None:
 			relay.disconnect()
 		if pl is not None:
 			pl.close()
-		print(f"log: {args.log}")
+		print(f"log: {log_path}")
 
 
 if __name__ == "__main__":

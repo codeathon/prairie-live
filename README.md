@@ -224,6 +224,26 @@ python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.
 relay must already be running on the scope. PrairieView script password is
 still `0000` on the relay process (`--password`), not a Windows share login.
 
+### Experiment config (`experiment.json`)
+
+All `mp-sync` knobs can live in a JSON file (SLM lab defaults shipped in
+repo-root `experiment.json`). CLI flags override the file. If
+`./experiment.json` exists, it is loaded automatically; or pass `--config PATH`.
+
+```powershell
+# Edit series / COM / relay in experiment.json, then:
+python -m prairie_live mp-sync --config experiment.json
+# CLI overrides file values:
+python -m prairie_live mp-sync --config experiment.json --iterations 2
+```
+
+SLM-oriented fields in the file: `stim_mode`, `laser` (`Monaco`), `use_3d`,
+`spiral`, `spiral_size_um` (54.5), `spiral_revolutions` (8),
+`trigger_selection` (`PFI1`), `fov_width_um` (for converting µm → FOV
+fraction when `-MarkAllPoints` lands). Runtime still uses series `-lmp`/`-mp`
+until `stim_mode=slm` fire path is implemented; meta/laser/spiral overlays
+already apply.
+
 ### Trial log (`trials.jsonl`)
 
 Written on the **analysis PC** in the directory where you run `mp-sync`

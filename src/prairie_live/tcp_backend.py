@@ -1,8 +1,9 @@
 """TCP script commands (T-series, abort). Does not carry live images.
 
 PrairieLink's TCP port (default 1236) is a command channel. Use COM or the
-relay for frames. Two wire formats exist in the wild; we try Bruker's
-password-then-newline style first, then PyPrLink's SOH/ACK/DONE style.
+relay for frames. Wire format from PV script help: password first, SOH
+between tokens, terminate with CR+LF; expect ACK … DONE.
+Prefer prairie_live.prairie_link.PrairieLink for new call sites.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import socket
 
 DEFAULT_PORT = 1236
 SOH = "\x01"
+_CRLF = "\r\n"
 
 
 class PrairieTcp:
@@ -35,9 +37,10 @@ class PrairieTcp:
 			self._sock = None
 
 	def send(self, cmd: str) -> str:
+		# Single-token cmds are fine as-is; multi-arg strings should use SOH.
 		sock = self._require()
-		line = cmd if cmd.endswith("\n") else cmd + "\n"
-		sock.sendall(line.encode("utf-8"))
+		text = cmd.rstrip("\r\n")
+		sock.sendall((text + _CRLF).encode("ascii", errors="replace"))
 		return self._recv_text()
 
 	def start_tseries(self) -> dict:
@@ -49,15 +52,13 @@ class PrairieTcp:
 		return {"ok": True, "cmd": "abort"}
 
 	def start_live(self) -> dict:
-		try:
-			self.send("-LiveScan")
-		except Exception:
-			self.send("-Live")
+		# Official help lists only -LiveScan (-lv), not -Live.
+		self.send("-LiveScan")
 		return {"ok": True, "cmd": "live"}
 
 	def _authenticate(self) -> None:
-		# Official TCP: first line is the PrairieLink password.
-		self._require().sendall((self.password + "\n").encode("utf-8"))
+		# Password must be first; CR+LF terminator (not bare LF).
+		self._require().sendall((self.password + _CRLF).encode("ascii"))
 		try:
 			self._recv_text()
 		except Exception:

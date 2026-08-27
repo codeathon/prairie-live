@@ -10,13 +10,17 @@ import copy
 import xml.etree.ElementTree as ET
 from typing import Any
 
-# Default spiral attrs when cloning points into a new group step.
+# Lab Mark Points UI defaults (2026-08): Monaco, Force 2D, spiral 54.5 µm / 8.
+# Used only when the source series omits these fields.
 _SPIRAL_DEFAULTS = {
 	"is_spiral": "True",
 	"spiral_width": "0.2",
 	"spiral_height": "0.2",
-	"spiral_size_um": "20",
+	"spiral_size_um": "54.5",
 }
+_DEFAULT_LASER = "Monaco"
+_DEFAULT_SPIRAL_REVS = "8"
+_DEFAULT_USE_3D = "False"
 
 
 def parse_mark_points(xml_string: str) -> list[dict]:
@@ -111,7 +115,7 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 	"""Series + step timing defaults taken from the first source step."""
 	if not steps:
 		return {
-			"use_3d": "True",
+			"use_3d": _DEFAULT_USE_3D,
 			"all_points_at_once": "True",
 			"calc_funct_map": "False",
 			"iterations": "1",
@@ -120,8 +124,8 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 			"repetitions": 1,
 			"initial_delay": "0.00",
 			"inter_point_delay": "0.01",
-			"spiral_revolutions": "5",
-			"uncaging_laser": "Uncaging",
+			"spiral_revolutions": _DEFAULT_SPIRAL_REVS,
+			"uncaging_laser": _DEFAULT_LASER,
 			"trigger_selection": "None",
 			"trigger_frequency": "None",
 			"trigger_count": "1",
@@ -185,7 +189,7 @@ def build_group_step(
 		"points": pts,
 		"raw_points": name,
 		"indices": _indices_from_points(pts),
-		"uncaging_laser": meta.get("uncaging_laser", "Uncaging"),
+		"uncaging_laser": meta.get("uncaging_laser", _DEFAULT_LASER),
 		"trigger_selection": trig,
 		"trigger_frequency": meta.get("trigger_frequency", "None"),
 		"trigger_count": meta.get("trigger_count", "1"),
@@ -193,10 +197,10 @@ def build_group_step(
 		"voltage_output_category": meta.get("voltage_output_category", "None"),
 		"voltage_rec_category": meta.get("voltage_rec_category", "None"),
 		"parameter_set": meta.get("parameter_set", "CurrentSettings"),
-		"spiral_revolutions": meta.get("spiral_revolutions", "5"),
+		"spiral_revolutions": meta.get("spiral_revolutions", _DEFAULT_SPIRAL_REVS),
 		"initial_delay": meta.get("initial_delay", "0.00"),
 		"inter_point_delay": meta.get("inter_point_delay", "0.01"),
-		"use_3d": meta.get("use_3d", "True"),
+		"use_3d": meta.get("use_3d", _DEFAULT_USE_3D),
 		"all_points_at_once": meta.get("all_points_at_once", "True"),
 		"calc_funct_map": meta.get("calc_funct_map", "False"),
 		"iterations": "1",
@@ -212,7 +216,7 @@ def groups_to_xml(groups: list[dict]) -> str:
 	"""
 	root = ET.Element("PVMarkPointSeriesElements")
 	meta = groups[0] if groups else {}
-	root.set("Use3D", str(meta.get("use_3d", "True")))
+	root.set("Use3D", str(meta.get("use_3d", _DEFAULT_USE_3D)))
 	root.set("AllPointsAtOnce", str(meta.get("all_points_at_once", "True")))
 	root.set("CalcFunctMap", str(meta.get("calc_funct_map", "False")))
 	root.set("IterationDelay", str(meta.get("iteration_delay", "0.00")))
@@ -227,7 +231,7 @@ def groups_to_xml(groups: list[dict]) -> str:
 		points_str = g.get("raw_points") or g.get("name") or "Group"
 		el = ET.SubElement(root, "PVMarkPointElement")
 		el.set("Repetitions", str(g["repetitions"]))
-		el.set("UncagingLaser", str(g.get("uncaging_laser", "Uncaging")))
+		el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
 		el.set("UncagingLaserPower", str(g["laser_pwr"]))
 		el.set("TriggerFrequency", str(g.get("trigger_frequency", "None")))
 		el.set("TriggerSelection", str(g.get("trigger_selection", "None")))
@@ -316,7 +320,7 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 			"repetitions": reps,
 			"points": [],
 			"raw_points": points_attr,
-			"uncaging_laser": el.attrib.get("UncagingLaser", "Uncaging"),
+			"uncaging_laser": el.attrib.get("UncagingLaser", _DEFAULT_LASER),
 			"trigger_selection": el.attrib.get("TriggerSelection", "None"),
 			"trigger_frequency": el.attrib.get("TriggerFrequency", "None"),
 			"trigger_count": el.attrib.get("TriggerCount", "1"),
