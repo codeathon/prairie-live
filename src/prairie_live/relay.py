@@ -30,11 +30,16 @@ _COM_SCRIPT_TIMEOUT_S = 45.0
 
 
 class Relay:
-	def __init__(self, pv_host: str, password: str, channel: int):
+	def __init__(
+		self, pv_host: str, password: str, channel: int, *, image_wh=(512, 512)
+	):
 		self.channel = channel
 		self.password = password
 		self.pv_host = pv_host
 		self.com = PrairieCom(pv_host, password)
+		# (height, width) — matches numpy frame.shape / GetImage_2 args.
+		h, w = image_wh
+		self.com._last_wh = (int(h), int(w))
 		# Separate COM session for scripts so GetImage never blocks -lmp/-mp.
 		self.script_com: PrairieCom | None = None
 		self._latest = None
@@ -46,6 +51,7 @@ class Relay:
 	def start(self) -> None:
 		self.com.connect()
 		self.script_com = PrairieCom(self.pv_host, self.password)
+		self.script_com._last_wh = self.com._last_wh
 		self.script_com.connect()
 		threading.Thread(target=self._grab_loop, daemon=True).start()
 
@@ -378,9 +384,17 @@ def main(argv=None) -> None:
 	p.add_argument("--port", type=int, default=DEFAULT_PORT)
 	p.add_argument("--channel", type=int, default=1)
 	p.add_argument("--fps", type=float, default=20.0)
+	# Avoid COM PixelsPerLine(); pass known FOV size into GetImage_2.
+	p.add_argument("--width", type=int, default=512, help="pixelsPerLine for GetImage_2")
+	p.add_argument("--height", type=int, default=512, help="linesPerFrame for GetImage_2")
 	args = p.parse_args(argv)
 
-	relay = Relay(args.pv_host, args.password, args.channel)
+	relay = Relay(
+		args.pv_host,
+		args.password,
+		args.channel,
+		image_wh=(args.height, args.width),
+	)
 	relay.start()
 	try:
 		listen(relay, args.bind, args.port, args.fps)

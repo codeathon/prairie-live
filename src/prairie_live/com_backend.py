@@ -35,7 +35,8 @@ class PrairieCom:
 		self.password = password
 		self._pl = None
 		self.last_error = ""
-		self._last_wh = None
+		# Seed with lab default 512² so GetImage_2 never needs PixelsPerLine().
+		self._last_wh = (512, 512)
 		self._last_reconnect = 0.0
 		# Grab thread and command thread share one COM object.
 		self._io = threading.Lock()
@@ -184,7 +185,8 @@ class PrairieCom:
 		return int(self._require().LinesPerFrame())
 
 	def get_frame(self, channel: int = 1) -> np.ndarray | None:
-		# Do not call PixelsPerLine first: PV 5.8 remote aborts that COM method.
+		# Avoid PixelsPerLine()/GetImage on PV 5.8 — they can surface
+		# "Unexpected parameter - pixelsPerLine" and abort the link.
 		pl = self._pl
 		if pl is None:
 			return None
@@ -202,12 +204,12 @@ class PrairieCom:
 		return frame
 
 	def _grab_raw(self, pl, channel: int):
+		# GetImage_2(channel, pixelsPerLine, linesPerFrame) — pass ints we know.
+		h, w = self._last_wh if self._last_wh else (512, 512)
 		try:
-			return pl.GetImage(channel)
+			return pl.GetImage_2(channel, int(w), int(h))
 		except Exception:
-			# GetImage_2 wants (channel, pixelsPerLine, linesPerFrame).
-			h, w = self._last_wh if self._last_wh else (512, 512)
-			return pl.GetImage_2(channel, w, h)
+			return pl.GetImage(channel)
 
 	def _reconnect_if_dropped(self, err: Exception) -> None:
 		msg = str(err).lower()
