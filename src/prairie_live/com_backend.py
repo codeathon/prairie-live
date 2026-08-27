@@ -204,12 +204,10 @@ class PrairieCom:
 		return frame
 
 	def _grab_raw(self, pl, channel: int):
-		# GetImage_2(channel, pixelsPerLine, linesPerFrame) — pass ints we know.
+		# GetImage_2 only — COM GetImage maps to script -gi and can race Connect
+		# as "unexpected parameter 0000-gi" on PV 5.8.
 		h, w = self._last_wh if self._last_wh else (512, 512)
-		try:
-			return pl.GetImage_2(channel, int(w), int(h))
-		except Exception:
-			return pl.GetImage(channel)
+		return pl.GetImage_2(channel, int(w), int(h))
 
 	def _reconnect_if_dropped(self, err: Exception) -> None:
 		msg = str(err).lower()

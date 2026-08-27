@@ -31,7 +31,13 @@ _COM_SCRIPT_TIMEOUT_S = 45.0
 
 class Relay:
 	def __init__(
-		self, pv_host: str, password: str, channel: int, *, image_wh=(512, 512)
+		self,
+		pv_host: str,
+		password: str,
+		channel: int,
+		*,
+		image_wh=(512, 512),
+		grab: bool = True,
 	):
 		self.channel = channel
 		self.password = password
@@ -40,8 +46,10 @@ class Relay:
 		# (height, width) — matches numpy frame.shape / GetImage_2 args.
 		h, w = image_wh
 		self.com._last_wh = (int(h), int(w))
-		# Separate COM session for scripts so GetImage never blocks -lmp/-mp.
+		# Same COM as grab — a second Connect races password vs -gi on port 1236
+		# ("unexpected parameter 0000-gi"). Scripts pause grab via _pause_grab.
 		self.script_com: PrairieCom | None = None
+		self._grab_enabled = bool(grab)
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
@@ -50,21 +58,23 @@ class Relay:
 
 	def start(self) -> None:
 		self.com.connect()
-		self.script_com = PrairieCom(self.pv_host, self.password)
-		self.script_com._last_wh = self.com._last_wh
-		self.script_com.connect()
-		threading.Thread(target=self._grab_loop, daemon=True).start()
+		self.script_com = self.com
+		if self._grab_enabled:
+			# Let Connect finish before the first GetImage_2.
+			time.sleep(0.3)
+			threading.Thread(target=self._grab_loop, daemon=True).start()
+		else:
+			print("grab disabled (--no-grab); frames will stay empty")
 
 	def stop(self) -> None:
 		self._stop.set()
 		self._pause_grab.set()
-		for c in (self.com, self.script_com):
-			if c is None:
-				continue
+		if self.com is not None:
 			try:
-				c.disconnect()
+				self.com.disconnect()
 			except Exception:
 				pass
+		self.script_com = None
 
 	def _grab_loop(self) -> None:
 		# win32com must be CoInitialized on every thread that calls COM.
@@ -387,6 +397,11 @@ def main(argv=None) -> None:
 	# Avoid COM PixelsPerLine(); pass known FOV size into GetImage_2.
 	p.add_argument("--width", type=int, default=512, help="pixelsPerLine for GetImage_2")
 	p.add_argument("--height", type=int, default=512, help="linesPerFrame for GetImage_2")
+	p.add_argument(
+		"--no-grab",
+		action="store_true",
+		help="Do not call GetImage (stim/script only; avoids 0000-gi races)",
+	)
 	args = p.parse_args(argv)
 
 	relay = Relay(
@@ -394,6 +409,7 @@ def main(argv=None) -> None:
 		args.password,
 		args.channel,
 		image_wh=(args.height, args.width),
+		grab=not args.no_grab,
 	)
 	relay.start()
 	try:
