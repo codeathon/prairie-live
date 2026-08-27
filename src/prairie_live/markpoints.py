@@ -546,12 +546,16 @@ def _findall_local(root: ET.Element, name: str) -> list[ET.Element]:
 
 
 def _indices_from_points(points: list[dict]) -> str:
+	"""
+	Indices attribute for PVGalvoPointElement.
+
+	Always comma-separated ids. A range like \"0-4\" means every index from 0
+	through 4 in Prairie — that silently fires points not in the group.
+	"""
 	ids = [str(pt["id"]) for pt in points]
 	if not ids:
 		return "1"
-	if len(ids) == 1:
-		return ids[0]
-	return f"{ids[0]}-{ids[-1]}"
+	return ",".join(ids)
 
 
 def _strip_xml_decl(text: str) -> str:
