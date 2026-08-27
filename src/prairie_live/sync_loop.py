@@ -3,14 +3,13 @@
 Flow per mapping iteration
 --------------------------
 1. Build pseudo-random groups from the points pool (or score-biased groups).
-2. For each (group × power) trial: author JSONL identity, write one-step
-   MarkPoints.xml, -LoadMarkPoints, -MarkPoints, optional serial DTR pulse,
-   wait estimated duration, optional relay disk ΔF/F.
+2. stim_mode=series: each (group × power) → -lmp/-mp + optional DTR.
+   stim_mode=slm: pack all groups into one -MarkAllPoints string (each set
+   Trigger=PFI1, Delay between sets); send once; pulse DTR once per group
+   in pack order. JSONL trigger_index ↔ group (PV does not report which
+   set fired).
 3. Aggregate per-point scores; next iteration reuses top responders plus
    random fill.
-
-Group↔TTL identity is authored here (trial_index ≡ TTL edge index). PV does
-not report which group fired.
 """
 
 from __future__ import annotations
@@ -207,7 +206,7 @@ def run_sync_loop(
 
 	stim_mode:
 	  series — -LoadMarkPoints + -MarkPoints (XML group)
-	  slm    — -MarkAllPoints (-slm) simultaneous hologram; no XML load
+	  slm    — packed -MarkAllPoints (-slm); one cmd per power, TTL per group
 
 	trigger:
 	  none   — TriggerSelection=None; fires immediately; log t_cmd
@@ -217,10 +216,7 @@ def run_sync_loop(
 	via_relay:
 	  True — push cmds through the relay (no SMB / local :1236 from analysis)
 	"""
-	from prairie_live.mark_all_points import (
-		build_mark_all_points_parts,
-		stim_params_from_meta,
-	)
+	from prairie_live.mark_all_points import stim_params_from_meta
 
 	rng = random.Random(seed)
 	scores: dict[str, float] | None = None
@@ -255,145 +251,69 @@ def run_sync_loop(
 		)
 		iter_trials: list[dict] = []
 
-		for gi, gpts in enumerate(groups_pts):
+		if mode == "slm":
 			for power in powers:
-				# Unique label for logging / series XML (series mode only).
-				gname = f"PL_t{trial_index:04d}_g{gi + 1}"
-				step = build_group_step(
-					gpts,
-					name=gname,
+				batch = _run_slm_packed_batch(
+					groups_pts=groups_pts,
 					power=power,
+					it=it,
+					trial_index_start=trial_index,
 					meta=meta,
-					trigger_selection=trig_sel,
+					slm_params=slm_params,
+					trig_sel=trig_sel,
+					trigger=trigger,
+					ttl=ttl,
+					ttl_width_s=ttl_width_s,
+					inter_trial_s=inter_trial_s,
+					pad_ms=pad_ms,
+					pl=pl,
+					relay=relay,
+					via_relay=via_relay,
+					scope_xml=scope_xml,
+					log=log,
+					dry_run=dry_run,
+					mock_scores=mock_scores,
+					f0_s=f0_s,
+					f1_s=f1_s,
+					frame_poll_s=frame_poll_s,
+					disk_radius=disk_radius,
+					on_trial=on_trial,
 				)
-				series = [step]
-				point_ids = [str(p["id"]) for p in gpts]
-				row: dict[str, Any] = {
-					"trial_index": trial_index,
-					"iteration": it,
-					"group_index": gi,
-					"group_name": gname,
-					"point_ids": point_ids,
-					"power": power,
-					"trigger": trigger,
-					"trigger_selection": trig_sel,
-					"stim_mode": mode,
-					"t_cmd": None,
-					"t_ttl": None,
-					"score": None,
-					"score_kind": None,
-				}
-
-				slm_parts: list[str] | None = None
-				xml = groups_to_xml(series)
-				# Always build trial series XML (audit / optional write).
-				# Fire path: -slm uses coords only; series mode also -lmp/-mp.
-				if scope_xml:
-					write_scope_xml(series, scope_xml)
-				if mode == "slm":
-					slm_parts = build_mark_all_points_parts(
-						gpts,
+				iter_trials.extend(batch)
+				all_trials.extend(batch)
+				trial_index += len(batch)
+		else:
+			for gi, gpts in enumerate(groups_pts):
+				for power in powers:
+					row = _run_series_trial(
+						gpts=gpts,
+						gi=gi,
 						power=power,
-						laser=slm_params["laser"],
-						duration_ms=slm_params["duration_ms"],
-						use_3d=slm_params["use_3d"],
-						spiral=slm_params["spiral"],
-						spiral_size_um=slm_params["spiral_size_um"],
-						spiral_revolutions=slm_params["spiral_revolutions"],
-						fov_width_um=slm_params["fov_width_um"],
-						trigger_selection=trig_sel,
-					)
-					row["slm_parts"] = slm_parts
-
-				row["t_cmd"] = time.time()
-				log.write({**row, "phase": "armed"})
-
-				if dry_run:
-					if mode == "slm":
-						print(
-							f"  [dry] trial {trial_index}: -slm "
-							f"power={power} pts={point_ids} "
-							f"cmd={' '.join(slm_parts or [])}"
-						)
-					else:
-						print(
-							f"  [dry] trial {trial_index}: {gname} "
-							f"power={power} pts={point_ids}"
-						)
-				elif mode == "slm":
-					_fire_mark_all_points(
-						parts=slm_parts or [],
-						wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+						it=it,
+						trial_index=trial_index,
+						meta=meta,
+						trig_sel=trig_sel,
+						trigger=trigger,
+						ttl=ttl,
+						ttl_width_s=ttl_width_s,
+						inter_trial_s=inter_trial_s,
+						pad_ms=pad_ms,
 						pl=pl,
 						relay=relay,
 						via_relay=via_relay,
-					)
-					print(
-						f"  trial {trial_index}: -slm "
-						f"power={power} pts={point_ids}"
-					)
-				else:
-					_fire_mark_points(
-						xml=xml,
 						scope_xml=scope_xml,
-						pl=pl,
-						relay=relay,
-						via_relay=via_relay,
+						log=log,
+						dry_run=dry_run,
+						mock_scores=mock_scores,
+						f0_s=f0_s,
+						f1_s=f1_s,
+						frame_poll_s=frame_poll_s,
+						disk_radius=disk_radius,
+						on_trial=on_trial,
 					)
-					print(
-						f"  trial {trial_index}: -lmp/-mp {gname} "
-						f"power={power} pts={point_ids}"
-					)
-
-				# Capture F0 before TTL when relay scoring is on.
-				f0_frames: list[np.ndarray] = []
-				f1_frames: list[np.ndarray] = []
-				if relay is not None and not dry_run and not mock_scores:
-					f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
-
-				if trigger == "serial" and ttl is not None and not dry_run:
-					row["t_ttl"] = time.time()
-					ttl.pulse_dtr(ttl_width_s)
-				elif trigger == "none":
-					# Software fire: treat command time as stim time.
-					row["t_ttl"] = row["t_cmd"]
-				else:
-					# wait: external TTL; still stamp wall clock near fire.
-					row["t_ttl"] = time.time()
-
-				if mode == "slm":
-					wait_s = (
-						float(slm_params.get("duration_ms") or 0)
-						+ float(slm_params.get("initial_delay_ms") or 0)
-						+ pad_ms
-					) / 1000.0
-				else:
-					wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
-				if relay is not None and not dry_run and not mock_scores:
-					f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
-				else:
-					time.sleep(max(wait_s, 0.0))
-
-				if mock_scores:
-					# Deterministic-ish mock so regrouping is testable without frames.
-					row["score"] = abs(hash((tuple(point_ids), power, it))) % 1000 / 1000.0
-					row["score_kind"] = "mock"
-				elif relay is not None and f0_frames and f1_frames:
-					row["score"] = score_group_dff(
-						f0_frames, f1_frames, gpts, radius=disk_radius
-					)
-					row["score_kind"] = "relay_disk_dff"
-				else:
-					row["score_kind"] = "none"
-
-				log.write({**row, "phase": "done"})
-				if on_trial:
-					on_trial(row)
-				iter_trials.append(row)
-				all_trials.append(row)
-				trial_index += 1
-				if inter_trial_s > 0:
-					time.sleep(inter_trial_s)
+					iter_trials.append(row)
+					all_trials.append(row)
+					trial_index += 1
 
 		agg = aggregate_point_scores(iter_trials)
 		if agg:
@@ -404,6 +324,310 @@ def run_sync_loop(
 			print("  no scores this iteration — next groups stay random")
 
 	return all_trials
+
+
+def _run_slm_packed_batch(
+	*,
+	groups_pts: list[list[dict]],
+	power: float,
+	it: int,
+	trial_index_start: int,
+	meta: dict,
+	slm_params: dict,
+	trig_sel: str,
+	trigger: str,
+	ttl: Any | None,
+	ttl_width_s: float,
+	inter_trial_s: float,
+	pad_ms: float,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+	scope_xml: str | None,
+	log: Any,
+	dry_run: bool,
+	mock_scores: bool,
+	f0_s: float,
+	f1_s: float,
+	frame_poll_s: float,
+	disk_radius: int,
+	on_trial: Callable[[dict], None] | None,
+) -> list[dict]:
+	"""
+	One -slm command for all groups at this power; one TTL per group.
+
+	trigger_index i (0-based) is the i-th DTR pulse and maps to groups_pts[i].
+	"""
+	from prairie_live.mark_all_points import pack_mark_all_points
+
+	n = len(groups_pts)
+	# PV Delay between packed sets: cover stim + pad so next PFI1 is accepted
+	# only after the prior hologram finishes (software also sleeps per pulse).
+	delay_ms = (
+		float(slm_params.get("duration_ms") or 0)
+		+ float(pad_ms)
+		+ float(inter_trial_s) * 1000.0
+	)
+	slm_parts = pack_mark_all_points(
+		groups_pts,
+		power=power,
+		laser=slm_params["laser"],
+		duration_ms=slm_params["duration_ms"],
+		use_3d=slm_params["use_3d"],
+		spiral=slm_params["spiral"],
+		spiral_size_um=slm_params["spiral_size_um"],
+		spiral_revolutions=slm_params["spiral_revolutions"],
+		fov_width_um=slm_params["fov_width_um"],
+		trigger_selection=trig_sel,
+		delay_ms=delay_ms,
+	)
+	# Audit XML: one MarkPoint step per group (same order as packed -slm).
+	steps = []
+	group_map: list[dict] = []
+	for gi, gpts in enumerate(groups_pts):
+		gname = f"PL_t{trial_index_start + gi:04d}_g{gi + 1}"
+		steps.append(
+			build_group_step(
+				gpts,
+				name=gname,
+				power=power,
+				meta=meta,
+				trigger_selection=trig_sel,
+			)
+		)
+		group_map.append(
+			{
+				"trigger_index": gi,
+				"group_index": gi,
+				"group_name": gname,
+				"point_ids": [str(p["id"]) for p in gpts],
+			}
+		)
+	if scope_xml:
+		write_scope_xml(steps, scope_xml)
+
+	t_cmd = time.time()
+	# One session-level map so offline analysis can join pulse → group.
+	log.write(
+		{
+			"phase": "slm_packed",
+			"iteration": it,
+			"power": power,
+			"stim_mode": "slm",
+			"n_triggers": n,
+			"group_trigger_map": group_map,
+			"slm_parts": slm_parts,
+			"t_cmd": t_cmd,
+		}
+	)
+
+	if dry_run:
+		print(
+			f"  [dry] packed -slm power={power} n_groups={n} "
+			f"cmd={' '.join(slm_parts)}"
+		)
+	else:
+		_fire_mark_all_points(
+			parts=slm_parts,
+			wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+			pl=pl,
+			relay=relay,
+			via_relay=via_relay,
+		)
+		print(f"  packed -slm power={power} n_groups={n} (awaiting {n} triggers)")
+
+	wait_s = (
+		float(slm_params.get("duration_ms") or 0)
+		+ float(slm_params.get("initial_delay_ms") or 0)
+		+ pad_ms
+	) / 1000.0
+	rows: list[dict] = []
+	for gi, gpts in enumerate(groups_pts):
+		entry = group_map[gi]
+		trial_index = trial_index_start + gi
+		row: dict[str, Any] = {
+			"trial_index": trial_index,
+			"iteration": it,
+			"group_index": gi,
+			"trigger_index": gi,
+			"n_triggers": n,
+			"group_name": entry["group_name"],
+			"point_ids": entry["point_ids"],
+			"power": power,
+			"trigger": trigger,
+			"trigger_selection": trig_sel,
+			"stim_mode": "slm",
+			"slm_parts": slm_parts,
+			"group_trigger_map": group_map,
+			"t_cmd": t_cmd,
+			"t_ttl": None,
+			"score": None,
+			"score_kind": None,
+		}
+		log.write({**row, "phase": "armed"})
+
+		f0_frames: list[np.ndarray] = []
+		f1_frames: list[np.ndarray] = []
+		if relay is not None and not dry_run and not mock_scores:
+			f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+
+		if trigger == "serial" and ttl is not None and not dry_run:
+			# Pulse gi fires packed set gi — identity is our count, not PV.
+			row["t_ttl"] = time.time()
+			ttl.pulse_dtr(ttl_width_s)
+			print(
+				f"  trigger {gi}/{n - 1}: trial {trial_index} "
+				f"pts={entry['point_ids']}"
+			)
+		elif trigger == "none":
+			row["t_ttl"] = row["t_cmd"]
+			print(
+				f"  [none] trigger_index={gi} trial {trial_index} "
+				f"pts={entry['point_ids']}"
+			)
+		else:
+			# wait: external TTL; stamp when we expect pulse gi.
+			row["t_ttl"] = time.time()
+			print(
+				f"  wait trigger {gi}/{n - 1}: trial {trial_index} "
+				f"pts={entry['point_ids']}"
+			)
+
+		if relay is not None and not dry_run and not mock_scores:
+			f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+		else:
+			time.sleep(max(wait_s, 0.0))
+
+		if mock_scores:
+			row["score"] = (
+				abs(hash((tuple(entry["point_ids"]), power, it))) % 1000 / 1000.0
+			)
+			row["score_kind"] = "mock"
+		elif relay is not None and f0_frames and f1_frames:
+			row["score"] = score_group_dff(
+				f0_frames, f1_frames, gpts, radius=disk_radius
+			)
+			row["score_kind"] = "relay_disk_dff"
+		else:
+			row["score_kind"] = "none"
+
+		log.write({**row, "phase": "done"})
+		if on_trial:
+			on_trial(row)
+		rows.append(row)
+		if inter_trial_s > 0 and gi < n - 1:
+			time.sleep(inter_trial_s)
+	return rows
+
+
+def _run_series_trial(
+	*,
+	gpts: list[dict],
+	gi: int,
+	power: float,
+	it: int,
+	trial_index: int,
+	meta: dict,
+	trig_sel: str,
+	trigger: str,
+	ttl: Any | None,
+	ttl_width_s: float,
+	inter_trial_s: float,
+	pad_ms: float,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+	scope_xml: str | None,
+	log: Any,
+	dry_run: bool,
+	mock_scores: bool,
+	f0_s: float,
+	f1_s: float,
+	frame_poll_s: float,
+	disk_radius: int,
+	on_trial: Callable[[dict], None] | None,
+) -> dict:
+	"""One group × power via -LoadMarkPoints / -MarkPoints."""
+	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
+	step = build_group_step(
+		gpts,
+		name=gname,
+		power=power,
+		meta=meta,
+		trigger_selection=trig_sel,
+	)
+	series = [step]
+	point_ids = [str(p["id"]) for p in gpts]
+	row: dict[str, Any] = {
+		"trial_index": trial_index,
+		"iteration": it,
+		"group_index": gi,
+		"group_name": gname,
+		"point_ids": point_ids,
+		"power": power,
+		"trigger": trigger,
+		"trigger_selection": trig_sel,
+		"stim_mode": "series",
+		"t_cmd": None,
+		"t_ttl": None,
+		"score": None,
+		"score_kind": None,
+	}
+	xml = groups_to_xml(series)
+	if scope_xml:
+		write_scope_xml(series, scope_xml)
+
+	row["t_cmd"] = time.time()
+	log.write({**row, "phase": "armed"})
+
+	if dry_run:
+		print(f"  [dry] trial {trial_index}: {gname} power={power} pts={point_ids}")
+	else:
+		_fire_mark_points(
+			xml=xml,
+			scope_xml=scope_xml,
+			pl=pl,
+			relay=relay,
+			via_relay=via_relay,
+		)
+		print(f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids}")
+
+	f0_frames: list[np.ndarray] = []
+	f1_frames: list[np.ndarray] = []
+	if relay is not None and not dry_run and not mock_scores:
+		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+
+	if trigger == "serial" and ttl is not None and not dry_run:
+		row["t_ttl"] = time.time()
+		ttl.pulse_dtr(ttl_width_s)
+	elif trigger == "none":
+		row["t_ttl"] = row["t_cmd"]
+	else:
+		row["t_ttl"] = time.time()
+
+	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
+	if relay is not None and not dry_run and not mock_scores:
+		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+	else:
+		time.sleep(max(wait_s, 0.0))
+
+	if mock_scores:
+		row["score"] = abs(hash((tuple(point_ids), power, it))) % 1000 / 1000.0
+		row["score_kind"] = "mock"
+	elif relay is not None and f0_frames and f1_frames:
+		row["score"] = score_group_dff(
+			f0_frames, f1_frames, gpts, radius=disk_radius
+		)
+		row["score_kind"] = "relay_disk_dff"
+	else:
+		row["score_kind"] = "none"
+
+	log.write({**row, "phase": "done"})
+	if on_trial:
+		on_trial(row)
+	if inter_trial_s > 0:
+		time.sleep(inter_trial_s)
+	return row
 
 
 def _fire_mark_all_points(

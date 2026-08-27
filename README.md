@@ -184,8 +184,8 @@ locally and runs `-LoadMarkPoints` / `-MarkPoints`.
 
 Prefer a fat `MarkPoints.xml` **or** a `.gpl` point list (`PVGalvoPointList`)
 for `--series`. With `stim_mode=slm`, points are randomly grouped (≥3 per
-group) and each trial is fired with `-MarkAllPoints` (series XML may still be
-written for audit if `scope_xml` is set).
+group), packed into one `-MarkAllPoints` command per power, and each DTR
+pulse advances to the next packed set (`trigger_index` in the JSONL).
 
 Paste one line at a time in **PowerShell**. (Cmd.exe: use `set PYTHONPATH=%CD%\src` instead of `$env:PYTHONPATH`.)
 
@@ -247,8 +247,11 @@ SLM-oriented fields: `stim_mode` (`series` | `slm`), `laser` (`Monaco`),
 `stim_mode=slm` — converts µm → FOV fraction for `-MarkAllPoints` / `-slm`).
 
 - `stim_mode=series` (default): `-LoadMarkPoints` + `-MarkPoints` per trial
-- `stim_mode=slm`: simultaneous hologram via `-MarkAllPoints` (no XML load);
-  CLI: `--stim-mode slm`. Spiral needs `fov_width_um` set to the optical FOV
+- `stim_mode=slm`: pack all groups (per power) into one `-MarkAllPoints` /
+  `-slm` string; each set uses `Trigger=PFI1` with Delay between sets. One
+  DTR pulse per group; JSONL `trigger_index` / `group_trigger_map` records
+  which pulse fired which group (PV does not report this). Spiral needs
+  `fov_width_um` set to the optical FOV
   width in µm.
 
 ### Trial log (`trials.jsonl`)

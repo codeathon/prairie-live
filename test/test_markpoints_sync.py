@@ -258,7 +258,8 @@ def test_gpl_slm_dry_run(tmp_path: Path):
 	meta["spiral_size_um"] = "54.5"
 	meta["is_spiral"] = "True"
 	meta["initial_delay_ms"] = 22.1
-	log = JsonlLog(tmp_path / "gpl_slm.jsonl")
+	log_path = tmp_path / "gpl_slm.jsonl"
+	log = JsonlLog(log_path)
 	scope = tmp_path / "trial.xml"
 	try:
 		rows = run_sync_loop(
@@ -293,8 +294,19 @@ def test_gpl_slm_dry_run(tmp_path: Path):
 	assert len(rows) == 2
 	assert all(r["stim_mode"] == "slm" for r in rows)
 	assert all(len(r["point_ids"]) == 3 for r in rows)
+	# One packed command shared by both trials; trigger_index maps pulse → group.
+	assert rows[0]["slm_parts"] == rows[1]["slm_parts"]
 	assert rows[0]["slm_parts"][0] == "-MarkAllPoints"
-	# Series XML written for audit; fire path is still -slm.
+	assert rows[0]["trigger_index"] == 0
+	assert rows[1]["trigger_index"] == 1
+	assert rows[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
+	packed = [
+		json.loads(ln)
+		for ln in log_path.read_text(encoding="utf-8").splitlines()
+		if json.loads(ln).get("phase") == "slm_packed"
+	]
+	assert len(packed) == 1
+	assert packed[0]["n_triggers"] == 2
 	assert scope.is_file()
 	assert "PVMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
 
@@ -347,3 +359,63 @@ def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
 	assert wait_ms == 22.1
 	# No series load/mark on SLM path.
 	assert all(c[0] != "load" for c in relay.calls if isinstance(c, tuple))
+
+
+class _FakeTtl:
+	def __init__(self):
+		self.pulses: list[float] = []
+
+	def pulse_dtr(self, width_s: float):
+		self.pulses.append(width_s)
+
+
+def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 545.0
+	meta["spiral_size_um"] = "54.5"
+	meta["is_spiral"] = "True"
+	meta["initial_delay_ms"] = 0.0
+	log = JsonlLog(tmp_path / "slm_pack.jsonl")
+	relay = _FakeRelayMp()
+	ttl = _FakeTtl()
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=None,
+			n_iterations=1,
+			n_groups=2,
+			group_size=3,
+			powers=[0.75],
+			seed=1,
+			trigger="serial",
+			ttl=ttl,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+			stim_mode="slm",
+		)
+	finally:
+		log.close()
+	# One packed -slm; two DTR pulses in group order.
+	assert len(relay.calls) == 1
+	assert relay.calls[0][0] == "slm"
+	assert len(ttl.pulses) == 2
+	assert [r["trigger_index"] for r in rows] == [0, 1]
+	assert rows[0]["point_ids"] == rows[0]["group_trigger_map"][0]["point_ids"]
+	assert rows[1]["point_ids"] == rows[1]["group_trigger_map"][1]["point_ids"]
+	# Packed string contains two PFI1 tokens (one per set) + Delay between.
+	assert relay.calls[0][1].count("PFI1") == 2

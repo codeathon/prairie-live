@@ -1,5 +1,5 @@
 {
-	"_comment": "mp-sync: series may be MarkPoints.xml OR .gpl point list. stim_mode=slm fires -MarkAllPoints.",
+	"_comment": "mp-sync: .gpl/.xml pool; stim_mode=slm packs all groups into one -slm, TTL pulse i → group i.",
 	"series": "D:\\MarkPoints.gpl",
 	"scope_xml": null,
 	"via_relay": "10.33.107.147:25100",

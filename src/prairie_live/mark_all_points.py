@@ -1,6 +1,8 @@
 """Build PrairieView -MarkAllPoints (-slm) script argument lists.
 
 Official help: simultaneous SLM multi-spot (or mask). Not an \"enable SLM\" flag.
+Multiple hologram sets may be packed into one command; each set can wait on
+PFI1, with Delay ms between sets (omit Delay on the last).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ def spiral_size_fov_frac(size_um: float, fov_width_um: float) -> float:
 	return float(size_um) / fov
 
 
-def build_mark_all_points_parts(
+def build_set_tokens(
 	points: list[dict],
 	*,
 	power: float,
@@ -30,20 +32,18 @@ def build_mark_all_points_parts(
 	trigger_selection: str = "PFI1",
 ) -> list[str]:
 	"""
-	Token list for -MarkAllPoints / -slm (SOH-joined on TCP, space-joined on COM).
+	One hologram block (no leading -MarkAllPoints, no trailing Delay).
 
 	Shape (2D + spiral + trigger):
-	  -MarkAllPoints N False x0 y0 … xN-1 yN-1
-	  duration_ms laser power True spiral_frac revolutions Trigger
+	  N False x0 y0 … xN-1 yN-1 duration_ms laser power True spiral_frac revs Trigger
 	"""
 	if not points:
-		raise ValueError("MarkAllPoints needs at least one point")
+		raise ValueError("MarkAllPoints set needs at least one point")
 	laser = str(laser).strip()
 	if not laser:
 		raise ValueError("laser name is empty")
 
 	parts: list[str] = [
-		"-MarkAllPoints",
 		str(len(points)),
 		"True" if use_3d else "False",
 	]
@@ -68,8 +68,81 @@ def build_mark_all_points_parts(
 		frac = spiral_size_fov_frac(float(spiral_size_um), float(fov_width_um))
 		parts.extend(["True", _fmt_num(frac), str(int(spiral_revolutions))])
 
-	trig = str(trigger_selection or "None")
-	parts.append(trig)
+	parts.append(str(trigger_selection or "None"))
+	return parts
+
+
+def build_mark_all_points_parts(
+	points: list[dict],
+	*,
+	power: float,
+	laser: str = "Monaco",
+	duration_ms: float = 16.92,
+	use_3d: bool = False,
+	spiral: bool = True,
+	spiral_size_um: float | None = 54.5,
+	spiral_revolutions: float | int = 8,
+	fov_width_um: float | None = None,
+	trigger_selection: str = "PFI1",
+) -> list[str]:
+	"""Single-set -MarkAllPoints token list (compat wrapper around pack)."""
+	return pack_mark_all_points(
+		[points],
+		power=power,
+		laser=laser,
+		duration_ms=duration_ms,
+		use_3d=use_3d,
+		spiral=spiral,
+		spiral_size_um=spiral_size_um,
+		spiral_revolutions=spiral_revolutions,
+		fov_width_um=fov_width_um,
+		trigger_selection=trigger_selection,
+		delay_ms=0.0,
+	)
+
+
+def pack_mark_all_points(
+	groups: list[list[dict]],
+	*,
+	power: float,
+	laser: str = "Monaco",
+	duration_ms: float = 16.92,
+	use_3d: bool = False,
+	spiral: bool = True,
+	spiral_size_um: float | None = 54.5,
+	spiral_revolutions: float | int = 8,
+	fov_width_um: float | None = None,
+	trigger_selection: str = "PFI1",
+	delay_ms: float = 0.0,
+) -> list[str]:
+	"""
+	Pack many simultaneous sets into one -slm command.
+
+	PV grammar: after each set's Trigger, append Delay ms except on the last
+	set. Software maps trigger pulse i → groups[i] (same order as packed).
+	"""
+	if not groups:
+		raise ValueError("pack_mark_all_points needs at least one group")
+	parts: list[str] = ["-MarkAllPoints"]
+	last = len(groups) - 1
+	for i, gpts in enumerate(groups):
+		parts.extend(
+			build_set_tokens(
+				gpts,
+				power=power,
+				laser=laser,
+				duration_ms=duration_ms,
+				use_3d=use_3d,
+				spiral=spiral,
+				spiral_size_um=spiral_size_um,
+				spiral_revolutions=spiral_revolutions,
+				fov_width_um=fov_width_um,
+				trigger_selection=trigger_selection,
+			)
+		)
+		# Omit Delay on the last repetition (PV requirement).
+		if i < last:
+			parts.append(str(int(round(float(delay_ms)))))
 	return parts
 
 
