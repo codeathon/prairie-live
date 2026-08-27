@@ -139,6 +139,15 @@ def test_aggregate_and_dff():
 	assert disk_mean(f1, 0.5, 0.5, 2) > 10
 
 
+def test_disk_mean_oob_returns_none():
+	frame = np.zeros((32, 32), dtype=np.float32)
+	assert disk_mean(frame, 0.5, 0.5, 2) == 0.0
+	# Prairie allows galvo coords outside the visible FOV.
+	assert disk_mean(frame, -2.9, 0.5, 2) is None
+	assert disk_mean(frame, 0.5, 3.0, 2) is None
+	assert score_group_dff([frame], [frame], [{"x": -2.9, "y": 0.5}]) == 0.0
+
+
 def test_dry_run_writes_jsonl(tmp_path: Path):
 	steps = parse_mark_points(FAT_XML)
 	pts = extract_unique_points(steps)

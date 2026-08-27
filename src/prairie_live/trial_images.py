@@ -59,6 +59,9 @@ def draw_point_rings(
 	for pt in points:
 		cx = int(round(float(pt["x"]) * (w - 1)))
 		cy = int(round(float(pt["y"]) * (h - 1)))
+		# Skip galvo coords that fall outside the imaging FOV.
+		if cx + r < 0 or cy + r < 0 or cx - r >= w or cy - r >= h:
+			continue
 		yy, xx = np.ogrid[:h, :w]
 		ring = (xx - cx) ** 2 + (yy - cy) ** 2
 		# Hollow ring so the cell center stays visible.

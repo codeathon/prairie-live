@@ -107,15 +107,23 @@ def aggregate_point_scores(trials: list[dict]) -> dict[str, float]:
 	return {pid: float(np.mean(vals)) for pid, vals in acc.items()}
 
 
-def disk_mean(frame: np.ndarray, x_norm: float, y_norm: float, radius: int) -> float:
-	"""Mean intensity in a disk; x/y are FOV-normalized [0,1] (Prairie style)."""
+def disk_mean(frame: np.ndarray, x_norm: float, y_norm: float, radius: int) -> float | None:
+	"""
+	Mean intensity in a disk; x/y are FOV-normalized (0–1 = visible frame).
+
+	Prairie allows Mark Points X/Y outside 0–1 (uncaging galvo range). Those
+	fall off the imaging frame — return None so callers skip them.
+	"""
 	h, w = frame.shape[:2]
 	cx = int(round(float(x_norm) * (w - 1)))
 	cy = int(round(float(y_norm) * (h - 1)))
+	# Entire disk must miss the frame → not scoreable on this image.
+	if cx + radius < 0 or cy + radius < 0 or cx - radius >= w or cy - radius >= h:
+		return None
 	yy, xx = np.ogrid[:h, :w]
 	mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
 	if not np.any(mask):
-		return float(frame[cy, cx])
+		return None
 	return float(frame[mask].mean())
 
 
@@ -125,18 +133,27 @@ def score_group_dff(
 	points: list[dict],
 	radius: int = 3,
 ) -> float:
-	"""Mean ΔF/F across group points (on-target)."""
+	"""Mean ΔF/F across group points that fall on the imaging FOV."""
 	if not frames_f0 or not frames_f1:
 		return 0.0
 	f0 = np.mean(np.stack(frames_f0, axis=0), axis=0)
 	f1 = np.mean(np.stack(frames_f1, axis=0), axis=0)
 	vals = []
+	n_oob = 0
 	for pt in points:
 		b = disk_mean(f0, pt["x"], pt["y"], radius)
 		a = disk_mean(f1, pt["x"], pt["y"], radius)
+		if b is None or a is None:
+			n_oob += 1
+			continue
 		if b <= 0:
 			continue
 		vals.append((a - b) / b)
+	if n_oob:
+		print(
+			f"  score: skipped {n_oob}/{len(points)} points outside imaging FOV "
+			f"(X/Y not in ~0–1)"
+		)
 	return float(np.mean(vals)) if vals else 0.0
 
 
@@ -371,26 +388,36 @@ def _finish_trial_frames(
 		)
 		row["score_kind"] = "mock"
 	elif relay is not None and f0_frames and f1_frames:
-		row["score"] = score_group_dff(
-			f0_frames, f1_frames, gpts, radius=disk_radius
-		)
-		row["score_kind"] = "relay_disk_dff"
+		try:
+			row["score"] = score_group_dff(
+				f0_frames, f1_frames, gpts, radius=disk_radius
+			)
+			row["score_kind"] = "relay_disk_dff"
+		except Exception as exc:
+			row["score"] = None
+			row["score_kind"] = "error"
+			print(f"  score failed: {exc}")
 	else:
 		row["score_kind"] = "none"
 
 	if run_root is not None and f0_frames and f1_frames:
 		from prairie_live.trial_images import save_trial_images
 
-		paths = save_trial_images(
-			run_root,
-			trial_index=int(row["trial_index"]),
-			frames_f0=f0_frames,
-			frames_f1=f1_frames,
-			points=gpts,
-			radius=disk_radius,
-		)
-		row["image_paths"] = paths
-		print(f"  saved images → {paths['trial_dir']}")
+		try:
+			paths = save_trial_images(
+				run_root,
+				trial_index=int(row["trial_index"]),
+				frames_f0=f0_frames,
+				frames_f1=f1_frames,
+				points=gpts,
+				radius=disk_radius,
+			)
+			row["image_paths"] = paths
+			print(f"  saved images → {paths['trial_dir']}")
+		except Exception as exc:
+			# Stim already happened — do not abort the session on PNG errors.
+			row["image_paths"] = None
+			print(f"  image save failed: {exc}")
 	elif run_root is not None:
 		row["image_paths"] = None
 		print("  images_dir set but no frames (relay --grab + Live/T-series?)")
@@ -933,6 +960,20 @@ def main(argv: list[str] | None = None) -> None:
 		f"trigger={opt['trigger']}  stim_mode={stim_mode}  "
 		f"laser={meta.get('uncaging_laser')}  group_size={gs}"
 	)
+	# Flag .gpl / XML coords that leave the visible FOV (valid for -slm galvos,
+	# but disk ΔF/F and PNG marks only work for ~0–1).
+	oob = [
+		p
+		for p in points
+		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
+	]
+	if oob:
+		print(
+			f"WARNING: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
+			"(still sent to -slm; imaging-FOV scoring skips them). Examples:"
+		)
+		for p in oob[:5]:
+			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
 	if stim_mode == "slm":
 		# Spiral µm→FOV fraction needs optical FOV width (not in MarkPoints XML).
 		spiral_on = str(meta.get("is_spiral", "True")).lower() in ("true", "1", "yes")
