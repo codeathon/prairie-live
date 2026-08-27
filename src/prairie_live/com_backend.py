@@ -35,7 +35,8 @@ class PrairieCom:
 		self.password = password
 		self._pl = None
 		self.last_error = ""
-		self._last_wh = None
+		# Seed with lab default 512² so GetImage_2 never needs PixelsPerLine().
+		self._last_wh = (512, 512)
 		self._last_reconnect = 0.0
 		# Grab thread and command thread share one COM object.
 		self._io = threading.Lock()
@@ -156,6 +157,22 @@ class PrairieCom:
 		self.send("-MarkPoints")
 		return {"ok": True, "cmd": "mark_points"}
 
+	def mark_all_points(self, parts: list[str], *, wait_ms: float = 0.0) -> dict:
+		"""
+		Fire simultaneous SLM spots via -MarkAllPoints (-slm).
+
+		parts: token list from build_mark_all_points_parts (includes -MarkAllPoints).
+		wait_ms: optional -Wait before fire (maps UI Initial Delay).
+		"""
+		from prairie_live.mark_all_points import parts_to_com_command
+
+		if wait_ms and float(wait_ms) > 0:
+			# PV -Wait / -wt requires an integer millisecond count (rejects 22.100).
+			self.send(f"-Wait {int(round(float(wait_ms)))}")
+		cmd = parts_to_com_command(parts)
+		self.send(cmd)
+		return {"ok": True, "cmd": "mark_all_points", "parts": parts}
+
 	def start_live(self) -> dict:
 		# Official script help: only -LiveScan (-lv); -Live is not a command.
 		self.send("-LiveScan")
@@ -168,7 +185,8 @@ class PrairieCom:
 		return int(self._require().LinesPerFrame())
 
 	def get_frame(self, channel: int = 1) -> np.ndarray | None:
-		# Do not call PixelsPerLine first: PV 5.8 remote aborts that COM method.
+		# Avoid PixelsPerLine()/GetImage on PV 5.8 — they can surface
+		# "Unexpected parameter - pixelsPerLine" and abort the link.
 		pl = self._pl
 		if pl is None:
 			return None
@@ -186,12 +204,10 @@ class PrairieCom:
 		return frame
 
 	def _grab_raw(self, pl, channel: int):
-		try:
-			return pl.GetImage(channel)
-		except Exception:
-			# GetImage_2 wants (channel, pixelsPerLine, linesPerFrame).
-			h, w = self._last_wh if self._last_wh else (512, 512)
-			return pl.GetImage_2(channel, w, h)
+		# GetImage_2 only — COM GetImage maps to script -gi and can race Connect
+		# as "unexpected parameter 0000-gi" on PV 5.8.
+		h, w = self._last_wh if self._last_wh else (512, 512)
+		return pl.GetImage_2(channel, int(w), int(h))
 
 	def _reconnect_if_dropped(self, err: Exception) -> None:
 		msg = str(err).lower()

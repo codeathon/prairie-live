@@ -1,7 +1,8 @@
-"""Mark Points series XML: parse, write, flatten points, build stim groups.
+"""Mark Points series XML + .gpl point lists: parse, write, group, flatten.
 
-PrairieView has no GetMarkPoints. The series file (prefer fat MarkPoints.xml
-with nested <Point X Y Z>) is the source of truth for coords and power.
+PrairieView has no GetMarkPoints. Source of coords is either a fat series
+.xml (PVMarkPointSeriesElements) or a .gpl point list (PVGalvoPointList).
+Trial fire may use -lmp/-mp (series) or -MarkAllPoints / -slm.
 """
 
 from __future__ import annotations
@@ -39,10 +40,10 @@ def parse_mark_points(xml_string: str) -> list[dict]:
 	"""
 	root = ET.fromstring(_strip_xml_decl(xml_string))
 	tag = _local(root.tag)
+	# .gpl point list → one synthetic step so extract_unique_points works.
 	if tag == "PVGalvoPointList":
-		raise ValueError(
-			"this looks like a point-list .gpl, not a Mark Points series .xml"
-		)
+		pts = parse_galvo_point_list(xml_string)
+		return [_gpl_as_step(pts)]
 
 	series_meta = {
 		"use_3d": root.attrib.get("Use3D", "False"),
@@ -63,14 +64,153 @@ def parse_mark_points(xml_string: str) -> list[dict]:
 	raise ValueError(
 		f"no Mark Points steps found under <{tag}>. "
 		f"Tags seen: {kids or '(none)'}. "
-		"Expected PVMarkPointElement under PVMarkPointSeriesElements."
+		"Expected PVMarkPointElement under PVMarkPointSeriesElements "
+		"or PVGalvoPointList (.gpl)."
 	)
 
 
+def parse_galvo_point_list(xml_string: str) -> list[dict]:
+	"""
+	Parse a PrairieView .gpl point list (PVGalvoPointList) into FOV points.
+
+	Accepts child tags Point / PVGalvoPoint / PVGalvoPointElement with X,Y[,Z].
+	"""
+	root = ET.fromstring(_strip_xml_decl(xml_string))
+	if _local(root.tag) != "PVGalvoPointList":
+		raise ValueError(
+			f"expected root <PVGalvoPointList>, got <{_local(root.tag)}>"
+		)
+	pts: list[dict] = []
+	seen: set[str] = set()
+	for el in root.iter():
+		lt = _local(el.tag)
+		if lt not in ("Point", "PVGalvoPoint", "PVGalvoPointElement"):
+			continue
+		if "X" not in el.attrib or "Y" not in el.attrib:
+			continue
+		idx = str(
+			el.attrib.get("Index")
+			or el.attrib.get("Id")
+			or el.attrib.get("Name")
+			or (len(pts) + 1)
+		)
+		if idx in seen:
+			continue
+		seen.add(idx)
+		row = {
+			"id": idx,
+			"name": el.attrib.get("Name", f"Point {idx}"),
+			"is_active": True,
+			"x": float(el.attrib["X"]),
+			"y": float(el.attrib["Y"]),
+			"z": float(el.attrib.get("Z", 0)),
+			"is_spiral": el.attrib.get("IsSpiral", _SPIRAL_DEFAULTS["is_spiral"]),
+			"spiral_width": el.attrib.get(
+				"SpiralWidth", _SPIRAL_DEFAULTS["spiral_width"]
+			),
+			"spiral_height": el.attrib.get(
+				"SpiralHeight", _SPIRAL_DEFAULTS["spiral_height"]
+			),
+			# .gpl often has SpiralSize as FOV fraction (e.g. 0.4), not µm.
+			"spiral_size_fov": (
+				el.attrib["SpiralSize"] if "SpiralSize" in el.attrib else None
+			),
+			"spiral_size_um": el.attrib.get(
+				"SpiralSizeInMicrons", _SPIRAL_DEFAULTS["spiral_size_um"]
+			),
+			"spiral_revolutions": el.attrib.get(
+				"SpiralRevolutions", _DEFAULT_SPIRAL_REVS
+			),
+			"duration_ms": (
+				float(el.attrib["Duration"]) if "Duration" in el.attrib else None
+			),
+			"uncaging_laser": el.attrib.get("UncagingLaser"),
+		}
+		for k, v in _SPIRAL_DEFAULTS.items():
+			row.setdefault(k, v)
+		pts.append(row)
+	if not pts:
+		raise ValueError(
+			"no points with X/Y in <PVGalvoPointList> — check the .gpl file"
+		)
+	return pts
+
+
+def _gpl_as_step(pts: list[dict]) -> dict:
+	"""Wrap .gpl points as one series step (pool only; trials rebuild XML)."""
+	meta = template_meta([])
+	return {
+		"id": "1",
+		"name": "GPL",
+		"is_active": True,
+		"laser_pwr": 0.0,
+		"duration": float(meta["duration"]),
+		"repetitions": 1,
+		"points": pts,
+		"raw_points": "GPL",
+		"indices": _indices_from_points(pts),
+		**meta,
+	}
+
+
 def load_mark_points_file(path: str) -> list[dict]:
-	"""Read stim steps from a local series .xml (utf-8-sig strips Windows BOM)."""
-	with open(path, encoding="utf-8-sig") as f:
-		return parse_mark_points(f.read())
+	"""Read stim steps from a local series .xml or point-list .gpl."""
+	text = _read_xml_text(path)
+	try:
+		# Extension hint; root tag still decides (parse_mark_points handles both).
+		return parse_mark_points(text)
+	except ET.ParseError as e:
+		# Truncated exports / half-copied files show up as "unclosed token".
+		raise ValueError(_format_xml_parse_error(path, text, e)) from e
+
+
+def _read_xml_text(path: str) -> str:
+	"""Read PV XML; Prairie sometimes writes UTF-16, not UTF-8."""
+	with open(path, "rb") as f:
+		raw = f.read()
+	if not raw:
+		raise ValueError(f"empty mark-points file: {path}")
+	if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+		return raw.decode("utf-16")
+	if raw.startswith(b"\xef\xbb\xbf"):
+		return raw.decode("utf-8-sig")
+	try:
+		return raw.decode("utf-8")
+	except UnicodeDecodeError:
+		return raw.decode("utf-16")
+
+
+def _format_xml_parse_error(path: str, text: str, err: ET.ParseError) -> str:
+	"""Point at the bad line so a truncated .gpl/.xml is obvious."""
+	line_no = getattr(err, "position", (None, None))[0]
+	lines = text.splitlines()
+	snippet = ""
+	if isinstance(line_no, int) and line_no >= 1:
+		i0 = max(0, line_no - 3)
+		i1 = min(len(lines), line_no + 2)
+		shown = []
+		for i in range(i0, i1):
+			mark = ">>" if i + 1 == line_no else "  "
+			shown.append(f"{mark} {i + 1}: {lines[i][:160]}")
+		snippet = "\n".join(shown)
+	tail = text.rstrip()[-80:] if text else ""
+	closed = (
+		"</PVGalvoPointList>" in text or "</PVMarkPointSeriesElements>" in text
+	)
+	hint = (
+		"file looks truncated (missing closing tag) — re-export from Prairie"
+		if not closed
+		else "re-export the .gpl / MarkPoints series from Prairie and check series= path"
+	)
+	parts = [
+		f"invalid XML in {path}: {err}",
+		hint,
+	]
+	if snippet:
+		parts.append(snippet)
+	if not closed and tail:
+		parts.append(f"file ends with: {tail!r}")
+	return "\n".join(parts)
 
 
 def extract_unique_points(steps: list[dict]) -> list[dict]:
@@ -265,6 +405,47 @@ def groups_to_xml(groups: list[dict]) -> str:
 				pt_el.set("SpiralHeight", str(pt["spiral_height"]))
 			if pt.get("spiral_size_um") not in (None, ""):
 				pt_el.set("SpiralSizeInMicrons", str(pt["spiral_size_um"]))
+			# .gpl SpiralSize is FOV fraction (e.g. 0.4) — keep it for -lmp.
+			if pt.get("spiral_size_fov") not in (None, ""):
+				pt_el.set("SpiralSize", str(pt["spiral_size_fov"]))
+			elif pt.get("spiral_revolutions") not in (None, ""):
+				pass
+	return ET.tostring(root, encoding="unicode", xml_declaration=False)
+
+
+def galvo_points_to_gpl_xml(
+	points: list[dict],
+	*,
+	power: float,
+	laser: str = _DEFAULT_LASER,
+	duration_ms: float = 100.0,
+) -> str:
+	"""
+	Write a PVGalvoPointList (.gpl) preserving native X/Y/Z.
+
+	Why: .gpl coords are often outside 0–1 imaging FOV; -MarkAllPoints treats
+	numbers as FOV fractions and misplaces them. -LoadMarkPoints of a .gpl
+	keeps Prairie's native interpretation (same as the UI).
+	"""
+	root = ET.Element("PVGalvoPointList")
+	for i, pt in enumerate(points):
+		el = ET.SubElement(root, "PVGalvoPoint")
+		el.set("X", str(pt["x"]))
+		el.set("Y", str(pt["y"]))
+		el.set("Z", str(pt.get("z", 0)))
+		el.set("Name", str(pt.get("name", f"Point {i + 1}")))
+		el.set("Index", str(pt.get("id", i)))
+		el.set("ActivityType", "MarkPoints")
+		el.set("UncagingLaser", str(pt.get("uncaging_laser") or laser))
+		el.set("UncagingLaserPower", str(power))
+		dur = pt.get("duration_ms")
+		el.set("Duration", str(duration_ms if dur in (None, "") else dur))
+		el.set("IsSpiral", str(pt.get("is_spiral", "True")))
+		fov = pt.get("spiral_size_fov")
+		if fov not in (None, ""):
+			el.set("SpiralSize", str(fov))
+		revs = pt.get("spiral_revolutions", _DEFAULT_SPIRAL_REVS)
+		el.set("SpiralRevolutions", str(revs))
 	return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 
@@ -417,12 +598,16 @@ def _findall_local(root: ET.Element, name: str) -> list[ET.Element]:
 
 
 def _indices_from_points(points: list[dict]) -> str:
+	"""
+	Indices attribute for PVGalvoPointElement.
+
+	Always comma-separated ids. A range like \"0-4\" means every index from 0
+	through 4 in Prairie — that silently fires points not in the group.
+	"""
 	ids = [str(pt["id"]) for pt in points]
 	if not ids:
 		return "1"
-	if len(ids) == 1:
-		return ids[0]
-	return f"{ids[0]}-{ids[-1]}"
+	return ",".join(ids)
 
 
 def _strip_xml_decl(text: str) -> str:

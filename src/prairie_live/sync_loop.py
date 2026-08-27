@@ -3,14 +3,13 @@
 Flow per mapping iteration
 --------------------------
 1. Build pseudo-random groups from the points pool (or score-biased groups).
-2. For each (group × power) trial: author JSONL identity, write one-step
-   MarkPoints.xml, -LoadMarkPoints, -MarkPoints, optional serial DTR pulse,
-   wait estimated duration, optional relay disk ΔF/F.
+2. stim_mode=series: each (group × power) → -lmp/-mp + optional DTR.
+   stim_mode=slm: pack all groups into one -MarkAllPoints string (each set
+   Trigger=PFI1, Delay between sets); send once; pulse DTR once per group
+   in pack order. JSONL trigger_index ↔ group (PV does not report which
+   set fired).
 3. Aggregate per-point scores; next iteration reuses top responders plus
    random fill.
-
-Group↔TTL identity is authored here (trial_index ≡ TTL edge index). PV does
-not report which group fired.
 """
 
 from __future__ import annotations
@@ -52,10 +51,15 @@ def form_groups(
 	Without scores: shuffle then chunk (with wrap if pool is small).
 	With scores: seed each group with elite responders, fill from the rest.
 	"""
-	if n_groups < 1 or group_size < 1:
-		raise ValueError("n_groups and group_size must be >= 1")
+	# Lab rule: every stim group has at least 3 points.
+	if n_groups < 1 or group_size < 3:
+		raise ValueError("n_groups must be >= 1 and group_size must be >= 3")
 	if not points:
 		raise ValueError("empty points pool")
+	if len(points) < 3:
+		raise ValueError(
+			f"need at least 3 points in the pool, got {len(points)}"
+		)
 
 	pool = list(points)
 	if scores:
@@ -103,15 +107,23 @@ def aggregate_point_scores(trials: list[dict]) -> dict[str, float]:
 	return {pid: float(np.mean(vals)) for pid, vals in acc.items()}
 
 
-def disk_mean(frame: np.ndarray, x_norm: float, y_norm: float, radius: int) -> float:
-	"""Mean intensity in a disk; x/y are FOV-normalized [0,1] (Prairie style)."""
+def disk_mean(frame: np.ndarray, x_norm: float, y_norm: float, radius: int) -> float | None:
+	"""
+	Mean intensity in a disk; x/y are FOV-normalized (0–1 = visible frame).
+
+	Prairie allows Mark Points X/Y outside 0–1 (uncaging galvo range). Those
+	fall off the imaging frame — return None so callers skip them.
+	"""
 	h, w = frame.shape[:2]
 	cx = int(round(float(x_norm) * (w - 1)))
 	cy = int(round(float(y_norm) * (h - 1)))
+	# Entire disk must miss the frame → not scoreable on this image.
+	if cx + radius < 0 or cy + radius < 0 or cx - radius >= w or cy - radius >= h:
+		return None
 	yy, xx = np.ogrid[:h, :w]
 	mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
 	if not np.any(mask):
-		return float(frame[cy, cx])
+		return None
 	return float(frame[mask].mean())
 
 
@@ -121,18 +133,27 @@ def score_group_dff(
 	points: list[dict],
 	radius: int = 3,
 ) -> float:
-	"""Mean ΔF/F across group points (on-target)."""
+	"""Mean ΔF/F across group points that fall on the imaging FOV."""
 	if not frames_f0 or not frames_f1:
 		return 0.0
 	f0 = np.mean(np.stack(frames_f0, axis=0), axis=0)
 	f1 = np.mean(np.stack(frames_f1, axis=0), axis=0)
 	vals = []
+	n_oob = 0
 	for pt in points:
 		b = disk_mean(f0, pt["x"], pt["y"], radius)
 		a = disk_mean(f1, pt["x"], pt["y"], radius)
+		if b is None or a is None:
+			n_oob += 1
+			continue
 		if b <= 0:
 			continue
 		vals.append((a - b) / b)
+	if n_oob:
+		print(
+			f"  score: skipped {n_oob}/{len(points)} points outside imaging FOV "
+			f"(X/Y not in ~0–1)"
+		)
 	return float(np.mean(vals)) if vals else 0.0
 
 
@@ -194,30 +215,52 @@ def run_sync_loop(
 	disk_radius: int,
 	elite_frac: float,
 	dry_run: bool,
+	stim_mode: str = "series",
+	images_dir: str | None = None,
 	on_trial: Callable[[dict], None] | None = None,
 ) -> list[dict]:
 	"""
 	Run mapping iterations. Returns all trial rows written this session.
 
+	stim_mode:
+	  series — -LoadMarkPoints + -MarkPoints (XML group)
+	  slm    — packed -MarkAllPoints (-slm); one cmd per power, TTL per group
+
+	images_dir:
+	  If set, save <images_dir>/<run_id>/tXXXX/{f0,f1,dff}.png per trial
+	  (needs relay --grab and live frames).
+
 	trigger:
-	  none   — TriggerSelection=None; -mp fires immediately; log t_cmd
-	  serial — TriggerSelection from meta (e.g. PFI1); -mp arms, then DTR pulse
-	  wait   — same as serial but no DTR (external PsychoPy/PackIO provides TTL)
+	  none   — TriggerSelection=None; fires immediately; log t_cmd
+	  serial — PFI1 (or meta); arm then DTR pulse
+	  wait   — same as serial but no DTR (external TTL)
 
 	via_relay:
-	  True — push XML + -lmp/-mp through the relay (no SMB share needed)
+	  True — push cmds through the relay (no SMB / local :1236 from analysis)
 	"""
+	from prairie_live.mark_all_points import stim_params_from_meta
+	from prairie_live.trial_images import run_dir as make_run_dir
+
 	rng = random.Random(seed)
 	scores: dict[str, float] | None = None
 	all_trials: list[dict] = []
 	trial_index = 0
+	mode = str(stim_mode or "series").lower()
+	slm_params = stim_params_from_meta(meta) if mode == "slm" else {}
+	# One folder per mp-sync invocation; trials nest underneath.
+	run_root: Path | None = None
+	if images_dir:
+		run_root = make_run_dir(images_dir)
+		print(f"trial images → {run_root}")
 
 	trig_sel = str(meta.get("trigger_selection", "None"))
 	if trigger == "none":
 		trig_sel = "None"
 	elif trigger in ("serial", "wait") and trig_sel in ("", "None", "none"):
-		# Series waits for hardware; default PFI1 matches common PackIO wiring.
+		# Series / SLM wait for hardware; default PFI1 matches PackIO wiring.
 		trig_sel = "PFI1"
+	if mode == "slm":
+		slm_params["trigger_selection"] = trig_sel
 
 	for it in range(n_iterations):
 		groups_pts = form_groups(
@@ -231,105 +274,76 @@ def run_sync_loop(
 		print(
 			f"\n=== iteration {it + 1}/{n_iterations}  "
 			f"groups={n_groups} size={group_size}  "
-			f"scored={'yes' if scores else 'random'} ==="
+			f"scored={'yes' if scores else 'random'}  "
+			f"stim_mode={mode} ==="
 		)
 		iter_trials: list[dict] = []
 
-		for gi, gpts in enumerate(groups_pts):
+		if mode == "slm":
 			for power in powers:
-				# Unique Points= name each trial so PV does not ask
-				# "Mark Points already exists / replace?"
-				gname = f"PL_t{trial_index:04d}_g{gi + 1}"
-				step = build_group_step(
-					gpts,
-					name=gname,
+				batch = _run_slm_packed_batch(
+					groups_pts=groups_pts,
 					power=power,
+					it=it,
+					trial_index_start=trial_index,
 					meta=meta,
-					trigger_selection=trig_sel,
+					slm_params=slm_params,
+					trig_sel=trig_sel,
+					trigger=trigger,
+					ttl=ttl,
+					ttl_width_s=ttl_width_s,
+					inter_trial_s=inter_trial_s,
+					pad_ms=pad_ms,
+					pl=pl,
+					relay=relay,
+					via_relay=via_relay,
+					scope_xml=scope_xml,
+					log=log,
+					dry_run=dry_run,
+					mock_scores=mock_scores,
+					f0_s=f0_s,
+					f1_s=f1_s,
+					frame_poll_s=frame_poll_s,
+					disk_radius=disk_radius,
+					run_root=run_root,
+					on_trial=on_trial,
 				)
-				series = [step]
-				point_ids = [str(p["id"]) for p in gpts]
-				row: dict[str, Any] = {
-					"trial_index": trial_index,
-					"iteration": it,
-					"group_index": gi,
-					"group_name": gname,
-					"point_ids": point_ids,
-					"power": power,
-					"trigger": trigger,
-					"trigger_selection": trig_sel,
-					"t_cmd": None,
-					"t_ttl": None,
-					"score": None,
-					"score_kind": None,
-				}
-
-				xml = groups_to_xml(series)
-				if scope_xml:
-					write_scope_xml(series, scope_xml)
-				row["t_cmd"] = time.time()
-				log.write({**row, "phase": "armed"})
-
-				if dry_run:
-					print(
-						f"  [dry] trial {trial_index}: {gname} "
-						f"power={power} pts={point_ids}"
-					)
-				else:
-					_fire_mark_points(
-						xml=xml,
-						scope_xml=scope_xml,
+				iter_trials.extend(batch)
+				all_trials.extend(batch)
+				trial_index += len(batch)
+		else:
+			for gi, gpts in enumerate(groups_pts):
+				for power in powers:
+					row = _run_series_trial(
+						gpts=gpts,
+						gi=gi,
+						power=power,
+						it=it,
+						trial_index=trial_index,
+						meta=meta,
+						trig_sel=trig_sel,
+						trigger=trigger,
+						ttl=ttl,
+						ttl_width_s=ttl_width_s,
+						inter_trial_s=inter_trial_s,
+						pad_ms=pad_ms,
 						pl=pl,
 						relay=relay,
 						via_relay=via_relay,
+						scope_xml=scope_xml,
+						log=log,
+						dry_run=dry_run,
+						mock_scores=mock_scores,
+						f0_s=f0_s,
+						f1_s=f1_s,
+						frame_poll_s=frame_poll_s,
+						disk_radius=disk_radius,
+						run_root=run_root,
+						on_trial=on_trial,
 					)
-					print(
-						f"  trial {trial_index}: -lmp/-mp {gname} "
-						f"power={power} pts={point_ids}"
-					)
-
-				# Capture F0 before TTL when relay scoring is on.
-				f0_frames: list[np.ndarray] = []
-				f1_frames: list[np.ndarray] = []
-				if relay is not None and not dry_run and not mock_scores:
-					f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
-
-				if trigger == "serial" and ttl is not None and not dry_run:
-					row["t_ttl"] = time.time()
-					ttl.pulse_dtr(ttl_width_s)
-				elif trigger == "none":
-					# Software fire: treat command time as stim time.
-					row["t_ttl"] = row["t_cmd"]
-				else:
-					# wait: external TTL; still stamp wall clock near -mp.
-					row["t_ttl"] = time.time()
-
-				wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
-				if relay is not None and not dry_run and not mock_scores:
-					f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
-				else:
-					time.sleep(max(wait_s, 0.0))
-
-				if mock_scores:
-					# Deterministic-ish mock so regrouping is testable without frames.
-					row["score"] = abs(hash((tuple(point_ids), power, it))) % 1000 / 1000.0
-					row["score_kind"] = "mock"
-				elif relay is not None and f0_frames and f1_frames:
-					row["score"] = score_group_dff(
-						f0_frames, f1_frames, gpts, radius=disk_radius
-					)
-					row["score_kind"] = "relay_disk_dff"
-				else:
-					row["score_kind"] = "none"
-
-				log.write({**row, "phase": "done"})
-				if on_trial:
-					on_trial(row)
-				iter_trials.append(row)
-				all_trials.append(row)
-				trial_index += 1
-				if inter_trial_s > 0:
-					time.sleep(inter_trial_s)
+					iter_trials.append(row)
+					all_trials.append(row)
+					trial_index += 1
 
 		agg = aggregate_point_scores(iter_trials)
 		if agg:
@@ -340,6 +354,413 @@ def run_sync_loop(
 			print("  no scores this iteration — next groups stay random")
 
 	return all_trials
+
+
+def _want_frames(
+	*,
+	relay: Any | None,
+	dry_run: bool,
+	mock_scores: bool,
+	run_root: Path | None,
+) -> bool:
+	"""Grab F0/F1 when scoring for real or when saving trial PNGs."""
+	if relay is None or dry_run:
+		return False
+	return (not mock_scores) or (run_root is not None)
+
+
+def _finish_trial_frames(
+	row: dict,
+	*,
+	gpts: list[dict],
+	f0_frames: list[np.ndarray],
+	f1_frames: list[np.ndarray],
+	mock_scores: bool,
+	relay: Any | None,
+	disk_radius: int,
+	run_root: Path | None,
+	it: int,
+) -> None:
+	"""Score + optional PNG dump into <run>/tXXXX/."""
+	if mock_scores:
+		row["score"] = (
+			abs(hash((tuple(row["point_ids"]), row["power"], it))) % 1000 / 1000.0
+		)
+		row["score_kind"] = "mock"
+	elif relay is not None and f0_frames and f1_frames:
+		try:
+			row["score"] = score_group_dff(
+				f0_frames, f1_frames, gpts, radius=disk_radius
+			)
+			row["score_kind"] = "relay_disk_dff"
+		except Exception as exc:
+			row["score"] = None
+			row["score_kind"] = "error"
+			print(f"  score failed: {exc}")
+	else:
+		row["score_kind"] = "none"
+
+	if run_root is not None and f0_frames and f1_frames:
+		from prairie_live.trial_images import save_trial_images
+
+		try:
+			paths = save_trial_images(
+				run_root,
+				trial_index=int(row["trial_index"]),
+				frames_f0=f0_frames,
+				frames_f1=f1_frames,
+				points=gpts,
+				radius=disk_radius,
+			)
+			row["image_paths"] = paths
+			print(f"  saved images → {paths['trial_dir']}")
+		except Exception as exc:
+			# Stim already happened — do not abort the session on PNG errors.
+			row["image_paths"] = None
+			print(f"  image save failed: {exc}")
+	elif run_root is not None:
+		row["image_paths"] = None
+		print("  images_dir set but no frames (relay --grab + Live/T-series?)")
+
+
+def _run_slm_packed_batch(
+	*,
+	groups_pts: list[list[dict]],
+	power: float,
+	it: int,
+	trial_index_start: int,
+	meta: dict,
+	slm_params: dict,
+	trig_sel: str,
+	trigger: str,
+	ttl: Any | None,
+	ttl_width_s: float,
+	inter_trial_s: float,
+	pad_ms: float,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+	scope_xml: str | None,
+	log: Any,
+	dry_run: bool,
+	mock_scores: bool,
+	f0_s: float,
+	f1_s: float,
+	frame_poll_s: float,
+	disk_radius: int,
+	run_root: Path | None,
+	on_trial: Callable[[dict], None] | None,
+) -> list[dict]:
+	"""
+	One -slm command for all groups at this power; one TTL per group.
+
+	trigger_index i (0-based) is the i-th DTR pulse and maps to groups_pts[i].
+	"""
+	from prairie_live.mark_all_points import pack_mark_all_points
+
+	n = len(groups_pts)
+	# PV Delay between packed sets: cover stim + pad so next PFI1 is accepted
+	# only after the prior hologram finishes (software also sleeps per pulse).
+	delay_ms = (
+		float(slm_params.get("duration_ms") or 0)
+		+ float(pad_ms)
+		+ float(inter_trial_s) * 1000.0
+	)
+	slm_parts = pack_mark_all_points(
+		groups_pts,
+		power=power,
+		laser=slm_params["laser"],
+		duration_ms=slm_params["duration_ms"],
+		use_3d=slm_params["use_3d"],
+		spiral=slm_params["spiral"],
+		spiral_size_um=slm_params["spiral_size_um"],
+		spiral_revolutions=slm_params["spiral_revolutions"],
+		fov_width_um=slm_params["fov_width_um"],
+		trigger_selection=trig_sel,
+		delay_ms=delay_ms,
+	)
+	# Audit XML: one MarkPoint step per group (same order as packed -slm).
+	steps = []
+	group_map: list[dict] = []
+	for gi, gpts in enumerate(groups_pts):
+		gname = f"PL_t{trial_index_start + gi:04d}_g{gi + 1}"
+		steps.append(
+			build_group_step(
+				gpts,
+				name=gname,
+				power=power,
+				meta=meta,
+				trigger_selection=trig_sel,
+			)
+		)
+		group_map.append(
+			{
+				"trigger_index": gi,
+				"group_index": gi,
+				"group_name": gname,
+				"point_ids": [str(p["id"]) for p in gpts],
+			}
+		)
+	if scope_xml:
+		write_scope_xml(steps, scope_xml)
+
+	t_cmd = time.time()
+	# One session-level map so offline analysis can join pulse → group.
+	log.write(
+		{
+			"phase": "slm_packed",
+			"iteration": it,
+			"power": power,
+			"stim_mode": "slm",
+			"n_triggers": n,
+			"group_trigger_map": group_map,
+			"slm_parts": slm_parts,
+			"t_cmd": t_cmd,
+			"run_root": str(run_root) if run_root else None,
+		}
+	)
+
+	if dry_run:
+		print(
+			f"  [dry] packed -slm power={power} n_groups={n} "
+			f"cmd={' '.join(slm_parts)}"
+		)
+	else:
+		_fire_mark_all_points(
+			parts=slm_parts,
+			wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+			pl=pl,
+			relay=relay,
+			via_relay=via_relay,
+		)
+		print(f"  packed -slm power={power} n_groups={n} (awaiting {n} triggers)")
+
+	wait_s = (
+		float(slm_params.get("duration_ms") or 0)
+		+ float(slm_params.get("initial_delay_ms") or 0)
+		+ pad_ms
+	) / 1000.0
+	want = _want_frames(
+		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
+	)
+	rows: list[dict] = []
+	for gi, gpts in enumerate(groups_pts):
+		entry = group_map[gi]
+		trial_index = trial_index_start + gi
+		row: dict[str, Any] = {
+			"trial_index": trial_index,
+			"iteration": it,
+			"group_index": gi,
+			"trigger_index": gi,
+			"n_triggers": n,
+			"group_name": entry["group_name"],
+			"point_ids": entry["point_ids"],
+			"power": power,
+			"trigger": trigger,
+			"trigger_selection": trig_sel,
+			"stim_mode": "slm",
+			"slm_parts": slm_parts,
+			"group_trigger_map": group_map,
+			"t_cmd": t_cmd,
+			"t_ttl": None,
+			"score": None,
+			"score_kind": None,
+			"image_paths": None,
+		}
+		log.write({**row, "phase": "armed"})
+
+		f0_frames: list[np.ndarray] = []
+		f1_frames: list[np.ndarray] = []
+		if want:
+			f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+
+		if trigger == "serial" and ttl is not None and not dry_run:
+			# Pulse gi fires packed set gi — identity is our count, not PV.
+			row["t_ttl"] = time.time()
+			ttl.pulse_dtr(ttl_width_s)
+			print(
+				f"  trigger {gi}/{n - 1}: trial {trial_index} "
+				f"pts={entry['point_ids']}"
+			)
+		elif trigger == "none":
+			row["t_ttl"] = row["t_cmd"]
+			print(
+				f"  [none] trigger_index={gi} trial {trial_index} "
+				f"pts={entry['point_ids']}"
+			)
+		else:
+			# wait: external TTL; stamp when we expect pulse gi.
+			row["t_ttl"] = time.time()
+			print(
+				f"  wait trigger {gi}/{n - 1}: trial {trial_index} "
+				f"pts={entry['point_ids']}"
+			)
+
+		if want:
+			f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+		else:
+			time.sleep(max(wait_s, 0.0))
+
+		_finish_trial_frames(
+			row,
+			gpts=gpts,
+			f0_frames=f0_frames,
+			f1_frames=f1_frames,
+			mock_scores=mock_scores,
+			relay=relay,
+			disk_radius=disk_radius,
+			run_root=run_root,
+			it=it,
+		)
+
+		log.write({**row, "phase": "done"})
+		if on_trial:
+			on_trial(row)
+		rows.append(row)
+		if inter_trial_s > 0 and gi < n - 1:
+			time.sleep(inter_trial_s)
+	return rows
+
+
+def _run_series_trial(
+	*,
+	gpts: list[dict],
+	gi: int,
+	power: float,
+	it: int,
+	trial_index: int,
+	meta: dict,
+	trig_sel: str,
+	trigger: str,
+	ttl: Any | None,
+	ttl_width_s: float,
+	inter_trial_s: float,
+	pad_ms: float,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+	scope_xml: str | None,
+	log: Any,
+	dry_run: bool,
+	mock_scores: bool,
+	f0_s: float,
+	f1_s: float,
+	frame_poll_s: float,
+	disk_radius: int,
+	run_root: Path | None,
+	on_trial: Callable[[dict], None] | None,
+) -> dict:
+	"""One group × power via -LoadMarkPoints / -MarkPoints."""
+	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
+	step = build_group_step(
+		gpts,
+		name=gname,
+		power=power,
+		meta=meta,
+		trigger_selection=trig_sel,
+	)
+	series = [step]
+	point_ids = [str(p["id"]) for p in gpts]
+	row: dict[str, Any] = {
+		"trial_index": trial_index,
+		"iteration": it,
+		"group_index": gi,
+		"group_name": gname,
+		"point_ids": point_ids,
+		"power": power,
+		"trigger": trigger,
+		"trigger_selection": trig_sel,
+		"stim_mode": "series",
+		"t_cmd": None,
+		"t_ttl": None,
+		"score": None,
+		"score_kind": None,
+		"image_paths": None,
+	}
+	xml = groups_to_xml(series)
+	if scope_xml:
+		write_scope_xml(series, scope_xml)
+
+	row["t_cmd"] = time.time()
+	log.write({**row, "phase": "armed"})
+
+	if dry_run:
+		print(f"  [dry] trial {trial_index}: {gname} power={power} pts={point_ids}")
+	else:
+		_fire_mark_points(
+			xml=xml,
+			scope_xml=scope_xml,
+			pl=pl,
+			relay=relay,
+			via_relay=via_relay,
+		)
+		print(f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids}")
+
+	want = _want_frames(
+		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
+	)
+	f0_frames: list[np.ndarray] = []
+	f1_frames: list[np.ndarray] = []
+	if want:
+		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+
+	if trigger == "serial" and ttl is not None and not dry_run:
+		row["t_ttl"] = time.time()
+		ttl.pulse_dtr(ttl_width_s)
+	elif trigger == "none":
+		row["t_ttl"] = row["t_cmd"]
+	else:
+		row["t_ttl"] = time.time()
+
+	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
+	if want:
+		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+	else:
+		time.sleep(max(wait_s, 0.0))
+
+	_finish_trial_frames(
+		row,
+		gpts=gpts,
+		f0_frames=f0_frames,
+		f1_frames=f1_frames,
+		mock_scores=mock_scores,
+		relay=relay,
+		disk_radius=disk_radius,
+		run_root=run_root,
+		it=it,
+	)
+
+	log.write({**row, "phase": "done"})
+	if on_trial:
+		on_trial(row)
+	if inter_trial_s > 0:
+		time.sleep(inter_trial_s)
+	return row
+
+
+def _fire_mark_all_points(
+	*,
+	parts: list[str],
+	wait_ms: float,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+) -> None:
+	"""Send -MarkAllPoints (-slm); prefer relay when via_relay."""
+	if via_relay:
+		if relay is None:
+			raise RuntimeError("via_relay set but relay client is not connected")
+		out = relay.mark_all_points(parts, wait_ms=wait_ms)
+		if not out.get("ok", False):
+			raise RuntimeError(f"relay mark_all_points failed: {out}")
+		return
+	if pl is None:
+		raise RuntimeError("need PrairieLink or --via-relay for stim_mode=slm")
+	# TCP path: optional -Wait then -MarkAllPoints as separate commands.
+	if wait_ms and float(wait_ms) > 0:
+		# PV requires integer ms for -Wait.
+		pl.send_command("-Wait", str(int(round(float(wait_ms)))))
+	pl.send_command(*parts)
 
 
 def _fire_mark_points(
@@ -436,7 +857,7 @@ def main(argv: list[str] | None = None) -> None:
 	p.add_argument(
 		"--powers",
 		default=None,
-		help="Comma-separated UncagingLaserPower values per group",
+		help="Comma-separated UncagingLaserPower values (UI scale: 0,75,140 — not 0–1)",
 	)
 	p.add_argument("--seed", type=int, default=None)
 	p.add_argument(
@@ -465,6 +886,12 @@ def main(argv: list[str] | None = None) -> None:
 	p.add_argument("--frame-poll", type=float, default=None)
 	p.add_argument("--disk-radius", type=int, default=None)
 	p.add_argument(
+		"--images-dir",
+		default=None,
+		help="Save F0/F1/ΔF/F PNGs under <dir>/<run_id>/tXXXX/ "
+		"(needs relay --grab + live frames)",
+	)
+	p.add_argument(
 		"--dry-run",
 		action="store_true",
 		help="Write XML + JSONL only (no PrairieLink / serial)",
@@ -473,6 +900,12 @@ def main(argv: list[str] | None = None) -> None:
 		"--inspect",
 		action="store_true",
 		help="Print points pool from --series and exit",
+	)
+	p.add_argument(
+		"--stim-mode",
+		choices=("series", "slm"),
+		default=None,
+		help="series=-LoadMarkPoints/-MarkPoints; slm=-MarkAllPoints simultaneous",
 	)
 	# Parse full argv (includes --config) so --help lists every flag once.
 	args = p.parse_args(argv)
@@ -502,10 +935,15 @@ def main(argv: list[str] | None = None) -> None:
 	if not series:
 		raise SystemExit("need --series PATH or series in experiment.json")
 
+	gs = int(opt["group_size"])
+	if gs < 3:
+		raise SystemExit(f"group_size must be >= 3 (got {gs})")
+
 	steps = load_mark_points_file(series)
 	points = extract_unique_points(steps)
 	meta = apply_stim_to_meta(template_meta(steps), opt)
 	powers = opt["powers"]
+	src_kind = "gpl" if str(series).lower().endswith(".gpl") else "xml"
 	# Point spiral size from experiment when cloning pool points.
 	if opt.get("spiral_size_um") is not None:
 		for pt in points:
@@ -514,19 +952,65 @@ def main(argv: list[str] | None = None) -> None:
 		for pt in points:
 			pt["is_spiral"] = "True" if bool(opt["spiral"]) else "False"
 
-	stim_mode = str(opt.get("stim_mode", "series"))
-	print(
-		f"points pool: {len(points)}  powers={powers}  trigger={opt['trigger']}  "
-		f"stim_mode={stim_mode}  laser={meta.get('uncaging_laser')}"
-	)
-	if stim_mode == "slm":
-		# Fire path still uses -lmp/-mp until --stim-mode slm is implemented.
+	stim_mode = str(opt.get("stim_mode", "series")).lower()
+	if stim_mode not in ("series", "slm"):
+		raise SystemExit(f"stim_mode must be 'series' or 'slm', got {stim_mode!r}")
+
+	# .gpl X/Y are often galvo-list coords outside imaging FOV 0–1. -slm treats
+	# them as FOV fractions and fires off-screen; use -lmp/-mp like the UI.
+	oob = [
+		p
+		for p in points
+		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
+	]
+	if stim_mode == "slm" and oob:
 		print(
-			"NOTE: stim_mode=slm recorded in config/meta; "
-			"runtime still uses series -lmp/-mp until MarkAllPoints lands."
+			f"NOTE: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
+			"(typical of .gpl galvo lists). -MarkAllPoints would mis-read "
+			"those as FOV fractions. Switching stim_mode → series "
+			"(-LoadMarkPoints / -MarkPoints), AllPointsAtOnce."
+		)
+		stim_mode = "series"
+		opt["all_points_at_once"] = True
+	# Match .gpl Z / Duration when present (after config merge).
+	if any(abs(float(p.get("z", 0))) > 1e-6 for p in points):
+		opt["use_3d"] = True
+		print("NOTE: nonzero Z on points → Use3D=True")
+	gpl_durs = [p.get("duration_ms") for p in points if p.get("duration_ms")]
+	if gpl_durs and float(opt.get("duration_ms") or 0) in (0.0, 16.92):
+		opt["duration_ms"] = float(gpl_durs[0])
+		print(f"NOTE: using Duration={opt['duration_ms']} ms from .gpl")
+	meta = apply_stim_to_meta(meta, opt)
+
+	print(
+		f"points pool: {len(points)} from {src_kind}  powers={powers}  "
+		f"trigger={opt['trigger']}  stim_mode={stim_mode}  "
+		f"laser={meta.get('uncaging_laser')}  group_size={gs}"
+	)
+	# Flag .gpl / XML coords that leave the visible FOV (valid for -slm galvos,
+	# but disk ΔF/F and PNG marks only work for ~0–1).
+	if oob:
+		print(
+			f"WARNING: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
+			"(ok for .gpl/-lmp; imaging-FOV scoring skips them). Examples:"
+		)
+		for p in oob[:5]:
+			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
+	if stim_mode == "slm":
+		# Spiral µm→FOV fraction needs optical FOV width (not in MarkPoints XML).
+		spiral_on = str(meta.get("is_spiral", "True")).lower() in ("true", "1", "yes")
+		if spiral_on and meta.get("fov_width_um") in (None, ""):
+			raise SystemExit(
+				"stim_mode=slm with spiral requires fov_width_um in experiment.json "
+				"(µm across the FOV; used to convert spiral_size_um → -slm fraction)"
+			)
+		print(
+			"stim_mode=slm → random groups → -MarkAllPoints (-slm) per trial "
+			"(series XML written if scope_xml set; not loaded via -lmp)"
 		)
 	if opt.get("inspect"):
 		zero = 0
+		oob_n = 0
 		for pt in points:
 			print(
 				f"  Point {pt['id']}  ({pt['x']:.4f}, {pt['y']:.4f}, "
@@ -534,19 +1018,36 @@ def main(argv: list[str] | None = None) -> None:
 			)
 			if float(pt.get("x", 0)) == 0.0 and float(pt.get("y", 0)) == 0.0:
 				zero += 1
+			if not (
+				0.0 <= float(pt["x"]) <= 1.0 and 0.0 <= float(pt["y"]) <= 1.0
+			):
+				oob_n += 1
 		if zero:
 			print(
 				f"WARNING: {zero}/{len(points)} points at (0,0) — "
 				"file may be slim/group-name-only or a bad copy. "
 				"Prefer a fat MarkPoints.xml with nested <Point X Y Z>."
 			)
-		else:
-			print(f"OK: {len(points)} points with FOV coordinates.")
+		if oob_n:
+			print(
+				f"WARNING: {oob_n}/{len(points)} points have X/Y outside 0–1. "
+				"Those land outside the visible imaging FOV — you will not see "
+				"spots on the PV display. Re-export points from the UI while "
+				"looking at the FOV, or fix the .gpl/.xml."
+			)
+		elif not zero:
+			print(
+				f"OK: {len(points)} points with X/Y inside visible FOV (0–1)."
+			)
 		return
 
 	via_relay = bool(opt.get("via_relay"))
-	if not opt.get("dry_run") and not via_relay and not opt.get("scope_xml"):
-		raise SystemExit("need --via-relay HOST:PORT or --scope-xml PATH (or config)")
+	# series needs a writable XML path or relay; slm only needs relay or TCP.
+	if not opt.get("dry_run") and not via_relay:
+		if stim_mode == "series" and not opt.get("scope_xml"):
+			raise SystemExit(
+				"need --via-relay HOST:PORT or --scope-xml PATH (or config)"
+			)
 
 	ttl = None
 	pl = None
@@ -602,6 +1103,8 @@ def main(argv: list[str] | None = None) -> None:
 			disk_radius=int(opt["disk_radius"]),
 			elite_frac=float(opt["elite_frac"]),
 			dry_run=bool(opt.get("dry_run")),
+			stim_mode=stim_mode,
+			images_dir=opt.get("images_dir"),
 		)
 	finally:
 		log.close()

@@ -30,13 +30,28 @@ _COM_SCRIPT_TIMEOUT_S = 45.0
 
 
 class Relay:
-	def __init__(self, pv_host: str, password: str, channel: int):
+	def __init__(
+		self,
+		pv_host: str,
+		password: str,
+		channel: int,
+		*,
+		image_wh=(512, 512),
+		grab: bool = False,
+	):
 		self.channel = channel
 		self.password = password
 		self.pv_host = pv_host
 		self.com = PrairieCom(pv_host, password)
-		# Separate COM session for scripts so GetImage never blocks -lmp/-mp.
+		# (height, width) — matches numpy frame.shape / GetImage_2 args.
+		h, w = image_wh
+		self.com._last_wh = (int(h), int(w))
+		# Same COM as grab — a second Connect races password vs -gi on port 1236
+		# ("unexpected parameter 0000-gi"). Scripts pause grab via _pause_grab.
 		self.script_com: PrairieCom | None = None
+		# Default off: GetImage_2 maps to script -gi with process/buffer addresses
+		# and PV then reports "Unexpected parameter <huge number>".
+		self._grab_enabled = bool(grab)
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
@@ -45,20 +60,24 @@ class Relay:
 
 	def start(self) -> None:
 		self.com.connect()
-		self.script_com = PrairieCom(self.pv_host, self.password)
-		self.script_com.connect()
-		threading.Thread(target=self._grab_loop, daemon=True).start()
+		self.script_com = self.com
+		if self._grab_enabled:
+			# Let Connect finish before the first GetImage_2.
+			time.sleep(0.3)
+			threading.Thread(target=self._grab_loop, daemon=True).start()
+			print("grab ON (GetImage_2); use without --grab if PV shows -gi errors")
+		else:
+			print("grab OFF (default); pass --grab only when you need live frames")
 
 	def stop(self) -> None:
 		self._stop.set()
 		self._pause_grab.set()
-		for c in (self.com, self.script_com):
-			if c is None:
-				continue
+		if self.com is not None:
 			try:
-				c.disconnect()
+				self.com.disconnect()
 			except Exception:
 				pass
+		self.script_com = None
 
 	def _grab_loop(self) -> None:
 		# win32com must be CoInitialized on every thread that calls COM.
@@ -158,6 +177,14 @@ class Relay:
 			elif cmd == "mark_points":
 				self._run_script_com(sc.mark_points)
 				return {"ok": True, "cmd": "mark_points"}
+			elif cmd == "mark_all_points":
+				parts = payload.get("parts") or []
+				if not isinstance(parts, list) or not parts:
+					raise ValueError("mark_all_points requires non-empty parts list")
+				wait_ms = float(payload.get("wait_ms") or 0.0)
+				return self._run_script_com(
+					lambda: sc.mark_all_points(parts, wait_ms=wait_ms)
+				)
 			else:
 				return {"ok": False, "error": f"unknown cmd {cmd}"}
 			return {"ok": True, "cmd": cmd}
@@ -370,9 +397,29 @@ def main(argv=None) -> None:
 	p.add_argument("--port", type=int, default=DEFAULT_PORT)
 	p.add_argument("--channel", type=int, default=1)
 	p.add_argument("--fps", type=float, default=20.0)
+	# Avoid COM PixelsPerLine(); pass known FOV size into GetImage_2.
+	p.add_argument("--width", type=int, default=512, help="pixelsPerLine for GetImage_2")
+	p.add_argument("--height", type=int, default=512, help="linesPerFrame for GetImage_2")
+	p.add_argument(
+		"--grab",
+		action="store_true",
+		help="Enable GetImage_2 frame streaming (off by default; can trip PV -gi errors)",
+	)
+	p.add_argument(
+		"--no-grab",
+		action="store_true",
+		help=argparse.SUPPRESS,  # backward alias; grab is already off by default
+	)
 	args = p.parse_args(argv)
 
-	relay = Relay(args.pv_host, args.password, args.channel)
+	do_grab = bool(args.grab) and not bool(args.no_grab)
+	relay = Relay(
+		args.pv_host,
+		args.password,
+		args.channel,
+		image_wh=(args.height, args.width),
+		grab=do_grab,
+	)
 	relay.start()
 	try:
 		listen(relay, args.bind, args.port, args.fps)

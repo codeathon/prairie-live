@@ -65,6 +65,9 @@ set PYTHONPATH=%CD%\src
 python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --fps 12
 ```
 
+Grab/streaming is **off by default** (COM GetImage can surface PV errors like
+`Unexpected parameter <address>`). Add `--grab` only for the live viewer.
+
 Success looks like:
 
 ```
@@ -179,9 +182,10 @@ PC (PackIO→PFI). **No Windows file share is required** when using `--via-relay
 the analysis PC pushes the trial XML over the relay; the scope writes it
 locally and runs `-LoadMarkPoints` / `-MarkPoints`.
 
-Prefer a fat `MarkPoints.xml` (`PVMarkPointSeriesElements` with nested
-`<Point X Y Z>`). Copy that file to the analysis PC once (USB/email) for
-`--series`.
+Prefer a fat `MarkPoints.xml` **or** a `.gpl` point list (`PVGalvoPointList`)
+for `--series`. With `stim_mode=slm`, points are randomly grouped (≥3 per
+group), packed into one `-MarkAllPoints` command per power, and each DTR
+pulse advances to the next packed set (`trigger_index` in the JSONL).
 
 Paste one line at a time in **PowerShell**. (Cmd.exe: use `set PYTHONPATH=%CD%\src` instead of `$env:PYTHONPATH`.)
 
@@ -211,13 +215,13 @@ $env:PYTHONPATH = "$PWD\src"
 Software trigger (no serial) — one paste:
 
 ```powershell
-python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger none --mock-scores --log trials.jsonl
+python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,75 --trigger none --mock-scores --log trials.jsonl
 ```
 
 DTR photostim on COM3 (wire DTR to PFI1) — one paste:
 
 ```powershell
-python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,0.75 --trigger serial --serial COM3 --mock-scores --log trials.jsonl
+python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,75 --trigger serial --serial COM3 --mock-scores --log trials.jsonl
 ```
 
 `--via-relay` replaces `--scope-xml` + direct port 1236 for Mark Points. The
@@ -237,12 +241,18 @@ python -m prairie_live mp-sync --config experiment.json
 python -m prairie_live mp-sync --config experiment.json --iterations 2
 ```
 
-SLM-oriented fields in the file: `stim_mode`, `laser` (`Monaco`), `use_3d`,
-`spiral`, `spiral_size_um` (54.5), `spiral_revolutions` (8),
-`trigger_selection` (`PFI1`), `fov_width_um` (for converting µm → FOV
-fraction when `-MarkAllPoints` lands). Runtime still uses series `-lmp`/`-mp`
-until `stim_mode=slm` fire path is implemented; meta/laser/spiral overlays
-already apply.
+SLM-oriented fields: `stim_mode` (`series` | `slm`), `laser` (`Monaco`),
+`use_3d`, `spiral`, `spiral_size_um` (54.5), `spiral_revolutions` (8),
+`trigger_selection` (`PFI1`), `fov_width_um` (required for spiral when
+`stim_mode=slm` — converts µm → FOV fraction for `-MarkAllPoints` / `-slm`).
+
+- `stim_mode=series` (default): `-LoadMarkPoints` + `-MarkPoints` per trial
+- `stim_mode=slm`: pack all groups (per power) into one `-MarkAllPoints` /
+  `-slm` string; each set uses `Trigger=PFI1` with Delay between sets. One
+  DTR pulse per group; JSONL `trigger_index` / `group_trigger_map` records
+  which pulse fired which group (PV does not report this). Spiral needs
+  `fov_width_um` set to the optical FOV
+  width in µm.
 
 ### Trial log (`trials.jsonl`)
 
@@ -254,7 +264,7 @@ One JSON object per line. Each trial produces two rows:
 
 | `phase` | When |
 |---------|------|
-| `armed` | Identity written; `-lmp` / `-mp` sent to scope |
+| `armed` | Identity written; series `-lmp`/`-mp` or SLM `-slm` sent |
 | `done` | Trial finished — **use these rows** for results |
 
 Key fields on `done` rows:
@@ -265,7 +275,7 @@ Key fields on `done` rows:
 | `group_name` | Group label in the trial XML (e.g. `PL_t0002_g2`) |
 | `group_index` | 0-based group slot this iteration |
 | `point_ids` | FOV point indices stimulated this trial |
-| `power` | `UncagingLaserPower` for this trial (e.g. `0.0`, `0.75`) |
+| `power` | `UncagingLaserPower` for this trial (UI scale, e.g. `0`, `75`, `140`) |
 | `trigger` | `none`, `serial`, or `wait` |
 | `trigger_selection` | `None` or `PFI1` (external trigger line in XML) |
 | `t_cmd` | Unix time when Mark Points commands were sent |
@@ -275,7 +285,10 @@ Key fields on `done` rows:
 
 **What is stored:** trial identity, TTL timing, and **one group-mean score**
 per trial. Per-point ΔF/F is used in-memory to regroup on the next iteration
-but is **not** written to a separate file. Relay frames are not saved.
+but is **not** written to a separate file. With `images_dir` / `--images-dir`,
+mean F0/F1/ΔF/F PNGs are saved under
+`<images_dir>/<run_id>/tXXXX/{f0,f1,dff}.png` (paths in JSONL `image_paths`);
+needs relay `--grab` and Live/T-series. Otherwise relay frames are discarded.
 
 Read completed trials in PowerShell:
 

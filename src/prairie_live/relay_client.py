@@ -89,6 +89,13 @@ class RelayClient:
 		"""Run current Mark Points series on the scope (-MarkPoints)."""
 		return self._command({"cmd": "mark_points"})
 
+	def mark_all_points(self, parts: list[str], *, wait_ms: float = 0.0) -> dict:
+		"""Simultaneous SLM fire (-MarkAllPoints / -slm) on the scope."""
+		payload: dict = {"cmd": "mark_all_points", "parts": list(parts)}
+		if wait_ms and float(wait_ms) > 0:
+			payload["wait_ms"] = float(wait_ms)
+		return self._command(payload)
+
 	def _command(self, payload: dict) -> dict:
 		if self._ctrl_file is None:
 			raise RuntimeError("not connected")

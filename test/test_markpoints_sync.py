@@ -13,6 +13,7 @@ from prairie_live.markpoints import (
 	estimate_series_ms,
 	extract_unique_points,
 	groups_to_xml,
+	parse_galvo_point_list,
 	parse_mark_points,
 	template_meta,
 )
@@ -42,6 +43,16 @@ FAT_XML = """<?xml version="1.1"?>
 </PVMarkPointSeriesElements>
 """
 
+GPL_XML = """<?xml version="1.0"?>
+<PVGalvoPointList>
+  <Point Index="1" X="0.11" Y="0.21" Z="0" IsSpiral="True" SpiralSizeInMicrons="54.5"/>
+  <Point Index="2" X="0.31" Y="0.41" Z="0" IsSpiral="True" SpiralSizeInMicrons="54.5"/>
+  <Point Index="3" X="0.51" Y="0.61" Z="0" IsSpiral="True" SpiralSizeInMicrons="54.5"/>
+  <Point Index="4" X="0.71" Y="0.81" Z="0" IsSpiral="True" SpiralSizeInMicrons="54.5"/>
+  <Point Index="5" X="0.15" Y="0.25" Z="0"/>
+</PVGalvoPointList>
+"""
+
 
 def test_lab_fallback_defaults():
 	# When series omits fields, use lab UI defaults (Monaco / 2D / 54.5 µm / 8).
@@ -68,6 +79,32 @@ def test_parse_and_extract_points():
 	pts = extract_unique_points(steps)
 	assert [p["id"] for p in pts] == ["1", "2", "3", "4"]
 	assert pts[0]["x"] == 0.10
+
+
+def test_parse_gpl_point_list():
+	pts = parse_galvo_point_list(GPL_XML)
+	assert len(pts) == 5
+	assert pts[0]["x"] == 0.11
+	steps = parse_mark_points(GPL_XML)
+	pool = extract_unique_points(steps)
+	assert len(pool) == 5
+	assert pool[2]["id"] == "3"
+
+
+def test_load_truncated_gpl_raises_clear_error(tmp_path: Path):
+	from prairie_live.markpoints import load_mark_points_file
+
+	path = tmp_path / "broken.gpl"
+	# Cut mid-file: common after a bad copy/export.
+	path.write_text(GPL_XML.rsplit("</PVGalvoPoint", 1)[0], encoding="utf-8")
+	try:
+		load_mark_points_file(str(path))
+		assert False, "expected ValueError"
+	except ValueError as e:
+		msg = str(e)
+		assert "invalid XML" in msg
+		assert "truncated" in msg or "unclosed" in msg.lower()
+		assert "broken.gpl" in msg
 
 
 def test_roundtrip_xml_keeps_coords():
@@ -118,6 +155,15 @@ def test_aggregate_and_dff():
 	assert disk_mean(f1, 0.5, 0.5, 2) > 10
 
 
+def test_disk_mean_oob_returns_none():
+	frame = np.zeros((32, 32), dtype=np.float32)
+	assert disk_mean(frame, 0.5, 0.5, 2) == 0.0
+	# Prairie allows galvo coords outside the visible FOV.
+	assert disk_mean(frame, -2.9, 0.5, 2) is None
+	assert disk_mean(frame, 0.5, 3.0, 2) is None
+	assert score_group_dff([frame], [frame], [{"x": -2.9, "y": 0.5}]) == 0.0
+
+
 def test_dry_run_writes_jsonl(tmp_path: Path):
 	steps = parse_mark_points(FAT_XML)
 	pts = extract_unique_points(steps)
@@ -134,7 +180,7 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 			scope_xml=scope,
 			n_iterations=2,
 			n_groups=2,
-			group_size=2,
+			group_size=3,
 			powers=[0.0, 0.75],
 			seed=7,
 			trigger="none",
@@ -181,6 +227,10 @@ class _FakeRelayMp:
 		self.calls.append("mark")
 		return {"ok": True, "cmd": "mark_points"}
 
+	def mark_all_points(self, parts, *, wait_ms=0.0):
+		self.calls.append(("slm", list(parts), wait_ms))
+		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts)}
+
 	def get_frame(self):
 		return None
 
@@ -200,7 +250,7 @@ def test_via_relay_fires_without_scope_xml(tmp_path: Path):
 			scope_xml=None,
 			n_iterations=1,
 			n_groups=1,
-			group_size=2,
+			group_size=3,
 			powers=[0.75],
 			seed=1,
 			trigger="none",
@@ -223,3 +273,174 @@ def test_via_relay_fires_without_scope_xml(tmp_path: Path):
 	assert len(rows) == 1
 	assert relay.calls[0][0] == "load"
 	assert relay.calls[1] == "mark"
+
+
+def test_gpl_slm_dry_run(tmp_path: Path):
+	steps = parse_mark_points(GPL_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 1136.7
+	meta["spiral_size_um"] = "54.5"
+	meta["is_spiral"] = "True"
+	meta["initial_delay_ms"] = 22.1
+	log_path = tmp_path / "gpl_slm.jsonl"
+	log = JsonlLog(log_path)
+	scope = tmp_path / "trial.xml"
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=str(scope),
+			n_iterations=1,
+			n_groups=2,
+			group_size=3,
+			powers=[0.75],
+			seed=1,
+			trigger="none",
+			ttl=None,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=None,
+			via_relay=False,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=True,
+			stim_mode="slm",
+		)
+	finally:
+		log.close()
+	assert len(rows) == 2
+	assert all(r["stim_mode"] == "slm" for r in rows)
+	assert all(len(r["point_ids"]) == 3 for r in rows)
+	# One packed command shared by both trials; trigger_index maps pulse → group.
+	assert rows[0]["slm_parts"] == rows[1]["slm_parts"]
+	assert rows[0]["slm_parts"][0] == "-MarkAllPoints"
+	assert rows[0]["trigger_index"] == 0
+	assert rows[1]["trigger_index"] == 1
+	assert rows[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
+	packed = [
+		json.loads(ln)
+		for ln in log_path.read_text(encoding="utf-8").splitlines()
+		if json.loads(ln).get("phase") == "slm_packed"
+	]
+	assert len(packed) == 1
+	assert packed[0]["n_triggers"] == 2
+	assert scope.is_file()
+	assert "PVMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
+
+
+def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 545.0
+	meta["spiral_size_um"] = "54.5"
+	meta["is_spiral"] = "True"
+	meta["initial_delay_ms"] = 22.1
+	log = JsonlLog(tmp_path / "slm_relay.jsonl")
+	relay = _FakeRelayMp()
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=None,
+			n_iterations=1,
+			n_groups=1,
+			group_size=3,
+			powers=[0.75],
+			seed=1,
+			trigger="none",
+			ttl=None,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+			stim_mode="slm",
+		)
+	finally:
+		log.close()
+	assert len(rows) == 1
+	assert len(relay.calls) == 1
+	kind, parts, wait_ms = relay.calls[0]
+	assert kind == "slm"
+	assert parts[0] == "-MarkAllPoints"
+	assert wait_ms == 22.1
+	# No series load/mark on SLM path.
+	assert all(c[0] != "load" for c in relay.calls if isinstance(c, tuple))
+
+
+class _FakeTtl:
+	def __init__(self):
+		self.pulses: list[float] = []
+
+	def pulse_dtr(self, width_s: float):
+		self.pulses.append(width_s)
+
+
+def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 545.0
+	meta["spiral_size_um"] = "54.5"
+	meta["is_spiral"] = "True"
+	meta["initial_delay_ms"] = 0.0
+	log = JsonlLog(tmp_path / "slm_pack.jsonl")
+	relay = _FakeRelayMp()
+	ttl = _FakeTtl()
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=None,
+			n_iterations=1,
+			n_groups=2,
+			group_size=3,
+			powers=[0.75],
+			seed=1,
+			trigger="serial",
+			ttl=ttl,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+			stim_mode="slm",
+		)
+	finally:
+		log.close()
+	# One packed -slm; two DTR pulses in group order.
+	assert len(relay.calls) == 1
+	assert relay.calls[0][0] == "slm"
+	assert len(ttl.pulses) == 2
+	assert [r["trigger_index"] for r in rows] == [0, 1]
+	assert rows[0]["point_ids"] == rows[0]["group_trigger_map"][0]["point_ids"]
+	assert rows[1]["point_ids"] == rows[1]["group_trigger_map"][1]["point_ids"]
+	# Packed string contains two PFI1 tokens (one per set) + Delay between.
+	assert relay.calls[0][1].count("PFI1") == 2
