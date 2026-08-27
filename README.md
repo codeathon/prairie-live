@@ -182,9 +182,10 @@ PC (PackIO→PFI). **No Windows file share is required** when using `--via-relay
 the analysis PC pushes the trial XML over the relay; the scope writes it
 locally and runs `-LoadMarkPoints` / `-MarkPoints`.
 
-Prefer a fat `MarkPoints.xml` (`PVMarkPointSeriesElements` with nested
-`<Point X Y Z>`). Copy that file to the analysis PC once (USB/email) for
-`--series`.
+Prefer a fat `MarkPoints.xml` **or** a `.gpl` point list (`PVGalvoPointList`)
+for `--series`. With `stim_mode=slm`, points are randomly grouped (≥3 per
+group) and each trial is fired with `-MarkAllPoints` (series XML may still be
+written for audit if `scope_xml` is set).
 
 Paste one line at a time in **PowerShell**. (Cmd.exe: use `set PYTHONPATH=%CD%\src` instead of `$env:PYTHONPATH`.)
 

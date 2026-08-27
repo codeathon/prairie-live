@@ -52,10 +52,15 @@ def form_groups(
 	Without scores: shuffle then chunk (with wrap if pool is small).
 	With scores: seed each group with elite responders, fill from the rest.
 	"""
-	if n_groups < 1 or group_size < 1:
-		raise ValueError("n_groups and group_size must be >= 1")
+	# Lab rule: every stim group has at least 3 points.
+	if n_groups < 1 or group_size < 3:
+		raise ValueError("n_groups must be >= 1 and group_size must be >= 3")
 	if not points:
 		raise ValueError("empty points pool")
+	if len(points) < 3:
+		raise ValueError(
+			f"need at least 3 points in the pool, got {len(points)}"
+		)
 
 	pool = list(points)
 	if scores:
@@ -280,7 +285,11 @@ def run_sync_loop(
 				}
 
 				slm_parts: list[str] | None = None
-				xml = ""
+				xml = groups_to_xml(series)
+				# Always build trial series XML (audit / optional write).
+				# Fire path: -slm uses coords only; series mode also -lmp/-mp.
+				if scope_xml:
+					write_scope_xml(series, scope_xml)
 				if mode == "slm":
 					slm_parts = build_mark_all_points_parts(
 						gpts,
@@ -295,10 +304,6 @@ def run_sync_loop(
 						trigger_selection=trig_sel,
 					)
 					row["slm_parts"] = slm_parts
-				else:
-					xml = groups_to_xml(series)
-					if scope_xml:
-						write_scope_xml(series, scope_xml)
 
 				row["t_cmd"] = time.time()
 				log.write({**row, "phase": "armed"})
@@ -592,10 +597,15 @@ def main(argv: list[str] | None = None) -> None:
 	if not series:
 		raise SystemExit("need --series PATH or series in experiment.json")
 
+	gs = int(opt["group_size"])
+	if gs < 3:
+		raise SystemExit(f"group_size must be >= 3 (got {gs})")
+
 	steps = load_mark_points_file(series)
 	points = extract_unique_points(steps)
 	meta = apply_stim_to_meta(template_meta(steps), opt)
 	powers = opt["powers"]
+	src_kind = "gpl" if str(series).lower().endswith(".gpl") else "xml"
 	# Point spiral size from experiment when cloning pool points.
 	if opt.get("spiral_size_um") is not None:
 		for pt in points:
@@ -608,8 +618,9 @@ def main(argv: list[str] | None = None) -> None:
 	if stim_mode not in ("series", "slm"):
 		raise SystemExit(f"stim_mode must be 'series' or 'slm', got {stim_mode!r}")
 	print(
-		f"points pool: {len(points)}  powers={powers}  trigger={opt['trigger']}  "
-		f"stim_mode={stim_mode}  laser={meta.get('uncaging_laser')}"
+		f"points pool: {len(points)} from {src_kind}  powers={powers}  "
+		f"trigger={opt['trigger']}  stim_mode={stim_mode}  "
+		f"laser={meta.get('uncaging_laser')}  group_size={gs}"
 	)
 	if stim_mode == "slm":
 		# Spiral µm→FOV fraction needs optical FOV width (not in MarkPoints XML).
@@ -620,8 +631,8 @@ def main(argv: list[str] | None = None) -> None:
 				"(µm across the FOV; used to convert spiral_size_um → -slm fraction)"
 			)
 		print(
-			"stim_mode=slm → -MarkAllPoints (-slm) per trial "
-			"(no -LoadMarkPoints); set fov_width_um for spiral sizing"
+			"stim_mode=slm → random groups → -MarkAllPoints (-slm) per trial "
+			"(series XML written if scope_xml set; not loaded via -lmp)"
 		)
 	if opt.get("inspect"):
 		zero = 0

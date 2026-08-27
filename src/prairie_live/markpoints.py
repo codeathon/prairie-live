@@ -1,7 +1,8 @@
-"""Mark Points series XML: parse, write, flatten points, build stim groups.
+"""Mark Points series XML + .gpl point lists: parse, write, group, flatten.
 
-PrairieView has no GetMarkPoints. The series file (prefer fat MarkPoints.xml
-with nested <Point X Y Z>) is the source of truth for coords and power.
+PrairieView has no GetMarkPoints. Source of coords is either a fat series
+.xml (PVMarkPointSeriesElements) or a .gpl point list (PVGalvoPointList).
+Trial fire may use -lmp/-mp (series) or -MarkAllPoints / -slm.
 """
 
 from __future__ import annotations
@@ -39,10 +40,10 @@ def parse_mark_points(xml_string: str) -> list[dict]:
 	"""
 	root = ET.fromstring(_strip_xml_decl(xml_string))
 	tag = _local(root.tag)
+	# .gpl point list → one synthetic step so extract_unique_points works.
 	if tag == "PVGalvoPointList":
-		raise ValueError(
-			"this looks like a point-list .gpl, not a Mark Points series .xml"
-		)
+		pts = parse_galvo_point_list(xml_string)
+		return [_gpl_as_step(pts)]
 
 	series_meta = {
 		"use_3d": root.attrib.get("Use3D", "False"),
@@ -63,14 +64,90 @@ def parse_mark_points(xml_string: str) -> list[dict]:
 	raise ValueError(
 		f"no Mark Points steps found under <{tag}>. "
 		f"Tags seen: {kids or '(none)'}. "
-		"Expected PVMarkPointElement under PVMarkPointSeriesElements."
+		"Expected PVMarkPointElement under PVMarkPointSeriesElements "
+		"or PVGalvoPointList (.gpl)."
 	)
 
 
+def parse_galvo_point_list(xml_string: str) -> list[dict]:
+	"""
+	Parse a PrairieView .gpl point list (PVGalvoPointList) into FOV points.
+
+	Accepts child tags Point / PVGalvoPoint / PVGalvoPointElement with X,Y[,Z].
+	"""
+	root = ET.fromstring(_strip_xml_decl(xml_string))
+	if _local(root.tag) != "PVGalvoPointList":
+		raise ValueError(
+			f"expected root <PVGalvoPointList>, got <{_local(root.tag)}>"
+		)
+	pts: list[dict] = []
+	seen: set[str] = set()
+	for el in root.iter():
+		lt = _local(el.tag)
+		if lt not in ("Point", "PVGalvoPoint", "PVGalvoPointElement"):
+			continue
+		if "X" not in el.attrib or "Y" not in el.attrib:
+			continue
+		idx = str(
+			el.attrib.get("Index")
+			or el.attrib.get("Id")
+			or el.attrib.get("Name")
+			or (len(pts) + 1)
+		)
+		if idx in seen:
+			continue
+		seen.add(idx)
+		row = {
+			"id": idx,
+			"name": el.attrib.get("Name", f"Point {idx}"),
+			"is_active": True,
+			"x": float(el.attrib["X"]),
+			"y": float(el.attrib["Y"]),
+			"z": float(el.attrib.get("Z", 0)),
+			"is_spiral": el.attrib.get("IsSpiral", _SPIRAL_DEFAULTS["is_spiral"]),
+			"spiral_width": el.attrib.get(
+				"SpiralWidth", _SPIRAL_DEFAULTS["spiral_width"]
+			),
+			"spiral_height": el.attrib.get(
+				"SpiralHeight", _SPIRAL_DEFAULTS["spiral_height"]
+			),
+			"spiral_size_um": el.attrib.get(
+				"SpiralSizeInMicrons", _SPIRAL_DEFAULTS["spiral_size_um"]
+			),
+		}
+		for k, v in _SPIRAL_DEFAULTS.items():
+			row.setdefault(k, v)
+		pts.append(row)
+	if not pts:
+		raise ValueError(
+			"no points with X/Y in <PVGalvoPointList> — check the .gpl file"
+		)
+	return pts
+
+
+def _gpl_as_step(pts: list[dict]) -> dict:
+	"""Wrap .gpl points as one series step (pool only; trials rebuild XML)."""
+	meta = template_meta([])
+	return {
+		"id": "1",
+		"name": "GPL",
+		"is_active": True,
+		"laser_pwr": 0.0,
+		"duration": float(meta["duration"]),
+		"repetitions": 1,
+		"points": pts,
+		"raw_points": "GPL",
+		"indices": _indices_from_points(pts),
+		**meta,
+	}
+
+
 def load_mark_points_file(path: str) -> list[dict]:
-	"""Read stim steps from a local series .xml (utf-8-sig strips Windows BOM)."""
+	"""Read stim steps from a local series .xml or point-list .gpl."""
 	with open(path, encoding="utf-8-sig") as f:
-		return parse_mark_points(f.read())
+		text = f.read()
+	# Extension hint; root tag still decides (parse_mark_points handles both).
+	return parse_mark_points(text)
 
 
 def extract_unique_points(steps: list[dict]) -> list[dict]:

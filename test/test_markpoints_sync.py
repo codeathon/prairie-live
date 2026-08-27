@@ -13,6 +13,7 @@ from prairie_live.markpoints import (
 	estimate_series_ms,
 	extract_unique_points,
 	groups_to_xml,
+	parse_galvo_point_list,
 	parse_mark_points,
 	template_meta,
 )
@@ -42,6 +43,16 @@ FAT_XML = """<?xml version="1.1"?>
 </PVMarkPointSeriesElements>
 """
 
+GPL_XML = """<?xml version="1.0"?>
+<PVGalvoPointList>
+  <Point Index="1" X="0.11" Y="0.21" Z="0" IsSpiral="True" SpiralSizeInMicrons="54.5"/>
+  <Point Index="2" X="0.31" Y="0.41" Z="0" IsSpiral="True" SpiralSizeInMicrons="54.5"/>
+  <Point Index="3" X="0.51" Y="0.61" Z="0" IsSpiral="True" SpiralSizeInMicrons="54.5"/>
+  <Point Index="4" X="0.71" Y="0.81" Z="0" IsSpiral="True" SpiralSizeInMicrons="54.5"/>
+  <Point Index="5" X="0.15" Y="0.25" Z="0"/>
+</PVGalvoPointList>
+"""
+
 
 def test_lab_fallback_defaults():
 	# When series omits fields, use lab UI defaults (Monaco / 2D / 54.5 µm / 8).
@@ -68,6 +79,16 @@ def test_parse_and_extract_points():
 	pts = extract_unique_points(steps)
 	assert [p["id"] for p in pts] == ["1", "2", "3", "4"]
 	assert pts[0]["x"] == 0.10
+
+
+def test_parse_gpl_point_list():
+	pts = parse_galvo_point_list(GPL_XML)
+	assert len(pts) == 5
+	assert pts[0]["x"] == 0.11
+	steps = parse_mark_points(GPL_XML)
+	pool = extract_unique_points(steps)
+	assert len(pool) == 5
+	assert pool[2]["id"] == "3"
 
 
 def test_roundtrip_xml_keeps_coords():
@@ -134,7 +155,7 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 			scope_xml=scope,
 			n_iterations=2,
 			n_groups=2,
-			group_size=2,
+			group_size=3,
 			powers=[0.0, 0.75],
 			seed=7,
 			trigger="none",
@@ -204,7 +225,7 @@ def test_via_relay_fires_without_scope_xml(tmp_path: Path):
 			scope_xml=None,
 			n_iterations=1,
 			n_groups=1,
-			group_size=2,
+			group_size=3,
 			powers=[0.75],
 			seed=1,
 			trigger="none",
@@ -229,17 +250,16 @@ def test_via_relay_fires_without_scope_xml(tmp_path: Path):
 	assert relay.calls[1] == "mark"
 
 
-def test_slm_dry_run_no_xml(tmp_path: Path):
-	steps = parse_mark_points(FAT_XML)
+def test_gpl_slm_dry_run(tmp_path: Path):
+	steps = parse_mark_points(GPL_XML)
 	pts = extract_unique_points(steps)
 	meta = template_meta(steps)
-	meta["fov_width_um"] = 545.0
+	meta["fov_width_um"] = 1136.7
 	meta["spiral_size_um"] = "54.5"
 	meta["is_spiral"] = "True"
 	meta["initial_delay_ms"] = 22.1
-	log_path = tmp_path / "slm.jsonl"
-	scope = tmp_path / "should_not_exist.xml"
-	log = JsonlLog(log_path)
+	log = JsonlLog(tmp_path / "gpl_slm.jsonl")
+	scope = tmp_path / "trial.xml"
 	try:
 		rows = run_sync_loop(
 			points=pts,
@@ -248,8 +268,8 @@ def test_slm_dry_run_no_xml(tmp_path: Path):
 			log=log,
 			scope_xml=str(scope),
 			n_iterations=1,
-			n_groups=1,
-			group_size=2,
+			n_groups=2,
+			group_size=3,
 			powers=[0.75],
 			seed=1,
 			trigger="none",
@@ -270,16 +290,13 @@ def test_slm_dry_run_no_xml(tmp_path: Path):
 		)
 	finally:
 		log.close()
-	assert len(rows) == 1
-	assert rows[0]["stim_mode"] == "slm"
+	assert len(rows) == 2
+	assert all(r["stim_mode"] == "slm" for r in rows)
+	assert all(len(r["point_ids"]) == 3 for r in rows)
 	assert rows[0]["slm_parts"][0] == "-MarkAllPoints"
-	assert not scope.exists()
-	done = [
-		json.loads(ln)
-		for ln in log_path.read_text(encoding="utf-8").splitlines()
-		if json.loads(ln).get("phase") == "done"
-	]
-	assert done[0]["stim_mode"] == "slm"
+	# Series XML written for audit; fire path is still -slm.
+	assert scope.is_file()
+	assert "PVMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
 
 
 def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
@@ -301,7 +318,7 @@ def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
 			scope_xml=None,
 			n_iterations=1,
 			n_groups=1,
-			group_size=2,
+			group_size=3,
 			powers=[0.75],
 			seed=1,
 			trigger="none",

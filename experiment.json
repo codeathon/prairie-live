@@ -1,6 +1,6 @@
 {
-	"_comment": "mp-sync experiment config. CLI flags override these. stim_mode slm = simultaneous MarkAllPoints (-slm).",
-	"series": "D:\\MarkPoints.xml",
+	"_comment": "mp-sync: series may be MarkPoints.xml OR .gpl point list. stim_mode=slm fires -MarkAllPoints.",
+	"series": "D:\\MarkPoints.gpl",
 	"scope_xml": null,
 	"via_relay": "10.33.107.147:25100",
 	"relay": null,
@@ -10,7 +10,8 @@
 	"password": "0000",
 	"iterations": 1,
 	"n_groups": 2,
-	"group_size": 9,
+	"group_size": 3,
+	"_group_size_note": "Each random group has at least 3 points (enforced).",
 	"powers": [0.0, 0.75],
 	"seed": 0,
 	"trigger": "serial",
