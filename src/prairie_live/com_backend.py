@@ -157,14 +157,9 @@ class PrairieCom:
 		return {"ok": True, "cmd": "mark_points"}
 
 	def start_live(self) -> dict:
-		# Command name differs across PrairieView versions.
-		for cmd in ("-LiveScan", "-Live"):
-			try:
-				self.send(cmd)
-				return {"ok": True, "cmd": "live"}
-			except Exception:
-				continue
-		return {"ok": False, "error": "no live-scan command"}
+		# Official script help: only -LiveScan (-lv); -Live is not a command.
+		self.send("-LiveScan")
+		return {"ok": True, "cmd": "live"}
 
 	def pixels_per_line(self) -> int:
 		return int(self._require().PixelsPerLine())

@@ -43,6 +43,25 @@ FAT_XML = """<?xml version="1.1"?>
 """
 
 
+def test_lab_fallback_defaults():
+	# When series omits fields, use lab UI defaults (Monaco / 2D / 54.5 µm / 8).
+	meta = template_meta([])
+	assert meta["uncaging_laser"] == "Monaco"
+	assert meta["use_3d"] == "False"
+	assert meta["spiral_revolutions"] == "8"
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}]
+	for k, v in (
+		("is_spiral", "True"),
+		("spiral_size_um", "54.5"),
+	):
+		pts[0].setdefault(k, v)
+	step = build_group_step(pts, name="G", power=0.75, meta=meta)
+	assert step["uncaging_laser"] == "Monaco"
+	assert step["use_3d"] == "False"
+	assert step["spiral_revolutions"] == "8"
+	assert pts[0]["spiral_size_um"] == "54.5"
+
+
 def test_parse_and_extract_points():
 	steps = parse_mark_points(FAT_XML)
 	assert len(steps) == 1
