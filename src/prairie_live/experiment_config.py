@@ -48,6 +48,9 @@ _STIM_KEYS = (
 	"spiral_revolutions",
 	"fov_width_um",
 	"duration_ms",
+	"initial_delay_ms",
+	"inter_point_delay_ms",
+	"interval_ms",
 	"trigger_selection",
 )
 
@@ -105,6 +108,11 @@ def apply_stim_to_meta(meta: dict[str, Any], cfg: dict[str, Any]) -> dict[str, A
 		out["spiral_revolutions"] = str(cfg["spiral_revolutions"])
 	if cfg.get("duration_ms") is not None:
 		out["duration"] = float(cfg["duration_ms"])
+	# UI shows ms; series XML commonly stores InitialDelay/InterPointDelay in seconds.
+	if cfg.get("initial_delay_ms") is not None:
+		out["initial_delay"] = str(float(cfg["initial_delay_ms"]) / 1000.0)
+	if cfg.get("inter_point_delay_ms") is not None:
+		out["inter_point_delay"] = str(float(cfg["inter_point_delay_ms"]) / 1000.0)
 	if cfg.get("trigger_selection") is not None:
 		out["trigger_selection"] = str(cfg["trigger_selection"])
 	# Spiral on/off + size µm are applied when building -slm args / point attrs.

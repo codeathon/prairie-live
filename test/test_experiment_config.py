@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from prairie_live.experiment_config import (
 	apply_stim_to_meta,
 	load_experiment,
@@ -95,7 +97,9 @@ def test_apply_stim_to_meta():
 			"spiral_revolutions": 8,
 			"spiral_size_um": 54.5,
 			"spiral": True,
-			"duration_ms": 10,
+			"duration_ms": 16.92,
+			"initial_delay_ms": 22.1,
+			"inter_point_delay_ms": 10.0,
 			"trigger_selection": "PFI1",
 			"stim_mode": "slm",
 		},
@@ -105,6 +109,8 @@ def test_apply_stim_to_meta():
 	assert out["spiral_revolutions"] == "8"
 	assert out["spiral_size_um"] == "54.5"
 	assert out["is_spiral"] == "True"
-	assert out["duration"] == 10.0
+	assert out["duration"] == 16.92
+	assert float(out["initial_delay"]) == pytest.approx(0.0221)
+	assert float(out["inter_point_delay"]) == pytest.approx(0.01)
 	assert out["trigger_selection"] == "PFI1"
 	assert out["stim_mode"] == "slm"
