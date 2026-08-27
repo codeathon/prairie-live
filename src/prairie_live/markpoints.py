@@ -111,9 +111,20 @@ def parse_galvo_point_list(xml_string: str) -> list[dict]:
 			"spiral_height": el.attrib.get(
 				"SpiralHeight", _SPIRAL_DEFAULTS["spiral_height"]
 			),
+			# .gpl often has SpiralSize as FOV fraction (e.g. 0.4), not µm.
+			"spiral_size_fov": (
+				el.attrib["SpiralSize"] if "SpiralSize" in el.attrib else None
+			),
 			"spiral_size_um": el.attrib.get(
 				"SpiralSizeInMicrons", _SPIRAL_DEFAULTS["spiral_size_um"]
 			),
+			"spiral_revolutions": el.attrib.get(
+				"SpiralRevolutions", _DEFAULT_SPIRAL_REVS
+			),
+			"duration_ms": (
+				float(el.attrib["Duration"]) if "Duration" in el.attrib else None
+			),
+			"uncaging_laser": el.attrib.get("UncagingLaser"),
 		}
 		for k, v in _SPIRAL_DEFAULTS.items():
 			row.setdefault(k, v)
@@ -342,6 +353,47 @@ def groups_to_xml(groups: list[dict]) -> str:
 				pt_el.set("SpiralHeight", str(pt["spiral_height"]))
 			if pt.get("spiral_size_um") not in (None, ""):
 				pt_el.set("SpiralSizeInMicrons", str(pt["spiral_size_um"]))
+			# .gpl SpiralSize is FOV fraction (e.g. 0.4) — keep it for -lmp.
+			if pt.get("spiral_size_fov") not in (None, ""):
+				pt_el.set("SpiralSize", str(pt["spiral_size_fov"]))
+			elif pt.get("spiral_revolutions") not in (None, ""):
+				pass
+	return ET.tostring(root, encoding="unicode", xml_declaration=False)
+
+
+def galvo_points_to_gpl_xml(
+	points: list[dict],
+	*,
+	power: float,
+	laser: str = _DEFAULT_LASER,
+	duration_ms: float = 100.0,
+) -> str:
+	"""
+	Write a PVGalvoPointList (.gpl) preserving native X/Y/Z.
+
+	Why: .gpl coords are often outside 0–1 imaging FOV; -MarkAllPoints treats
+	numbers as FOV fractions and misplaces them. -LoadMarkPoints of a .gpl
+	keeps Prairie's native interpretation (same as the UI).
+	"""
+	root = ET.Element("PVGalvoPointList")
+	for i, pt in enumerate(points):
+		el = ET.SubElement(root, "PVGalvoPoint")
+		el.set("X", str(pt["x"]))
+		el.set("Y", str(pt["y"]))
+		el.set("Z", str(pt.get("z", 0)))
+		el.set("Name", str(pt.get("name", f"Point {i + 1}")))
+		el.set("Index", str(pt.get("id", i)))
+		el.set("ActivityType", "MarkPoints")
+		el.set("UncagingLaser", str(pt.get("uncaging_laser") or laser))
+		el.set("UncagingLaserPower", str(power))
+		dur = pt.get("duration_ms")
+		el.set("Duration", str(duration_ms if dur in (None, "") else dur))
+		el.set("IsSpiral", str(pt.get("is_spiral", "True")))
+		fov = pt.get("spiral_size_fov")
+		if fov not in (None, ""):
+			el.set("SpiralSize", str(fov))
+		revs = pt.get("spiral_revolutions", _DEFAULT_SPIRAL_REVS)
+		el.set("SpiralRevolutions", str(revs))
 	return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 

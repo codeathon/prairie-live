@@ -955,6 +955,33 @@ def main(argv: list[str] | None = None) -> None:
 	stim_mode = str(opt.get("stim_mode", "series")).lower()
 	if stim_mode not in ("series", "slm"):
 		raise SystemExit(f"stim_mode must be 'series' or 'slm', got {stim_mode!r}")
+
+	# .gpl X/Y are often galvo-list coords outside imaging FOV 0–1. -slm treats
+	# them as FOV fractions and fires off-screen; use -lmp/-mp like the UI.
+	oob = [
+		p
+		for p in points
+		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
+	]
+	if stim_mode == "slm" and oob:
+		print(
+			f"NOTE: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
+			"(typical of .gpl galvo lists). -MarkAllPoints would mis-read "
+			"those as FOV fractions. Switching stim_mode → series "
+			"(-LoadMarkPoints / -MarkPoints), AllPointsAtOnce."
+		)
+		stim_mode = "series"
+		opt["all_points_at_once"] = True
+	# Match .gpl Z / Duration when present (after config merge).
+	if any(abs(float(p.get("z", 0))) > 1e-6 for p in points):
+		opt["use_3d"] = True
+		print("NOTE: nonzero Z on points → Use3D=True")
+	gpl_durs = [p.get("duration_ms") for p in points if p.get("duration_ms")]
+	if gpl_durs and float(opt.get("duration_ms") or 0) in (0.0, 16.92):
+		opt["duration_ms"] = float(gpl_durs[0])
+		print(f"NOTE: using Duration={opt['duration_ms']} ms from .gpl")
+	meta = apply_stim_to_meta(meta, opt)
+
 	print(
 		f"points pool: {len(points)} from {src_kind}  powers={powers}  "
 		f"trigger={opt['trigger']}  stim_mode={stim_mode}  "
@@ -962,15 +989,10 @@ def main(argv: list[str] | None = None) -> None:
 	)
 	# Flag .gpl / XML coords that leave the visible FOV (valid for -slm galvos,
 	# but disk ΔF/F and PNG marks only work for ~0–1).
-	oob = [
-		p
-		for p in points
-		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
-	]
 	if oob:
 		print(
 			f"WARNING: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
-			"(still sent to -slm; imaging-FOV scoring skips them). Examples:"
+			"(ok for .gpl/-lmp; imaging-FOV scoring skips them). Examples:"
 		)
 		for p in oob[:5]:
 			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
