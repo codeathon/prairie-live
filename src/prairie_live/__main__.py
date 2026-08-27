@@ -10,6 +10,7 @@ _COMMANDS = (
 	"view",
 	"relay",
 	"mp-sync",
+	"show-log",
 	"tseries",
 	"abort",
 	"get-state",
@@ -42,6 +43,11 @@ def main(argv=None) -> None:
 		from prairie_live.sync_loop import main as sync_main
 
 		sync_main(rest)
+		return
+	if command == "show-log":
+		from prairie_live.trial_record import main as show_log_main
+
+		show_log_main(rest)
 		return
 	_one_shot(command, rest)
 

@@ -57,3 +57,31 @@ def test_write_trial_sidecars(tmp_path: Path):
 	assert data["point_ids"] == ["1", "2", "3"]
 	txt = Path(paths["readable_txt"]).read_text(encoding="utf-8")
 	assert "points:" in txt and "1, 2, 3" in txt
+
+
+def test_format_log_table(tmp_path: Path):
+	from prairie_live.trial_record import format_log_table, main
+
+	path = tmp_path / "trials.jsonl"
+	rows = [
+		{"phase": "armed", "trial_index": 0, "point_ids": ["1"]},
+		{
+			"phase": "done",
+			"trial_index": 0,
+			"trigger_index": 0,
+			"n_triggers": 2,
+			"point_ids": ["1", "4", "8"],
+			"power": 140,
+			"score": 0.0096,
+			"score_kind": "relay_disk_dff",
+			"stim_mode": "slm",
+			"summary": "trial 0 · points [1,4,8]",
+		},
+	]
+	path.write_text(
+		"\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8"
+	)
+	table = format_log_table(rows, phase="done")
+	assert "1,4,8" in table
+	assert "0.0096" in table
+	main([str(path)])

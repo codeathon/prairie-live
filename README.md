@@ -308,13 +308,11 @@ Example `done` line (lean):
 }
 ```
 
-Read completed trials in PowerShell:
+Read completed trials (one command — no PowerShell piping):
 
 ```powershell
-Get-Content trials.jsonl |
-  ForEach-Object { $_ | ConvertFrom-Json } |
-  Where-Object { $_.phase -eq "done" } |
-  Select-Object summary, trial_index, point_ids, power, score, score_kind
+python -m prairie_live show-log
+python -m prairie_live show-log trials.jsonl --packed
 ```
 
 Or open `trial_images\run_*\t0004\readable.txt`.

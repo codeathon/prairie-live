@@ -146,3 +146,88 @@ def format_packed_map(group_map: list[dict]) -> str:
 			f"{entry.get('group_name')}  points [{pts}]"
 		)
 	return "\n".join(lines) + "\n"
+
+
+def iter_jsonl(path: str | Path) -> list[dict[str, Any]]:
+	rows: list[dict[str, Any]] = []
+	with open(path, encoding="utf-8") as f:
+		for line in f:
+			line = line.strip()
+			if not line:
+				continue
+			rows.append(json.loads(line))
+	return rows
+
+
+def format_log_table(
+	rows: list[dict[str, Any]], *, phase: str | None = "done"
+) -> str:
+	"""Fixed-width table of trial rows. phase=None → all rows."""
+	picked = [r for r in rows if phase is None or r.get("phase") == phase]
+	if not picked:
+		label = "all phases" if phase is None else f"phase={phase!r}"
+		return f"(no rows with {label})\n"
+	headers = ("trial", "pulse", "points", "power", "score", "kind")
+	lines = ["  ".join(f"{h:<12}" for h in headers), "-" * 72]
+	for r in picked:
+		pts = ",".join(str(p) for p in r.get("point_ids") or [])
+		trig = r.get("trigger_index")
+		n = r.get("n_triggers")
+		pulse = f"{trig}/{int(n) - 1}" if trig is not None and n else "-"
+		score = r.get("score")
+		score_s = f"{float(score):.4f}" if score is not None else "-"
+		cols = (
+			str(r.get("trial_index", r.get("phase", "-"))),
+			pulse,
+			pts or "-",
+			str(r.get("power", "-")),
+			score_s,
+			str(r.get("score_kind") or r.get("phase") or "-"),
+		)
+		lines.append("  ".join(f"{c:<12}" for c in cols))
+	lines.append("")
+	for r in picked:
+		if r.get("phase") == "slm_packed":
+			lines.append(r.get("summary") or f"slm_packed power={r.get('power')}")
+		else:
+			lines.append(r.get("summary") or format_trial_summary(r))
+	return "\n".join(lines) + "\n"
+
+
+def main(argv: list[str] | None = None) -> None:
+	"""CLI: python -m prairie_live show-log [trials.jsonl]"""
+	import argparse
+
+	p = argparse.ArgumentParser(
+		prog="prairie_live show-log",
+		description="Print a readable table of mp-sync trials.jsonl rows",
+	)
+	p.add_argument(
+		"path",
+		nargs="?",
+		default="trials.jsonl",
+		help="JSONL path (default: trials.jsonl)",
+	)
+	p.add_argument(
+		"--all",
+		action="store_true",
+		help="Show every phase (default: done rows only)",
+	)
+	p.add_argument(
+		"--packed",
+		action="store_true",
+		help="Also print slm_packed pulse→group maps",
+	)
+	args = p.parse_args(argv)
+	path = Path(args.path)
+	if not path.is_file():
+		raise SystemExit(f"not found: {path}")
+	rows = iter_jsonl(path)
+	print(format_log_table(rows, phase=None if args.all else "done"))
+	if args.packed:
+		for r in rows:
+			if r.get("phase") != "slm_packed":
+				continue
+			print(r.get("summary") or f"packed power={r.get('power')}")
+			print(format_packed_map(r.get("group_trigger_map") or []))
+
