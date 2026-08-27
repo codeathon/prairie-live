@@ -155,10 +155,62 @@ def _gpl_as_step(pts: list[dict]) -> dict:
 
 def load_mark_points_file(path: str) -> list[dict]:
 	"""Read stim steps from a local series .xml or point-list .gpl."""
-	with open(path, encoding="utf-8-sig") as f:
-		text = f.read()
-	# Extension hint; root tag still decides (parse_mark_points handles both).
-	return parse_mark_points(text)
+	text = _read_xml_text(path)
+	try:
+		# Extension hint; root tag still decides (parse_mark_points handles both).
+		return parse_mark_points(text)
+	except ET.ParseError as e:
+		# Truncated exports / half-copied files show up as "unclosed token".
+		raise ValueError(_format_xml_parse_error(path, text, e)) from e
+
+
+def _read_xml_text(path: str) -> str:
+	"""Read PV XML; Prairie sometimes writes UTF-16, not UTF-8."""
+	with open(path, "rb") as f:
+		raw = f.read()
+	if not raw:
+		raise ValueError(f"empty mark-points file: {path}")
+	if raw.startswith(b"\xff\xfe") or raw.startswith(b"\xfe\xff"):
+		return raw.decode("utf-16")
+	if raw.startswith(b"\xef\xbb\xbf"):
+		return raw.decode("utf-8-sig")
+	try:
+		return raw.decode("utf-8")
+	except UnicodeDecodeError:
+		return raw.decode("utf-16")
+
+
+def _format_xml_parse_error(path: str, text: str, err: ET.ParseError) -> str:
+	"""Point at the bad line so a truncated .gpl/.xml is obvious."""
+	line_no = getattr(err, "position", (None, None))[0]
+	lines = text.splitlines()
+	snippet = ""
+	if isinstance(line_no, int) and line_no >= 1:
+		i0 = max(0, line_no - 3)
+		i1 = min(len(lines), line_no + 2)
+		shown = []
+		for i in range(i0, i1):
+			mark = ">>" if i + 1 == line_no else "  "
+			shown.append(f"{mark} {i + 1}: {lines[i][:160]}")
+		snippet = "\n".join(shown)
+	tail = text.rstrip()[-80:] if text else ""
+	closed = (
+		"</PVGalvoPointList>" in text or "</PVMarkPointSeriesElements>" in text
+	)
+	hint = (
+		"file looks truncated (missing closing tag) — re-export from Prairie"
+		if not closed
+		else "re-export the .gpl / MarkPoints series from Prairie and check series= path"
+	)
+	parts = [
+		f"invalid XML in {path}: {err}",
+		hint,
+	]
+	if snippet:
+		parts.append(snippet)
+	if not closed and tail:
+		parts.append(f"file ends with: {tail!r}")
+	return "\n".join(parts)
 
 
 def extract_unique_points(steps: list[dict]) -> list[dict]:

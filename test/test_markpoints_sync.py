@@ -91,6 +91,22 @@ def test_parse_gpl_point_list():
 	assert pool[2]["id"] == "3"
 
 
+def test_load_truncated_gpl_raises_clear_error(tmp_path: Path):
+	from prairie_live.markpoints import load_mark_points_file
+
+	path = tmp_path / "broken.gpl"
+	# Cut mid-file: common after a bad copy/export.
+	path.write_text(GPL_XML.rsplit("</PVGalvoPoint", 1)[0], encoding="utf-8")
+	try:
+		load_mark_points_file(str(path))
+		assert False, "expected ValueError"
+	except ValueError as e:
+		msg = str(e)
+		assert "invalid XML" in msg
+		assert "truncated" in msg or "unclosed" in msg.lower()
+		assert "broken.gpl" in msg
+
+
 def test_roundtrip_xml_keeps_coords():
 	steps = parse_mark_points(FAT_XML)
 	pts = extract_unique_points(steps)
