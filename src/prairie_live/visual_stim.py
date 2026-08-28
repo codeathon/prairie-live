@@ -145,6 +145,20 @@ class NullVisualStim:
 		on_rts_off()
 
 
+def _screen_size_px(screen_idx: int) -> tuple[int, int]:
+	"""Target display resolution for Monitor.setSizePix (required for deg units)."""
+	try:
+		import pyglet
+
+		screens = pyglet.canvas.get_display().get_screens()
+		if 0 <= screen_idx < len(screens):
+			s = screens[screen_idx]
+			return int(s.width), int(s.height)
+	except Exception:
+		pass
+	return 1920, 1080
+
+
 class GratingStimSession:
 	"""Fullscreen PsychoPy grating on the animal monitor."""
 
@@ -152,13 +166,21 @@ class GratingStimSession:
 		self._cfg = cfg
 		from psychopy import monitors, visual
 
+		w_px, h_px = _screen_size_px(cfg.screen)
 		mon = monitors.Monitor("mp_sync")
+		# PsychoPy needs pixel size before deg/pix conversion (mouse, TextBox2, etc.).
+		mon.setSizePix((w_px, h_px))
+		mon.setDistance(57.0)
+		mon.setWidth(53.0)
 		self._win = visual.Window(
-			size=[1920, 1080],
+			size=[w_px, h_px],
 			monitor=mon,
 			units="deg",
 			screen=cfg.screen,
 			fullscr=True,
+			allowGUI=False,
+			# Skip frame-rate splash; we time frames from config refresh_hz.
+			checkTiming=False,
 		)
 		self._grating = visual.GratingStim(
 			win=self._win,
