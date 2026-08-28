@@ -239,7 +239,7 @@ def run_sync_loop(
 	  slm    — -MarkAllPoints (-slm); packed (default) or one cmd per group
 
 	images_dir:
-	  If set, save <images_dir>/<run_id>/tXXXX/{f0,f1,dff}.png per trial
+	  If set, save <images_dir>/<run_id>/tXXXX_pYYY/{f0,f1,dff}.png per trial
 	  (needs relay --grab and live frames).
 
 	trigger:
@@ -296,6 +296,7 @@ def run_sync_loop(
 				if slm_pack:
 					batch = _run_slm_packed_batch(
 						groups_pts=groups_pts,
+						point_pool=points,
 						power=power,
 						it=it,
 						trial_index_start=trial_index,
@@ -328,6 +329,7 @@ def run_sync_loop(
 					for gi, gpts in enumerate(groups_pts):
 						row = _run_slm_single_trial(
 							gpts=gpts,
+							point_pool=points,
 							gi=gi,
 							power=power,
 							it=it,
@@ -362,6 +364,7 @@ def run_sync_loop(
 				for power in powers:
 					row = _run_series_trial(
 						gpts=gpts,
+						point_pool=points,
 						gi=gi,
 						power=power,
 						it=it,
@@ -419,6 +422,7 @@ def _finish_trial_frames(
 	row: dict,
 	*,
 	gpts: list[dict],
+	point_pool: list[dict] | None,
 	f0_frames: list[np.ndarray],
 	f1_frames: list[np.ndarray],
 	mock_scores: bool,
@@ -455,7 +459,9 @@ def _finish_trial_frames(
 				trial_index=int(row["trial_index"]),
 				frames_f0=f0_frames,
 				frames_f1=f1_frames,
-				points=gpts,
+				fired_points=gpts,
+				all_points=point_pool,
+				power=float(row["power"]) if row.get("power") is not None else None,
 				radius=disk_radius,
 			)
 			row["image_paths"] = paths
@@ -487,7 +493,11 @@ def _finalize_trial_log(row: dict, *, log: Any, run_root: Path | None) -> None:
 	if paths.get("trial_dir"):
 		trial_dir = Path(paths["trial_dir"])
 	elif run_root is not None:
-		trial_dir = Path(run_root) / f"t{int(row['trial_index']):04d}"
+		from prairie_live.trial_images import trial_dir_name
+
+		pwr = row.get("power")
+		power = float(pwr) if pwr is not None else None
+		trial_dir = Path(run_root) / trial_dir_name(int(row["trial_index"]), power)
 
 	if trial_dir is not None:
 		try:
@@ -510,6 +520,7 @@ def _finalize_trial_log(row: dict, *, log: Any, run_root: Path | None) -> None:
 def _run_slm_packed_batch(
 	*,
 	groups_pts: list[list[dict]],
+	point_pool: list[dict],
 	power: float,
 	it: int,
 	trial_index_start: int,
@@ -708,6 +719,7 @@ def _run_slm_packed_batch(
 		_finish_trial_frames(
 			row,
 			gpts=gpts,
+			point_pool=point_pool,
 			f0_frames=f0_frames,
 			f1_frames=f1_frames,
 			mock_scores=mock_scores,
@@ -729,6 +741,7 @@ def _run_slm_packed_batch(
 def _run_slm_single_trial(
 	*,
 	gpts: list[dict],
+	point_pool: list[dict],
 	gi: int,
 	power: float,
 	it: int,
@@ -891,6 +904,7 @@ def _run_slm_single_trial(
 	_finish_trial_frames(
 		row,
 		gpts=gpts,
+		point_pool=point_pool,
 		f0_frames=f0_frames,
 		f1_frames=f1_frames,
 		mock_scores=mock_scores,
@@ -911,6 +925,7 @@ def _run_slm_single_trial(
 def _run_series_trial(
 	*,
 	gpts: list[dict],
+	point_pool: list[dict],
 	gi: int,
 	power: float,
 	it: int,
@@ -1007,6 +1022,7 @@ def _run_series_trial(
 	_finish_trial_frames(
 		row,
 		gpts=gpts,
+		point_pool=point_pool,
 		f0_frames=f0_frames,
 		f1_frames=f1_frames,
 		mock_scores=mock_scores,

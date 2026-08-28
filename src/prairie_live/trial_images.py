@@ -1,8 +1,11 @@
 """Save per-trial F0 / F1 / ΔF/F PNGs for mp-sync QC.
 
 Layout:
-  <images_dir>/<run_id>/t0000/{f0,f1,dff}.png
-  <images_dir>/<run_id>/t0001/...
+  <images_dir>/<run_id>/t0000_p140/{f0,f1,dff}.png
+  <images_dir>/<run_id>/t0001_p140/...
+
+Power is in the trial folder name (all three PNGs share one stim power).
+Pool mark points are drawn in gray; the fired group is highlighted (cyan/lime).
 
 Why: PrairieView does not show which group fired; these dumps let you verify
 stim timing and targeting offline. Uses stdlib PNG (no matplotlib required).
@@ -21,6 +24,21 @@ import numpy as np
 def new_run_id() -> str:
 	"""UTC timestamp folder name so successive mp-sync runs do not collide."""
 	return datetime.now(timezone.utc).strftime("run_%Y%m%d_%H%M%S")
+
+
+def power_tag(power: float) -> str:
+	"""Filesystem-safe power label, e.g. 140 -> p140, 12.5 -> p12p5."""
+	if float(power) == int(power):
+		return f"p{int(power)}"
+	return "p" + f"{power:g}".replace(".", "p")
+
+
+def trial_dir_name(trial_index: int, power: float | None = None) -> str:
+	"""Per-trial subfolder under a run root."""
+	base = f"t{trial_index:04d}"
+	if power is None:
+		return base
+	return f"{base}_{power_tag(power)}"
 
 
 def run_dir(images_dir: str | Path, run_id: str | None = None) -> Path:
@@ -70,16 +88,50 @@ def draw_point_rings(
 	return rgb
 
 
-def gray_to_marked_rgb(
-	gray: np.ndarray,
-	points: list[dict],
+# Pool = context; fired = this trial's stim targets.
+_POOL_COLOR = (96, 96, 96)
+_FIRED_COLOR_F0F1 = (0, 255, 255)
+_FIRED_COLOR_DFF = (0, 255, 0)
+
+
+def draw_point_pool(
+	rgb: np.ndarray,
+	all_points: list[dict],
+	fired_points: list[dict],
 	*,
 	radius: int = 3,
-	color: tuple[int, int, int] = (0, 255, 255),
+	pool_color: tuple[int, int, int] = _POOL_COLOR,
+	fired_color: tuple[int, int, int] = _FIRED_COLOR_F0F1,
+) -> np.ndarray:
+	"""Draw full pool in pool_color; overlay fired group in fired_color."""
+	fired_ids = {str(p["id"]) for p in fired_points}
+	pool_only = [p for p in all_points if str(p["id"]) not in fired_ids]
+	draw_point_rings(rgb, pool_only, radius=radius, color=pool_color)
+	draw_point_rings(rgb, fired_points, radius=radius, color=fired_color)
+	return rgb
+
+
+def gray_to_marked_rgb(
+	gray: np.ndarray,
+	fired_points: list[dict],
+	*,
+	all_points: list[dict] | None = None,
+	radius: int = 3,
+	pool_color: tuple[int, int, int] = _POOL_COLOR,
+	fired_color: tuple[int, int, int] = _FIRED_COLOR_F0F1,
 ) -> np.ndarray:
 	u8 = to_u8(gray)
 	rgb = np.stack([u8, u8, u8], axis=-1)
-	return draw_point_rings(rgb, points, radius=radius, color=color)
+	if all_points:
+		return draw_point_pool(
+			rgb,
+			all_points,
+			fired_points,
+			radius=radius,
+			pool_color=pool_color,
+			fired_color=fired_color,
+		)
+	return draw_point_rings(rgb, fired_points, radius=radius, color=fired_color)
 
 
 def dff_rgb(f0: np.ndarray, f1: np.ndarray) -> np.ndarray:
@@ -129,27 +181,34 @@ def save_trial_images(
 	trial_index: int,
 	frames_f0: list[np.ndarray],
 	frames_f1: list[np.ndarray],
-	points: list[dict],
+	fired_points: list[dict],
+	all_points: list[dict] | None = None,
+	power: float | None = None,
 	radius: int = 3,
 ) -> dict[str, str]:
 	"""
-	Write <run_root>/tXXXX/{f0,f1,dff}.png.
+	Write <run_root>/tXXXX_pYYY/{f0,f1,dff}.png.
 
 	Returns absolute paths keyed by kind for JSONL; also includes trial_dir.
 	"""
-	trial_dir = Path(run_root) / f"t{trial_index:04d}"
+	trial_dir = Path(run_root) / trial_dir_name(trial_index, power)
 	trial_dir.mkdir(parents=True, exist_ok=True)
 	f0 = mean_stack(frames_f0)
 	f1 = mean_stack(frames_f1)
 
-	f0_rgb = gray_to_marked_rgb(f0, points, radius=radius)
-	f1_rgb = gray_to_marked_rgb(f1, points, radius=radius)
-	# Lime rings on ΔF/F so marks stay visible on the signed map.
-	dff_out = draw_point_rings(
+	f0_rgb = gray_to_marked_rgb(
+		f0, fired_points, all_points=all_points, radius=radius
+	)
+	f1_rgb = gray_to_marked_rgb(
+		f1, fired_points, all_points=all_points, radius=radius
+	)
+	dff_out = draw_point_pool(
 		dff_rgb(f0, f1),
-		points,
+		all_points or fired_points,
+		fired_points,
 		radius=radius,
-		color=(0, 255, 0),
+		pool_color=_POOL_COLOR,
+		fired_color=_FIRED_COLOR_DFF,
 	)
 
 	paths: dict[str, str] = {"trial_dir": str(trial_dir.resolve())}

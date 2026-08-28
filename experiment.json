@@ -29,7 +29,7 @@
 	"dry_run": false,
 	"inspect": false,
 	"images_dir": "trial_images",
-	"_images_note": "Each mp-sync run → trial_images/run_YYYYMMDD_HHMMSS/tXXXX/{f0,f1,dff}.png (needs relay --grab)",
+	"_images_note": "Each mp-sync run → trial_images/run_YYYYMMDD_HHMMSS/tXXXX_pYYY/{f0,f1,dff}.png (needs relay --grab); gray=pool, cyan/lime=fired group",
 	"stim_mode": "slm",
 	"_stim_mode_note": "slm only if X/Y in 0–1; .gpl galvo lists auto-fallback to series/-lmp/-mp",
 	"slm_pack": true,
