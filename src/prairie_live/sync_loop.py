@@ -174,7 +174,7 @@ class JsonlLog:
 		# Keep insertion order (summary first); do not alpha-sort keys.
 		from prairie_live.trial_record import order_trial_row
 
-		slm_meta = row.get("phase") in ("slm_packed", "slm_single")
+		slm_meta = row.get("phase") in ("slm_packed", "slm_single", "recommendation")
 		payload = row if slm_meta else order_trial_row(row)
 		self._fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 		self._fp.flush()
@@ -402,6 +402,9 @@ def run_sync_loop(
 		else:
 			print("  no scores this iteration — next groups stay random")
 
+	from prairie_live.trial_record import write_session_recommendation
+
+	write_session_recommendation(all_trials, log=log, run_root=run_root)
 	return all_trials
 
 

@@ -146,6 +146,8 @@ class ReadableLog:
 			self._fp.write(format_packed_readable(row))
 		elif phase == "slm_single":
 			self._fp.write(format_packed_readable(row))
+		elif phase == "recommendation":
+			self._fp.write(format_recommendation(row))
 		else:
 			return
 		self._fp.flush()
@@ -203,6 +205,91 @@ def format_packed_map(group_map: list[dict]) -> str:
 			f"{entry.get('group_name')}  points [{pts}]"
 		)
 	return "\n".join(lines) + "\n"
+
+
+def best_trial_recommendation(trials: list[dict[str, Any]]) -> dict[str, Any] | None:
+	"""Highest-scoring trial across the session (points × power)."""
+	scored = [t for t in trials if t.get("score") is not None]
+	if not scored:
+		return None
+	best_score = max(float(t["score"]) for t in scored)
+	winners = [t for t in scored if float(t["score"]) == best_score]
+	# Stable pick among ties: lowest trial_index.
+	primary = min(winners, key=lambda t: int(t.get("trial_index", 0)))
+	return {
+		"point_ids": [str(p) for p in primary.get("point_ids") or []],
+		"power": primary.get("power"),
+		"score": best_score,
+		"score_kind": primary.get("score_kind"),
+		"trial_index": primary.get("trial_index"),
+		"iteration": primary.get("iteration"),
+		"group_name": primary.get("group_name"),
+		"image_paths": primary.get("image_paths"),
+		"tied_trial_indices": sorted(int(t["trial_index"]) for t in winners),
+		"n_scored_trials": len(scored),
+	}
+
+
+def format_recommendation(rec: dict[str, Any]) -> str:
+	"""Human-readable best-trial block for console, trials.txt, recommendation.txt."""
+	pts = ", ".join(str(p) for p in rec.get("point_ids") or [])
+	power = rec.get("power")
+	score = rec.get("score")
+	kind = rec.get("score_kind") or ""
+	ti = rec.get("trial_index")
+	lines = [
+		"=" * 60,
+		"RECOMMENDATION — best points × power this session",
+		"=" * 60,
+		f"  Point IDs:     {pts}",
+		f"  Laser power:   {power}",
+		f"  ΔF/F score:    {float(score):.6f}  ({kind})",
+		f"  Trial index:   {ti}",
+	]
+	tied = rec.get("tied_trial_indices") or []
+	if len(tied) > 1:
+		lines.append(f"  Tied trials:   {tied}")
+	imgs = rec.get("image_paths") or {}
+	if imgs.get("trial_dir"):
+		lines.append(f"  Images:        {imgs['trial_dir']}")
+	lines.append("")
+	return "\n".join(lines)
+
+
+def format_recommendation_summary(rec: dict[str, Any]) -> str:
+	pts = ",".join(str(p) for p in rec.get("point_ids") or [])
+	return (
+		f"BEST: points [{pts}] power {rec.get('power')} "
+		f"ΔF/F {float(rec['score']):.4f} trial {rec.get('trial_index')}"
+	)
+
+
+def write_session_recommendation(
+	trials: list[dict[str, Any]],
+	*,
+	log: Any | None = None,
+	run_root: Path | None = None,
+) -> dict[str, Any] | None:
+	"""Print, log, and optionally save the best points×power from all trials."""
+	rec = best_trial_recommendation(trials)
+	if rec is None:
+		print("\n=== No recommendation (no scored trials) ===")
+		return None
+	text = format_recommendation(rec)
+	print("\n" + text)
+	row: dict[str, Any] = {
+		"phase": "recommendation",
+		"summary": format_recommendation_summary(rec),
+		**rec,
+	}
+	if log is not None:
+		log.write(row)
+	if run_root is not None:
+		run_root.mkdir(parents=True, exist_ok=True)
+		path = run_root / "recommendation.txt"
+		path.write_text(text, encoding="utf-8")
+		row["recommendation_path"] = str(path.resolve())
+	return row
 
 
 def iter_jsonl(path: str | Path) -> list[dict[str, Any]]:
