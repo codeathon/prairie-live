@@ -1,2 +1,29 @@
 # Windows analysis PC only — embedded PsychoPy gratings in mp-sync.
-psychopy>=2024.1
+# Scope PC / relay do not need this file.
+#
+# Python 3.12.x (your rig): pywinhook has no wheel; NEVER run plain
+#   pip install psychopy
+# That pulls pywinhook and fails without SWIG. mp-sync gratings do not need it.
+#
+# Install (PowerShell, analysis PC) — run in order:
+#
+#   pip install -U pip
+#   pip uninstall pywinhook psychopy -y
+#   pip install "psychopy>=2024.1" --no-deps
+#   pip install -r requirements-visual.txt
+#   python -c "from psychopy import visual; print('PsychoPy OK')"
+#
+# Optional: Python 3.11 venv avoids --no-deps entirely (most reliable on Windows).
+#
+# PsychoPy is intentionally NOT listed below (would reinstall pywinhook).
+
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+pillow>=10.0
+pyglet>=1.5.27
+pyyaml>=6.0
+requests>=2.28
+freetype-py>=2.4
+python-bidi>=0.4
+pywin32>=306; sys_platform == "win32"
