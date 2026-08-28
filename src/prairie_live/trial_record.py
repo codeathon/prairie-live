@@ -1,7 +1,8 @@
 """Human-readable trial records for mp-sync.
 
 JSONL stays machine-friendly (one object per line). Bulky SLM command dumps
-live only on the once-per-batch ``slm_packed`` row; each trial gets a short
+live only on the once-per-batch ``slm_packed`` / per-trial ``slm_single`` row;
+each trial gets a short
 ``summary`` plus optional pretty files next to the PNGs.
 """
 
@@ -34,7 +35,7 @@ _TRIAL_KEY_ORDER = (
 	"record_paths",
 )
 
-# Never repeat these on every armed/done line — see phase=slm_packed.
+# Never repeat these on every armed/done line — see phase=slm_packed/slm_single.
 _BULKY = frozenset({"slm_parts", "group_trigger_map"})
 
 
@@ -143,6 +144,8 @@ class ReadableLog:
 			self._fp.write(format_trial_readable(row))
 		elif phase == "slm_packed":
 			self._fp.write(format_packed_readable(row))
+		elif phase == "slm_single":
+			self._fp.write(format_packed_readable(row))
 		else:
 			return
 		self._fp.flush()
@@ -241,8 +244,8 @@ def format_log_table(
 		lines.append("  ".join(f"{c:<12}" for c in cols))
 	lines.append("")
 	for r in picked:
-		if r.get("phase") == "slm_packed":
-			lines.append(r.get("summary") or f"slm_packed power={r.get('power')}")
+		if r.get("phase") in ("slm_packed", "slm_single"):
+			lines.append(r.get("summary") or f"{r.get('phase')} power={r.get('power')}")
 		else:
 			lines.append(r.get("summary") or format_trial_summary(r))
 	return "\n".join(lines) + "\n"
@@ -270,7 +273,7 @@ def main(argv: list[str] | None = None) -> None:
 	p.add_argument(
 		"--packed",
 		action="store_true",
-		help="Also print slm_packed pulse→group maps",
+		help="Also print slm_packed / slm_single pulse→group maps",
 	)
 	args = p.parse_args(argv)
 	path = Path(args.path)
@@ -280,7 +283,7 @@ def main(argv: list[str] | None = None) -> None:
 	print(format_log_table(rows, phase=None if args.all else "done"))
 	if args.packed:
 		for r in rows:
-			if r.get("phase") != "slm_packed":
+			if r.get("phase") not in ("slm_packed", "slm_single"):
 				continue
 			print(r.get("summary") or f"packed power={r.get('power')}")
 			print(format_packed_map(r.get("group_trigger_map") or []))
