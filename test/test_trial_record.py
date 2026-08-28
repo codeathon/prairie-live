@@ -6,8 +6,11 @@ import json
 from pathlib import Path
 
 from prairie_live.trial_record import (
+	best_trial_recommendation,
+	format_recommendation,
 	format_trial_summary,
 	order_trial_row,
+	write_session_recommendation,
 	write_trial_sidecars,
 )
 
@@ -130,3 +133,36 @@ def test_jsonl_writes_readable_txt(tmp_path: Path):
 	assert "Fired points:  1, 2, 3" in txt
 	assert "PACKED SLM" in txt
 	assert log_path.is_file()
+
+
+def test_best_trial_recommendation_picks_highest_score():
+	trials = [
+		{"trial_index": 0, "point_ids": ["1", "2"], "power": 100, "score": 0.02},
+		{"trial_index": 1, "point_ids": ["3", "4", "5"], "power": 140, "score": 0.05},
+		{"trial_index": 2, "point_ids": ["6"], "power": 140, "score": None},
+	]
+	rec = best_trial_recommendation(trials)
+	assert rec is not None
+	assert rec["point_ids"] == ["3", "4", "5"]
+	assert rec["power"] == 140
+	assert rec["score"] == 0.05
+	assert rec["trial_index"] == 1
+
+
+def test_write_session_recommendation(tmp_path: Path):
+	trials = [
+		{"trial_index": 0, "point_ids": ["1"], "power": 100, "score": 0.01, "score_kind": "mock"},
+		{
+			"trial_index": 1,
+			"point_ids": ["4", "8"],
+			"power": 140,
+			"score": 0.09,
+			"score_kind": "mock",
+			"image_paths": {"trial_dir": str(tmp_path / "t0001_p140")},
+		},
+	]
+	run_root = tmp_path / "run_test"
+	rec = write_session_recommendation(trials, run_root=run_root)
+	assert rec is not None
+	assert "4, 8" in format_recommendation(rec)
+	assert (run_root / "recommendation.txt").is_file()
