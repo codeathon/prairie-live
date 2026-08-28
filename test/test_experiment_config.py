@@ -64,6 +64,7 @@ def test_merge_cli_overrides_config():
 		disk_radius = None
 		dry_run = False
 		inspect = False
+		slm_pack = None
 
 	cfg = {
 		"series": "cfg.xml",
@@ -114,3 +115,37 @@ def test_apply_stim_to_meta():
 	assert float(out["inter_point_delay"]) == pytest.approx(0.01)
 	assert out["trigger_selection"] == "PFI1"
 	assert out["stim_mode"] == "slm"
+
+
+def test_merge_slm_pack_cli_overrides_config():
+	class NS:
+		series = None
+		scope_xml = None
+		via_relay = None
+		relay = None
+		log = None
+		host = None
+		port = None
+		password = None
+		iterations = None
+		n_groups = None
+		group_size = None
+		powers = None
+		seed = None
+		trigger = None
+		serial = None
+		ttl_width = None
+		inter_trial = None
+		pad_ms = None
+		elite_frac = None
+		mock_scores = False
+		f0_s = None
+		f1_s = None
+		frame_poll = None
+		disk_radius = None
+		dry_run = False
+		inspect = False
+		slm_pack = False
+
+	opt = merge_cli_over_config(NS(), {"slm_pack": True})
+	assert opt["slm_pack"] is False

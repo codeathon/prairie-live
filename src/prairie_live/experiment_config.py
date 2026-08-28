@@ -36,6 +36,7 @@ _CLI_KEYS = (
 	"dry_run",
 	"inspect",
 	"stim_mode",
+	"slm_pack",
 	"images_dir",
 )
 
@@ -164,6 +165,12 @@ def merge_cli_over_config(args_ns: Any, cfg: dict[str, Any]) -> dict[str, Any]:
 			out[k] = True
 		elif k not in out:
 			out[k] = False
+	# slm_pack: --slm-pack / --no-slm-pack (default True when unset).
+	slm_pack = getattr(args_ns, "slm_pack", None)
+	if slm_pack is not None:
+		out["slm_pack"] = bool(slm_pack)
+	elif "slm_pack" not in out:
+		out["slm_pack"] = True
 	if "powers" in out:
 		out["powers"] = powers_to_list(out["powers"])
 	elif "powers" not in out:

@@ -4,10 +4,10 @@ Flow per mapping iteration
 --------------------------
 1. Build pseudo-random groups from the points pool (or score-biased groups).
 2. stim_mode=series: each (group × power) → -lmp/-mp + optional DTR.
-   stim_mode=slm: pack all groups into one -MarkAllPoints string (each set
-   Trigger=PFI1, Delay between sets); send once; pulse DTR once per group
-   in pack order. JSONL trigger_index ↔ group (PV does not report which
-   set fired).
+	stim_mode=slm, slm_pack=true (default): pack all groups into one
+   -MarkAllPoints string; send once; DTR once per group in pack order.
+   stim_mode=slm, slm_pack=false: one -MarkAllPoints per group (trigger_index
+   always 0); DTR once per trial.
 3. Aggregate per-point scores; next iteration reuses top responders plus
    random fill.
 """
@@ -174,10 +174,11 @@ class JsonlLog:
 		# Keep insertion order (summary first); do not alpha-sort keys.
 		from prairie_live.trial_record import order_trial_row
 
-		payload = row if row.get("phase") == "slm_packed" else order_trial_row(row)
+		slm_meta = row.get("phase") in ("slm_packed", "slm_single")
+		payload = row if slm_meta else order_trial_row(row)
 		self._fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 		self._fp.flush()
-		self._txt.write_row(payload if row.get("phase") == "slm_packed" else row)
+		self._txt.write_row(payload if slm_meta else row)
 		self.n_written += 1
 
 	def close(self) -> None:
@@ -226,6 +227,7 @@ def run_sync_loop(
 	elite_frac: float,
 	dry_run: bool,
 	stim_mode: str = "series",
+	slm_pack: bool = True,
 	images_dir: str | None = None,
 	on_trial: Callable[[dict], None] | None = None,
 ) -> list[dict]:
@@ -234,10 +236,10 @@ def run_sync_loop(
 
 	stim_mode:
 	  series — -LoadMarkPoints + -MarkPoints (XML group)
-	  slm    — packed -MarkAllPoints (-slm); one cmd per power, TTL per group
+	  slm    — -MarkAllPoints (-slm); packed (default) or one cmd per group
 
 	images_dir:
-	  If set, save <images_dir>/<run_id>/tXXXX/{f0,f1,dff}.png per trial
+	  If set, save <images_dir>/<run_id>/tXXXX_pYYY/{f0,f1,dff}.png per trial
 	  (needs relay --grab and live frames).
 
 	trigger:
@@ -291,41 +293,78 @@ def run_sync_loop(
 
 		if mode == "slm":
 			for power in powers:
-				batch = _run_slm_packed_batch(
-					groups_pts=groups_pts,
-					power=power,
-					it=it,
-					trial_index_start=trial_index,
-					meta=meta,
-					slm_params=slm_params,
-					trig_sel=trig_sel,
-					trigger=trigger,
-					ttl=ttl,
-					ttl_width_s=ttl_width_s,
-					inter_trial_s=inter_trial_s,
-					pad_ms=pad_ms,
-					pl=pl,
-					relay=relay,
-					via_relay=via_relay,
-					scope_xml=scope_xml,
-					log=log,
-					dry_run=dry_run,
-					mock_scores=mock_scores,
-					f0_s=f0_s,
-					f1_s=f1_s,
-					frame_poll_s=frame_poll_s,
-					disk_radius=disk_radius,
-					run_root=run_root,
-					on_trial=on_trial,
-				)
-				iter_trials.extend(batch)
-				all_trials.extend(batch)
-				trial_index += len(batch)
+				if slm_pack:
+					batch = _run_slm_packed_batch(
+						groups_pts=groups_pts,
+						point_pool=points,
+						power=power,
+						it=it,
+						trial_index_start=trial_index,
+						meta=meta,
+						slm_params=slm_params,
+						trig_sel=trig_sel,
+						trigger=trigger,
+						ttl=ttl,
+						ttl_width_s=ttl_width_s,
+						inter_trial_s=inter_trial_s,
+						pad_ms=pad_ms,
+						pl=pl,
+						relay=relay,
+						via_relay=via_relay,
+						scope_xml=scope_xml,
+						log=log,
+						dry_run=dry_run,
+						mock_scores=mock_scores,
+						f0_s=f0_s,
+						f1_s=f1_s,
+						frame_poll_s=frame_poll_s,
+						disk_radius=disk_radius,
+						run_root=run_root,
+						on_trial=on_trial,
+					)
+					iter_trials.extend(batch)
+					all_trials.extend(batch)
+					trial_index += len(batch)
+				else:
+					for gi, gpts in enumerate(groups_pts):
+						row = _run_slm_single_trial(
+							gpts=gpts,
+							point_pool=points,
+							gi=gi,
+							power=power,
+							it=it,
+							trial_index=trial_index,
+							meta=meta,
+							slm_params=slm_params,
+							trig_sel=trig_sel,
+							trigger=trigger,
+							ttl=ttl,
+							ttl_width_s=ttl_width_s,
+							inter_trial_s=inter_trial_s,
+							pad_ms=pad_ms,
+							pl=pl,
+							relay=relay,
+							via_relay=via_relay,
+							scope_xml=scope_xml,
+							log=log,
+							dry_run=dry_run,
+							mock_scores=mock_scores,
+							f0_s=f0_s,
+							f1_s=f1_s,
+							frame_poll_s=frame_poll_s,
+							disk_radius=disk_radius,
+							run_root=run_root,
+							on_trial=on_trial,
+						)
+						iter_trials.append(row)
+						all_trials.append(row)
+						trial_index += 1
 		else:
 			for gi, gpts in enumerate(groups_pts):
 				for power in powers:
 					row = _run_series_trial(
 						gpts=gpts,
+						point_pool=points,
 						gi=gi,
 						power=power,
 						it=it,
@@ -383,6 +422,7 @@ def _finish_trial_frames(
 	row: dict,
 	*,
 	gpts: list[dict],
+	point_pool: list[dict] | None,
 	f0_frames: list[np.ndarray],
 	f1_frames: list[np.ndarray],
 	mock_scores: bool,
@@ -419,7 +459,9 @@ def _finish_trial_frames(
 				trial_index=int(row["trial_index"]),
 				frames_f0=f0_frames,
 				frames_f1=f1_frames,
-				points=gpts,
+				fired_points=gpts,
+				all_points=point_pool,
+				power=float(row["power"]) if row.get("power") is not None else None,
 				radius=disk_radius,
 			)
 			row["image_paths"] = paths
@@ -451,7 +493,11 @@ def _finalize_trial_log(row: dict, *, log: Any, run_root: Path | None) -> None:
 	if paths.get("trial_dir"):
 		trial_dir = Path(paths["trial_dir"])
 	elif run_root is not None:
-		trial_dir = Path(run_root) / f"t{int(row['trial_index']):04d}"
+		from prairie_live.trial_images import trial_dir_name
+
+		pwr = row.get("power")
+		power = float(pwr) if pwr is not None else None
+		trial_dir = Path(run_root) / trial_dir_name(int(row["trial_index"]), power)
 
 	if trial_dir is not None:
 		try:
@@ -474,6 +520,7 @@ def _finalize_trial_log(row: dict, *, log: Any, run_root: Path | None) -> None:
 def _run_slm_packed_batch(
 	*,
 	groups_pts: list[list[dict]],
+	point_pool: list[dict],
 	power: float,
 	it: int,
 	trial_index_start: int,
@@ -672,6 +719,7 @@ def _run_slm_packed_batch(
 		_finish_trial_frames(
 			row,
 			gpts=gpts,
+			point_pool=point_pool,
 			f0_frames=f0_frames,
 			f1_frames=f1_frames,
 			mock_scores=mock_scores,
@@ -690,9 +738,194 @@ def _run_slm_packed_batch(
 	return rows
 
 
+def _run_slm_single_trial(
+	*,
+	gpts: list[dict],
+	point_pool: list[dict],
+	gi: int,
+	power: float,
+	it: int,
+	trial_index: int,
+	meta: dict,
+	slm_params: dict,
+	trig_sel: str,
+	trigger: str,
+	ttl: Any | None,
+	ttl_width_s: float,
+	inter_trial_s: float,
+	pad_ms: float,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+	scope_xml: str | None,
+	log: Any,
+	dry_run: bool,
+	mock_scores: bool,
+	f0_s: float,
+	f1_s: float,
+	frame_poll_s: float,
+	disk_radius: int,
+	run_root: Path | None,
+	on_trial: Callable[[dict], None] | None,
+) -> dict:
+	"""
+	One group × power via its own -MarkAllPoints (-slm); one TTL pulse.
+
+	trigger_index is always 0 (single packed set per command).
+	"""
+	from prairie_live.mark_all_points import pack_mark_all_points
+
+	slm_parts = pack_mark_all_points(
+		[gpts],
+		power=power,
+		laser=slm_params["laser"],
+		duration_ms=slm_params["duration_ms"],
+		use_3d=slm_params["use_3d"],
+		spiral=slm_params["spiral"],
+		spiral_size_um=slm_params["spiral_size_um"],
+		spiral_revolutions=slm_params["spiral_revolutions"],
+		fov_width_um=slm_params["fov_width_um"],
+		trigger_selection=trig_sel,
+		delay_ms=0.0,
+	)
+	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
+	point_ids = [str(p["id"]) for p in gpts]
+	group_map = [
+		{
+			"trigger_index": 0,
+			"group_index": gi,
+			"group_name": gname,
+			"point_ids": point_ids,
+		}
+	]
+	if scope_xml:
+		write_scope_xml(
+			[
+				build_group_step(
+					gpts,
+					name=gname,
+					power=power,
+					meta=meta,
+					trigger_selection=trig_sel,
+				)
+			],
+			scope_xml,
+		)
+
+	t_cmd = time.time()
+	log.write(
+		{
+			"phase": "slm_single",
+			"summary": (
+				f"single -slm · power {power} · "
+				f"points [{','.join(point_ids)}]"
+			),
+			"iteration": it,
+			"trial_index": trial_index,
+			"power": power,
+			"stim_mode": "slm",
+			"slm_pack": False,
+			"n_triggers": 1,
+			"group_trigger_map": group_map,
+			"slm_parts": slm_parts,
+			"t_cmd": t_cmd,
+			"run_root": str(run_root) if run_root else None,
+		}
+	)
+
+	if dry_run:
+		print(
+			f"  [dry] single -slm trial {trial_index}: {gname} "
+			f"power={power} pts={point_ids}"
+		)
+	else:
+		_fire_mark_all_points(
+			parts=slm_parts,
+			wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+			pl=pl,
+			relay=relay,
+			via_relay=via_relay,
+		)
+		print(
+			f"  single -slm trial {trial_index}: {gname} "
+			f"power={power} pts={point_ids}"
+		)
+
+	wait_s = (
+		float(slm_params.get("duration_ms") or 0)
+		+ float(slm_params.get("initial_delay_ms") or 0)
+		+ pad_ms
+	) / 1000.0
+	want = _want_frames(
+		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
+	)
+	row: dict[str, Any] = {
+		"trial_index": trial_index,
+		"iteration": it,
+		"group_index": gi,
+		"trigger_index": 0,
+		"n_triggers": 1,
+		"group_name": gname,
+		"point_ids": point_ids,
+		"power": power,
+		"trigger": trigger,
+		"trigger_selection": trig_sel,
+		"stim_mode": "slm",
+		"slm_pack": False,
+		"t_cmd": t_cmd,
+		"t_ttl": None,
+		"score": None,
+		"score_kind": None,
+		"image_paths": None,
+	}
+	log.write({**row, "phase": "armed"})
+
+	f0_frames: list[np.ndarray] = []
+	f1_frames: list[np.ndarray] = []
+	if want:
+		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+
+	if trigger == "serial" and ttl is not None and not dry_run:
+		row["t_ttl"] = time.time()
+		ttl.pulse_dtr(ttl_width_s)
+		print(f"  trigger 0/0: trial {trial_index} pts={point_ids}")
+	elif trigger == "none":
+		row["t_ttl"] = row["t_cmd"]
+		print(f"  [none] trial {trial_index} pts={point_ids}")
+	else:
+		row["t_ttl"] = time.time()
+		print(f"  wait trigger 0/0: trial {trial_index} pts={point_ids}")
+
+	if want:
+		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+	else:
+		time.sleep(max(wait_s, 0.0))
+
+	_finish_trial_frames(
+		row,
+		gpts=gpts,
+		point_pool=point_pool,
+		f0_frames=f0_frames,
+		f1_frames=f1_frames,
+		mock_scores=mock_scores,
+		relay=relay,
+		disk_radius=disk_radius,
+		run_root=run_root,
+		it=it,
+	)
+
+	_finalize_trial_log(row, log=log, run_root=run_root)
+	if on_trial:
+		on_trial(row)
+	if inter_trial_s > 0:
+		time.sleep(inter_trial_s)
+	return row
+
+
 def _run_series_trial(
 	*,
 	gpts: list[dict],
+	point_pool: list[dict],
 	gi: int,
 	power: float,
 	it: int,
@@ -789,6 +1022,7 @@ def _run_series_trial(
 	_finish_trial_frames(
 		row,
 		gpts=gpts,
+		point_pool=point_pool,
 		f0_frames=f0_frames,
 		f1_frames=f1_frames,
 		mock_scores=mock_scores,
@@ -975,6 +1209,20 @@ def main(argv: list[str] | None = None) -> None:
 		default=None,
 		help="series=-LoadMarkPoints/-MarkPoints; slm=-MarkAllPoints simultaneous",
 	)
+	slm_pack_g = p.add_mutually_exclusive_group()
+	slm_pack_g.add_argument(
+		"--slm-pack",
+		dest="slm_pack",
+		action="store_true",
+		default=None,
+		help="stim_mode=slm: pack all groups into one -MarkAllPoints (default)",
+	)
+	slm_pack_g.add_argument(
+		"--no-slm-pack",
+		dest="slm_pack",
+		action="store_false",
+		help="stim_mode=slm: one -MarkAllPoints per group (trigger_index always 0)",
+	)
 	# Parse full argv (includes --config) so --help lists every flag once.
 	args = p.parse_args(argv)
 
@@ -998,6 +1246,7 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("frame_poll", 0.05)
 	opt.setdefault("disk_radius", 3)
 	opt.setdefault("stim_mode", "series")
+	opt.setdefault("slm_pack", True)
 
 	series = opt.get("series")
 	if not series:
@@ -1072,10 +1321,17 @@ def main(argv: list[str] | None = None) -> None:
 				"stim_mode=slm with spiral requires fov_width_um in experiment.json "
 				"(µm across the FOV; used to convert spiral_size_um → -slm fraction)"
 			)
-		print(
-			"stim_mode=slm → random groups → -MarkAllPoints (-slm) per trial "
-			"(series XML written if scope_xml set; not loaded via -lmp)"
-		)
+		pack = bool(opt.get("slm_pack", True))
+		if pack:
+			print(
+				"stim_mode=slm slm_pack=true → one packed -MarkAllPoints per power "
+				"(DTR once per group; series XML if scope_xml set)"
+			)
+		else:
+			print(
+				"stim_mode=slm slm_pack=false → one -MarkAllPoints per group×power "
+				"(DTR once per trial; trigger_index=0)"
+			)
 	if opt.get("inspect"):
 		zero = 0
 		oob_n = 0
@@ -1172,6 +1428,7 @@ def main(argv: list[str] | None = None) -> None:
 			elite_frac=float(opt["elite_frac"]),
 			dry_run=bool(opt.get("dry_run")),
 			stim_mode=stim_mode,
+			slm_pack=bool(opt.get("slm_pack", True)),
 			images_dir=opt.get("images_dir"),
 		)
 	finally:

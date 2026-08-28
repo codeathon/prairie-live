@@ -451,3 +451,71 @@ def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
 	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
 	# Packed string contains two PFI1 tokens (one per set) + Delay between.
 	assert relay.calls[0][1].count("PFI1") == 2
+
+
+def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 545.0
+	meta["spiral_size_um"] = "54.5"
+	meta["is_spiral"] = "True"
+	meta["initial_delay_ms"] = 0.0
+	log_path = tmp_path / "slm_single.jsonl"
+	log = JsonlLog(log_path)
+	relay = _FakeRelayMp()
+	ttl = _FakeTtl()
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=None,
+			n_iterations=1,
+			n_groups=2,
+			group_size=3,
+			powers=[0.75],
+			seed=1,
+			trigger="serial",
+			ttl=ttl,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+			stim_mode="slm",
+			slm_pack=False,
+		)
+	finally:
+		log.close()
+	# Two groups → two separate -slm commands; two DTR pulses.
+	assert len(rows) == 2
+	assert len(relay.calls) == 2
+	assert all(c[0] == "slm" for c in relay.calls)
+	assert all(c[1][0] == "-MarkAllPoints" for c in relay.calls)
+	assert len(ttl.pulses) == 2
+	assert all(r["trigger_index"] == 0 for r in rows)
+	assert all(r["n_triggers"] == 1 for r in rows)
+	assert all(r.get("slm_pack") is False for r in rows)
+	singles = [
+		json.loads(ln)
+		for ln in log_path.read_text(encoding="utf-8").splitlines()
+		if json.loads(ln).get("phase") == "slm_single"
+	]
+	assert len(singles) == 2
+	assert singles[0]["n_triggers"] == 1
+	assert singles[0]["group_trigger_map"][0]["point_ids"] == rows[0]["point_ids"]
+	packed = [
+		json.loads(ln)
+		for ln in log_path.read_text(encoding="utf-8").splitlines()
+		if json.loads(ln).get("phase") == "slm_packed"
+	]
+	assert packed == []
