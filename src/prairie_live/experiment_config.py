@@ -38,6 +38,20 @@ _CLI_KEYS = (
 	"stim_mode",
 	"slm_pack",
 	"images_dir",
+	"visual_enabled",
+	"visual_screen",
+	"visual_refresh_hz",
+	"visual_isi_s",
+	"visual_lead_ms",
+	"visual_dtr_frames",
+	"visual_grating_frames",
+	"visual_orientations",
+	"visual_contrasts",
+	"visual_spatial_freq",
+	"visual_temporal_freq",
+	"visual_stim_size_deg",
+	"visual_texture",
+	"visual_random",
 )
 
 # Mark Points / -slm geometry (mostly config-only; stim_mode also has a CLI flag).
@@ -171,6 +185,10 @@ def merge_cli_over_config(args_ns: Any, cfg: dict[str, Any]) -> dict[str, Any]:
 		out["slm_pack"] = bool(slm_pack)
 	elif "slm_pack" not in out:
 		out["slm_pack"] = True
+	if getattr(args_ns, "visual_enabled", None) is not None:
+		out["visual_enabled"] = bool(args_ns.visual_enabled)
+	elif "visual_enabled" not in out:
+		out["visual_enabled"] = False
 	if "powers" in out:
 		out["powers"] = powers_to_list(out["powers"])
 	elif "powers" not in out:

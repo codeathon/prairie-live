@@ -53,5 +53,20 @@
 	"inter_point_delay_ms": 10.0,
 	"interval_ms": 110.0,
 	"_interval_note": "Interval ≈ Duration + Inter Point Delay; not a script/XML field",
-	"trigger_selection": "PFI1"
+	"trigger_selection": "PFI1",
+	"visual_enabled": false,
+	"_visual_note": "Embedded PsychoPy gratings on analysis PC; mp-sync owns COM3 RTS+DTR",
+	"visual_screen": 1,
+	"visual_refresh_hz": 120,
+	"visual_isi_s": 2.0,
+	"visual_lead_ms": 100,
+	"visual_dtr_frames": 6,
+	"visual_grating_frames": 119,
+	"visual_orientations": [0, 45, 90, 135, 180, 225, 270, 315],
+	"visual_contrasts": [0, 16, 100],
+	"visual_spatial_freq": 0.10,
+	"visual_temporal_freq": 4.0,
+	"visual_stim_size_deg": 300,
+	"visual_texture": "sqr",
+	"visual_random": true
 }

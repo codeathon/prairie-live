@@ -31,6 +31,11 @@ _TRIAL_KEY_ORDER = (
 	"iteration",
 	"t_cmd",
 	"t_ttl",
+	"t_rts_mono",
+	"t_ttl_mono",
+	"visual_ori_deg",
+	"visual_contrast_pct",
+	"visual_stim_index",
 	"image_paths",
 	"record_paths",
 )
@@ -55,6 +60,10 @@ def format_trial_summary(row: dict[str, Any]) -> str:
 	parts.append(f"points [{pts}]")
 	parts.append(f"power {power}")
 	parts.append(f"mode {mode}")
+	vori = row.get("visual_ori_deg")
+	vcon = row.get("visual_contrast_pct")
+	if vori is not None and vcon is not None:
+		parts.append(f"grating ori={float(vori):.0f}° con={float(vcon):.0f}%")
 	if score is not None:
 		parts.append(f"ΔF/F {float(score):.4f} ({kind})")
 	elif kind:
@@ -91,6 +100,10 @@ def format_trial_readable(row: dict[str, Any]) -> str:
 		f"  Stim mode:     {row.get('stim_mode')}   trigger={row.get('trigger')}  "
 		f"line={row.get('trigger_selection')}",
 		f"  TTL / pulse:   {pulse}",
+		f"  Visual:        ori={row.get('visual_ori_deg')}°  "
+		f"contrast={row.get('visual_contrast_pct')}%",
+		f"  t_rts_mono:    {row.get('t_rts_mono')}",
+		f"  t_ttl_mono:    {row.get('t_ttl_mono')}",
 		f"  ΔF/F score:    {score_s}",
 		f"  Images:        {img_dir}",
 		f"  One-liner:     {row.get('summary') or format_trial_summary(row)}",
