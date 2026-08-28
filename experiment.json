@@ -32,7 +32,7 @@
 	"_images_note": "Each mp-sync run → trial_images/run_YYYYMMDD_HHMMSS/tXXXX_pYYY/{f0,f1,dff}.png (needs relay --grab); gray=pool, cyan/lime=fired group",
 	"stim_mode": "slm",
 	"_stim_mode_note": "slm only if X/Y in 0–1; .gpl galvo lists auto-fallback to series/-lmp/-mp",
-	"slm_pack": true,
+	"slm_pack": false,
 	"_slm_pack_note": "true=one -MarkAllPoints per power (all groups packed); false=one -MarkAllPoints per group",
 	"laser": "Monaco",
 	"use_3d": false,
