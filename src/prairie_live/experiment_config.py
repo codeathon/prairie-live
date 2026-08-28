@@ -52,6 +52,7 @@ _CLI_KEYS = (
 	"visual_stim_size_deg",
 	"visual_texture",
 	"visual_random",
+	"recommend_min_dff",
 )
 
 # Mark Points / -slm geometry (mostly config-only; stim_mode also has a CLI flag).

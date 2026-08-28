@@ -151,18 +151,41 @@ def test_best_trial_recommendation_picks_highest_score():
 
 def test_write_session_recommendation(tmp_path: Path):
 	trials = [
-		{"trial_index": 0, "point_ids": ["1"], "power": 100, "score": 0.01, "score_kind": "mock"},
 		{
+			"phase": "done",
+			"trial_index": 0,
+			"point_ids": ["1"],
+			"power": 100,
+			"score": 0.01,
+			"score_kind": "mock",
+			"point_dff": {"1": -0.01},
+		},
+		{
+			"phase": "done",
 			"trial_index": 1,
 			"point_ids": ["4", "8"],
 			"power": 140,
 			"score": 0.09,
 			"score_kind": "mock",
+			"point_dff": {"4": 0.09, "8": 0.07},
 			"image_paths": {"trial_dir": str(tmp_path / "t0001_p140")},
 		},
 	]
 	run_root = tmp_path / "run_test"
-	rec = write_session_recommendation(trials, run_root=run_root)
+	pool = [
+		{"id": "1", "name": "Point 1", "x": 0.1, "y": 0.1, "z": 0, "is_spiral": "True"},
+		{"id": "4", "name": "Point 4", "x": 0.4, "y": 0.4, "z": 0, "is_spiral": "True"},
+		{"id": "8", "name": "Point 8", "x": 0.8, "y": 0.8, "z": 0, "is_spiral": "True"},
+	]
+	meta = {"trigger_selection": "PFI1", "duration": 100.0}
+	rec = write_session_recommendation(
+		trials,
+		run_root=run_root,
+		point_pool=pool,
+		meta=meta,
+		min_dff=0.0,
+	)
 	assert rec is not None
 	assert "4, 8" in format_recommendation(rec)
 	assert (run_root / "recommendation.txt").is_file()
+	assert (run_root / "recommended_MarkPoints.xml").is_file()

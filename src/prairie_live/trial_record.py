@@ -24,6 +24,7 @@ _TRIAL_KEY_ORDER = (
 	"point_ids",
 	"power",
 	"score",
+	"point_dff",
 	"score_kind",
 	"stim_mode",
 	"trigger",
@@ -282,6 +283,9 @@ def write_session_recommendation(
 	*,
 	log: Any | None = None,
 	run_root: Path | None = None,
+	point_pool: list[dict] | None = None,
+	meta: dict[str, Any] | None = None,
+	min_dff: float = 0.0,
 ) -> dict[str, Any] | None:
 	"""Print, log, and optionally save the best points×power from all trials."""
 	rec = best_trial_recommendation(trials)
@@ -302,6 +306,37 @@ def write_session_recommendation(
 		path = run_root / "recommendation.txt"
 		path.write_text(text, encoding="utf-8")
 		row["recommendation_path"] = str(path.resolve())
+
+	from prairie_live.recommended_series import write_recommended_series
+
+	if point_pool and meta is not None:
+		series = write_recommended_series(
+			trials,
+			point_pool=point_pool,
+			meta=meta,
+			run_root=run_root,
+			min_dff=min_dff,
+			trigger_selection=str(meta.get("trigger_selection", "PFI1")),
+		)
+		if series is not None:
+			n_el = series["n_elements"]
+			n_pt = series["n_points"]
+			print(
+				f"\n=== Recommended MarkPoints: {n_el} hit(s) "
+				f"({n_pt} unique point(s), ΔF/F > {min_dff}) "
+				f"→ {series.get('recommended_series_path', '(no path)')} ==="
+			)
+			if log is not None:
+				log.write(
+					{
+						"phase": "recommended_series",
+						"summary": (
+							f"recommended series · {n_el} hits · "
+							f"{n_pt} points · min_dff {min_dff}"
+						),
+						**series,
+					}
+				)
 	return row
 
 

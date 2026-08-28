@@ -205,9 +205,10 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 	assert len(rows) == 8
 	assert Path(scope).is_file()
 	lines = log_path.read_text(encoding="utf-8").strip().splitlines()
-	# armed + done per trial + session recommendation
-	assert len(lines) == 17
-	assert json.loads(lines[-1])["phase"] == "recommendation"
+	# armed + done per trial + recommendation + recommended_series
+	assert len(lines) == 18
+	assert json.loads(lines[-1])["phase"] == "recommended_series"
+	assert json.loads(lines[-2])["phase"] == "recommendation"
 	done = [json.loads(ln) for ln in lines if json.loads(ln).get("phase") == "done"]
 	assert done[0]["trial_index"] == 0
 	assert done[0]["score_kind"] == "mock"

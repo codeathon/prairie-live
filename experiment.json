@@ -68,5 +68,7 @@
 	"visual_temporal_freq": 4.0,
 	"visual_stim_size_deg": 300,
 	"visual_texture": "sqr",
-	"visual_random": true
+	"visual_random": true,
+	"recommend_min_dff": 0.0,
+	"_recommend_note": "Points with per-point ΔF/F above this go into recommended_MarkPoints.xml"
 }

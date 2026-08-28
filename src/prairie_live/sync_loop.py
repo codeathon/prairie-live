@@ -127,18 +127,18 @@ def disk_mean(frame: np.ndarray, x_norm: float, y_norm: float, radius: int) -> f
 	return float(frame[mask].mean())
 
 
-def score_group_dff(
+def score_point_dffs(
 	frames_f0: list[np.ndarray],
 	frames_f1: list[np.ndarray],
 	points: list[dict],
 	radius: int = 3,
-) -> float:
-	"""Mean ΔF/F across group points that fall on the imaging FOV."""
+) -> dict[str, float]:
+	"""Per-point disk ΔF/F for points that fall on the imaging FOV."""
 	if not frames_f0 or not frames_f1:
-		return 0.0
+		return {}
 	f0 = np.mean(np.stack(frames_f0, axis=0), axis=0)
 	f1 = np.mean(np.stack(frames_f1, axis=0), axis=0)
-	vals = []
+	out: dict[str, float] = {}
 	n_oob = 0
 	for pt in points:
 		b = disk_mean(f0, pt["x"], pt["y"], radius)
@@ -148,12 +148,25 @@ def score_group_dff(
 			continue
 		if b <= 0:
 			continue
-		vals.append((a - b) / b)
+		out[str(pt["id"])] = float((a - b) / b)
 	if n_oob:
 		print(
 			f"  score: skipped {n_oob}/{len(points)} points outside imaging FOV "
 			f"(X/Y not in ~0–1)"
 		)
+	return out
+
+
+def score_group_dff(
+	frames_f0: list[np.ndarray],
+	frames_f1: list[np.ndarray],
+	points: list[dict],
+	radius: int = 3,
+) -> float:
+	"""Mean ΔF/F across group points that fall on the imaging FOV."""
+	vals = list(
+		score_point_dffs(frames_f0, frames_f1, points, radius=radius).values()
+	)
 	return float(np.mean(vals)) if vals else 0.0
 
 
@@ -174,7 +187,12 @@ class JsonlLog:
 		# Keep insertion order (summary first); do not alpha-sort keys.
 		from prairie_live.trial_record import order_trial_row
 
-		slm_meta = row.get("phase") in ("slm_packed", "slm_single", "recommendation")
+		slm_meta = row.get("phase") in (
+			"slm_packed",
+			"slm_single",
+			"recommendation",
+			"recommended_series",
+		)
 		payload = row if slm_meta else order_trial_row(row)
 		self._fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
 		self._fp.flush()
@@ -230,6 +248,7 @@ def run_sync_loop(
 	slm_pack: bool = True,
 	images_dir: str | None = None,
 	visual_cfg: Any | None = None,
+	recommend_min_dff: float = 0.0,
 	on_trial: Callable[[dict], None] | None = None,
 ) -> list[dict]:
 	"""
@@ -426,7 +445,14 @@ def run_sync_loop(
 
 	from prairie_live.trial_record import write_session_recommendation
 
-	write_session_recommendation(all_trials, log=log, run_root=run_root)
+	write_session_recommendation(
+		all_trials,
+		log=log,
+		run_root=run_root,
+		point_pool=points,
+		meta=meta,
+		min_dff=recommend_min_dff,
+	)
 	return all_trials
 
 
@@ -576,14 +602,25 @@ def _finish_trial_frames(
 ) -> None:
 	"""Score + optional PNG dump into <run>/tXXXX/."""
 	if mock_scores:
-		row["score"] = (
-			abs(hash((tuple(row["point_ids"]), row["power"], it))) % 1000 / 1000.0
-		)
+		row["point_dff"] = {
+			str(p["id"]): abs(
+				hash((str(p["id"]), tuple(row["point_ids"]), row["power"], it))
+			)
+			% 1000
+			/ 1000.0
+			for p in gpts
+		}
+		row["score"] = float(np.mean(list(row["point_dff"].values()))) if gpts else 0.0
 		row["score_kind"] = "mock"
 	elif relay is not None and f0_frames and f1_frames:
 		try:
-			row["score"] = score_group_dff(
+			row["point_dff"] = score_point_dffs(
 				f0_frames, f1_frames, gpts, radius=disk_radius
+			)
+			row["score"] = (
+				float(np.mean(list(row["point_dff"].values())))
+				if row["point_dff"]
+				else 0.0
 			)
 			row["score_kind"] = "relay_disk_dff"
 		except Exception as exc:
@@ -1410,6 +1447,12 @@ def main(argv: list[str] | None = None) -> None:
 	)
 	p.add_argument("--visual-dtr-frames", type=int, default=None)
 	p.add_argument("--visual-grating-frames", type=int, default=None)
+	p.add_argument(
+		"--recommend-min-dff",
+		type=float,
+		default=None,
+		help="Min per-point ΔF/F to include in recommended_MarkPoints.xml (default 0)",
+	)
 	# Parse full argv (includes --config) so --help lists every flag once.
 	args = p.parse_args(argv)
 
@@ -1435,6 +1478,7 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("stim_mode", "series")
 	opt.setdefault("slm_pack", True)
 	opt.setdefault("visual_enabled", False)
+	opt.setdefault("recommend_min_dff", 0.0)
 
 	series = opt.get("series")
 	if not series:
@@ -1619,6 +1663,7 @@ def main(argv: list[str] | None = None) -> None:
 			slm_pack=bool(opt.get("slm_pack", True)),
 			images_dir=opt.get("images_dir"),
 			visual_cfg=opt,
+			recommend_min_dff=float(opt.get("recommend_min_dff", 0.0)),
 		)
 	finally:
 		log.close()
