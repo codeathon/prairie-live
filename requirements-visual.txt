@@ -1,29 +1,64 @@
 # Windows analysis PC only — embedded PsychoPy gratings in mp-sync.
 # Scope PC / relay do not need this file.
 #
-# Python 3.12.x (your rig): pywinhook has no wheel; NEVER run plain
-#   pip install psychopy
-# That pulls pywinhook and fails without SWIG. mp-sync gratings do not need it.
+# Python 3.12.x: pywinhook has no wheel. NEVER run plain `pip install psychopy`.
 #
-# Install (PowerShell, analysis PC) — run in order:
+# Install (PowerShell) — run in order:
 #
 #   pip install -U pip
-#   pip uninstall pywinhook psychopy -y
+#   pip uninstall pywinhook psychopy pyglet -y
 #   pip install "psychopy>=2024.1" --no-deps
 #   pip install -r requirements-visual.txt
 #   python -c "from psychopy import visual; print('PsychoPy OK')"
 #
-# Optional: Python 3.11 venv avoids --no-deps entirely (most reliable on Windows).
+# pip will still warn that pywinhook is missing — expected; mp-sync gratings
+# do not use keyboard hooks. Ignore that one warning.
 #
-# PsychoPy is intentionally NOT listed below (would reinstall pywinhook).
+# PsychoPy is NOT listed below (would reinstall pywinhook).
 
 numpy>=1.24
 scipy>=1.10
 matplotlib>=3.7
 pillow>=10.0
-pyglet>=1.5.27
 pyyaml>=6.0
 requests>=2.28
 freetype-py>=2.4
 python-bidi>=0.4
-pywin32>=306; sys_platform == "win32"
+arabic-reshaper
+astunparse
+beautifulsoup4
+esprima
+ffpyplayer
+gevent==25.5.1
+i18next
+imageio
+imageio-ffmpeg
+jedi>=0.16
+MeshPy
+moviepy
+msgpack
+msgpack-numpy
+opencv-python
+openpyxl
+pandas>=1.5.3
+psutil
+psychtoolbox
+pyarrow
+pyparallel; sys_platform != "Darwin"
+pypiwin32; sys_platform == "Windows"
+pyqt6
+python-vlc==3.0.11115; sys_platform == "Windows"
+pyzmq>=22.2.1
+questplus>=2023.1
+sounddevice
+soundfile
+tables
+ujson
+websockets
+xmlschema
+zope.event==5.0
+zope.interface==7.2
+
+# PsychoPy 2026.x pins this on Windows; 2.x breaks visual.Window.
+pyglet==1.4.11; sys_platform == "win32"
+pyglet>=1.5.27; sys_platform != "win32"
