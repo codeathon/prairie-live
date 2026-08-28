@@ -229,6 +229,7 @@ def run_sync_loop(
 	stim_mode: str = "series",
 	slm_pack: bool = True,
 	images_dir: str | None = None,
+	visual_cfg: Any | None = None,
 	on_trial: Callable[[dict], None] | None = None,
 ) -> list[dict]:
 	"""
@@ -252,6 +253,15 @@ def run_sync_loop(
 	"""
 	from prairie_live.mark_all_points import stim_params_from_meta
 	from prairie_live.trial_images import run_dir as make_run_dir
+	from prairie_live.visual_stim import VisualConfig, open_visual_stim, visual_config_from_dict
+
+	if isinstance(visual_cfg, dict):
+		vcfg = visual_config_from_dict(visual_cfg)
+	elif visual_cfg is not None:
+		vcfg = visual_cfg
+	else:
+		vcfg = VisualConfig()
+	visual_stim = open_visual_stim(vcfg)
 
 	rng = random.Random(seed)
 	scores: dict[str, float] | None = None
@@ -274,66 +284,33 @@ def run_sync_loop(
 	if mode == "slm":
 		slm_params["trigger_selection"] = trig_sel
 
-	for it in range(n_iterations):
-		groups_pts = form_groups(
-			points,
-			n_groups=n_groups,
-			group_size=group_size,
-			scores=scores,
-			rng=rng,
-			elite_frac=elite_frac,
-		)
-		print(
-			f"\n=== iteration {it + 1}/{n_iterations}  "
-			f"groups={n_groups} size={group_size}  "
-			f"scored={'yes' if scores else 'random'}  "
-			f"stim_mode={mode} ==="
-		)
-		iter_trials: list[dict] = []
+	try:
+		for it in range(n_iterations):
+			groups_pts = form_groups(
+				points,
+				n_groups=n_groups,
+				group_size=group_size,
+				scores=scores,
+				rng=rng,
+				elite_frac=elite_frac,
+			)
+			print(
+				f"\n=== iteration {it + 1}/{n_iterations}  "
+				f"groups={n_groups} size={group_size}  "
+				f"scored={'yes' if scores else 'random'}  "
+				f"stim_mode={mode} ==="
+			)
+			iter_trials: list[dict] = []
 
-		if mode == "slm":
-			for power in powers:
-				if slm_pack:
-					batch = _run_slm_packed_batch(
-						groups_pts=groups_pts,
-						point_pool=points,
-						power=power,
-						it=it,
-						trial_index_start=trial_index,
-						meta=meta,
-						slm_params=slm_params,
-						trig_sel=trig_sel,
-						trigger=trigger,
-						ttl=ttl,
-						ttl_width_s=ttl_width_s,
-						inter_trial_s=inter_trial_s,
-						pad_ms=pad_ms,
-						pl=pl,
-						relay=relay,
-						via_relay=via_relay,
-						scope_xml=scope_xml,
-						log=log,
-						dry_run=dry_run,
-						mock_scores=mock_scores,
-						f0_s=f0_s,
-						f1_s=f1_s,
-						frame_poll_s=frame_poll_s,
-						disk_radius=disk_radius,
-						run_root=run_root,
-						on_trial=on_trial,
-					)
-					iter_trials.extend(batch)
-					all_trials.extend(batch)
-					trial_index += len(batch)
-				else:
-					for gi, gpts in enumerate(groups_pts):
-						row = _run_slm_single_trial(
-							gpts=gpts,
+			if mode == "slm":
+				for power in powers:
+					if slm_pack:
+						batch = _run_slm_packed_batch(
+							groups_pts=groups_pts,
 							point_pool=points,
-							gi=gi,
 							power=power,
 							it=it,
-							trial_index=trial_index,
+							trial_index_start=trial_index,
 							meta=meta,
 							slm_params=slm_params,
 							trig_sel=trig_sel,
@@ -355,52 +332,97 @@ def run_sync_loop(
 							disk_radius=disk_radius,
 							run_root=run_root,
 							on_trial=on_trial,
+							visual_stim=visual_stim,
+							visual_cfg=vcfg,
+							rng=rng,
+						)
+						iter_trials.extend(batch)
+						all_trials.extend(batch)
+						trial_index += len(batch)
+					else:
+						for gi, gpts in enumerate(groups_pts):
+							row = _run_slm_single_trial(
+								gpts=gpts,
+								point_pool=points,
+								gi=gi,
+								power=power,
+								it=it,
+								trial_index=trial_index,
+								meta=meta,
+								slm_params=slm_params,
+								trig_sel=trig_sel,
+								trigger=trigger,
+								ttl=ttl,
+								ttl_width_s=ttl_width_s,
+								inter_trial_s=inter_trial_s,
+								pad_ms=pad_ms,
+								pl=pl,
+								relay=relay,
+								via_relay=via_relay,
+								scope_xml=scope_xml,
+								log=log,
+								dry_run=dry_run,
+								mock_scores=mock_scores,
+								f0_s=f0_s,
+								f1_s=f1_s,
+								frame_poll_s=frame_poll_s,
+								disk_radius=disk_radius,
+								run_root=run_root,
+								on_trial=on_trial,
+								visual_stim=visual_stim,
+								visual_cfg=vcfg,
+								rng=rng,
+							)
+							iter_trials.append(row)
+							all_trials.append(row)
+							trial_index += 1
+			else:
+				for gi, gpts in enumerate(groups_pts):
+					for power in powers:
+						row = _run_series_trial(
+							gpts=gpts,
+							point_pool=points,
+							gi=gi,
+							power=power,
+							it=it,
+							trial_index=trial_index,
+							meta=meta,
+							trig_sel=trig_sel,
+							trigger=trigger,
+							ttl=ttl,
+							ttl_width_s=ttl_width_s,
+							inter_trial_s=inter_trial_s,
+							pad_ms=pad_ms,
+							pl=pl,
+							relay=relay,
+							via_relay=via_relay,
+							scope_xml=scope_xml,
+							log=log,
+							dry_run=dry_run,
+							mock_scores=mock_scores,
+							f0_s=f0_s,
+							f1_s=f1_s,
+							frame_poll_s=frame_poll_s,
+							disk_radius=disk_radius,
+							run_root=run_root,
+							on_trial=on_trial,
+							visual_stim=visual_stim,
+							visual_cfg=vcfg,
+							rng=rng,
 						)
 						iter_trials.append(row)
 						all_trials.append(row)
 						trial_index += 1
-		else:
-			for gi, gpts in enumerate(groups_pts):
-				for power in powers:
-					row = _run_series_trial(
-						gpts=gpts,
-						point_pool=points,
-						gi=gi,
-						power=power,
-						it=it,
-						trial_index=trial_index,
-						meta=meta,
-						trig_sel=trig_sel,
-						trigger=trigger,
-						ttl=ttl,
-						ttl_width_s=ttl_width_s,
-						inter_trial_s=inter_trial_s,
-						pad_ms=pad_ms,
-						pl=pl,
-						relay=relay,
-						via_relay=via_relay,
-						scope_xml=scope_xml,
-						log=log,
-						dry_run=dry_run,
-						mock_scores=mock_scores,
-						f0_s=f0_s,
-						f1_s=f1_s,
-						frame_poll_s=frame_poll_s,
-						disk_radius=disk_radius,
-						run_root=run_root,
-						on_trial=on_trial,
-					)
-					iter_trials.append(row)
-					all_trials.append(row)
-					trial_index += 1
 
-		agg = aggregate_point_scores(iter_trials)
-		if agg:
-			scores = agg
-			top = sorted(agg.items(), key=lambda kv: kv[1], reverse=True)[:5]
-			print(f"  scores (top): {top}")
-		else:
-			print("  no scores this iteration — next groups stay random")
+			agg = aggregate_point_scores(iter_trials)
+			if agg:
+				scores = agg
+				top = sorted(agg.items(), key=lambda kv: kv[1], reverse=True)[:5]
+				print(f"  scores (top): {top}")
+			else:
+				print("  no scores this iteration — next groups stay random")
+	finally:
+		visual_stim.close()
 
 	from prairie_live.trial_record import write_session_recommendation
 
@@ -419,6 +441,124 @@ def _want_frames(
 	if relay is None or dry_run:
 		return False
 	return (not mock_scores) or (run_root is not None)
+
+
+def _run_stim_epoch(
+	row: dict,
+	*,
+	trigger: str,
+	ttl: Any | None,
+	ttl_width_s: float,
+	dry_run: bool,
+	visual_stim: Any,
+	visual_cfg: Any,
+	rng: random.Random,
+	relay: Any | None,
+	want: bool,
+	f0_s: float,
+	f1_s: float,
+	frame_poll_s: float,
+	wait_s: float,
+	trigger_msg: str = "",
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+	"""
+	Visual + TTL epoch: legacy RTS-held grating with DTR at visual_lead_ms.
+
+	When visual is off, preserves the original f0 → DTR → f1 sequence.
+	"""
+	f0_frames: list[np.ndarray] = []
+	f1_frames: list[np.ndarray] = []
+
+	if visual_cfg.enabled:
+		params = visual_stim.pick_trial(rng)
+		row["visual_ori_deg"] = params.visual_ori_deg
+		row["visual_contrast_pct"] = params.visual_contrast_pct
+		row["visual_stim_index"] = params.visual_stim_index
+		dtr_width = visual_cfg.dtr_width_s
+		lead_frame = visual_cfg.lead_frame
+		dtr_fired = False
+
+		visual_stim.run_isi()
+
+		def on_rts_on() -> None:
+			if ttl is not None and not dry_run:
+				row["t_rts_mono"] = ttl.set_rts(True)
+
+		def on_rts_off() -> None:
+			if ttl is not None and not dry_run:
+				ttl.set_rts(False)
+
+		def on_frame(frame: int) -> None:
+			nonlocal dtr_fired
+			if (
+				frame == lead_frame
+				and trigger == "serial"
+				and ttl is not None
+				and not dry_run
+				and not dtr_fired
+			):
+				row["t_ttl"] = time.time()
+				row["t_ttl_mono"] = ttl.pulse_dtr(dtr_width)
+				dtr_fired = True
+				if trigger_msg:
+					print(trigger_msg)
+			elif trigger == "none" and frame == lead_frame and not dtr_fired:
+				row["t_ttl"] = row.get("t_cmd")
+				dtr_fired = True
+				if trigger_msg:
+					print(trigger_msg)
+			elif trigger == "wait" and frame == lead_frame and not dtr_fired:
+				row["t_ttl"] = time.time()
+				dtr_fired = True
+				if trigger_msg:
+					print(trigger_msg)
+
+		def poll() -> None:
+			if not want or relay is None:
+				return
+			frm = relay.get_frame()
+			if frm is None:
+				return
+			if not dtr_fired:
+				f0_frames.append(frm)
+			else:
+				f1_frames.append(frm)
+
+		visual_stim.run_grating_epoch(
+			params,
+			on_rts_on=on_rts_on,
+			on_frame=on_frame,
+			on_rts_off=on_rts_off,
+			poll=poll,
+		)
+		if want and relay is not None:
+			f1_frames.extend(_collect_frames(relay, max(f1_s, wait_s), frame_poll_s))
+		elif wait_s > 0:
+			time.sleep(max(wait_s, 0.0))
+		return f0_frames, f1_frames
+
+	if want:
+		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+
+	if trigger == "serial" and ttl is not None and not dry_run:
+		row["t_ttl"] = time.time()
+		row["t_ttl_mono"] = ttl.pulse_dtr(ttl_width_s)
+		if trigger_msg:
+			print(trigger_msg)
+	elif trigger == "none":
+		row["t_ttl"] = row.get("t_cmd")
+		if trigger_msg:
+			print(trigger_msg)
+	else:
+		row["t_ttl"] = time.time()
+		if trigger_msg:
+			print(trigger_msg)
+
+	if want:
+		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+	elif wait_s > 0:
+		time.sleep(max(wait_s, 0.0))
+	return f0_frames, f1_frames
 
 
 def _finish_trial_frames(
@@ -548,6 +688,9 @@ def _run_slm_packed_batch(
 	disk_radius: int,
 	run_root: Path | None,
 	on_trial: Callable[[dict], None] | None,
+	visual_stim: Any,
+	visual_cfg: Any,
+	rng: random.Random,
 ) -> list[dict]:
 	"""
 	One -slm command for all groups at this power; one TTL per group.
@@ -687,37 +830,41 @@ def _run_slm_packed_batch(
 		}
 		log.write({**row, "phase": "armed"})
 
-		f0_frames: list[np.ndarray] = []
-		f1_frames: list[np.ndarray] = []
-		if want:
-			f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
-
-		if trigger == "serial" and ttl is not None and not dry_run:
-			# Pulse gi fires packed set gi — identity is our count, not PV.
-			row["t_ttl"] = time.time()
-			ttl.pulse_dtr(ttl_width_s)
-			print(
+		if trigger == "serial":
+			trigger_msg = (
 				f"  trigger {gi}/{n - 1}: trial {trial_index} "
 				f"pts={entry['point_ids']}"
 			)
 		elif trigger == "none":
-			row["t_ttl"] = row["t_cmd"]
-			print(
+			trigger_msg = (
 				f"  [none] trigger_index={gi} trial {trial_index} "
 				f"pts={entry['point_ids']}"
 			)
 		else:
-			# wait: external TTL; stamp when we expect pulse gi.
-			row["t_ttl"] = time.time()
-			print(
+			trigger_msg = (
 				f"  wait trigger {gi}/{n - 1}: trial {trial_index} "
 				f"pts={entry['point_ids']}"
 			)
 
-		if want:
-			f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
-		else:
-			time.sleep(max(wait_s, 0.0))
+		f0_frames, f1_frames = _run_stim_epoch(
+			row,
+			trigger=trigger,
+			ttl=ttl,
+			ttl_width_s=ttl_width_s,
+			dry_run=dry_run,
+			visual_stim=visual_stim,
+			visual_cfg=visual_cfg,
+			rng=rng,
+			relay=relay,
+			want=want,
+			f0_s=f0_s,
+			f1_s=f1_s,
+			frame_poll_s=frame_poll_s,
+			wait_s=wait_s,
+			trigger_msg=trigger_msg,
+		)
+		if trigger_msg and not visual_cfg.enabled and trigger != "serial":
+			print(trigger_msg)
 
 		_finish_trial_frames(
 			row,
@@ -770,6 +917,9 @@ def _run_slm_single_trial(
 	disk_radius: int,
 	run_root: Path | None,
 	on_trial: Callable[[dict], None] | None,
+	visual_stim: Any,
+	visual_cfg: Any,
+	rng: random.Random,
 ) -> dict:
 	"""
 	One group × power via its own -MarkAllPoints (-slm); one TTL pulse.
@@ -883,26 +1033,32 @@ def _run_slm_single_trial(
 	}
 	log.write({**row, "phase": "armed"})
 
-	f0_frames: list[np.ndarray] = []
-	f1_frames: list[np.ndarray] = []
-	if want:
-		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
-
-	if trigger == "serial" and ttl is not None and not dry_run:
-		row["t_ttl"] = time.time()
-		ttl.pulse_dtr(ttl_width_s)
-		print(f"  trigger 0/0: trial {trial_index} pts={point_ids}")
+	if trigger == "serial":
+		trigger_msg = f"  trigger 0/0: trial {trial_index} pts={point_ids}"
 	elif trigger == "none":
-		row["t_ttl"] = row["t_cmd"]
-		print(f"  [none] trial {trial_index} pts={point_ids}")
+		trigger_msg = f"  [none] trial {trial_index} pts={point_ids}"
 	else:
-		row["t_ttl"] = time.time()
-		print(f"  wait trigger 0/0: trial {trial_index} pts={point_ids}")
+		trigger_msg = f"  wait trigger 0/0: trial {trial_index} pts={point_ids}"
 
-	if want:
-		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
-	else:
-		time.sleep(max(wait_s, 0.0))
+	f0_frames, f1_frames = _run_stim_epoch(
+		row,
+		trigger=trigger,
+		ttl=ttl,
+		ttl_width_s=ttl_width_s,
+		dry_run=dry_run,
+		visual_stim=visual_stim,
+		visual_cfg=visual_cfg,
+		rng=rng,
+		relay=relay,
+		want=want,
+		f0_s=f0_s,
+		f1_s=f1_s,
+		frame_poll_s=frame_poll_s,
+		wait_s=wait_s,
+		trigger_msg=trigger_msg,
+	)
+	if trigger_msg and not visual_cfg.enabled and trigger != "serial":
+		print(trigger_msg)
 
 	_finish_trial_frames(
 		row,
@@ -953,6 +1109,9 @@ def _run_series_trial(
 	disk_radius: int,
 	run_root: Path | None,
 	on_trial: Callable[[dict], None] | None,
+	visual_stim: Any,
+	visual_cfg: Any,
+	rng: random.Random,
 ) -> dict:
 	"""One group × power via -LoadMarkPoints / -MarkPoints."""
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
@@ -1003,24 +1162,24 @@ def _run_series_trial(
 	want = _want_frames(
 		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
 	)
-	f0_frames: list[np.ndarray] = []
-	f1_frames: list[np.ndarray] = []
-	if want:
-		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
-
-	if trigger == "serial" and ttl is not None and not dry_run:
-		row["t_ttl"] = time.time()
-		ttl.pulse_dtr(ttl_width_s)
-	elif trigger == "none":
-		row["t_ttl"] = row["t_cmd"]
-	else:
-		row["t_ttl"] = time.time()
-
 	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
-	if want:
-		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
-	else:
-		time.sleep(max(wait_s, 0.0))
+
+	f0_frames, f1_frames = _run_stim_epoch(
+		row,
+		trigger=trigger,
+		ttl=ttl,
+		ttl_width_s=ttl_width_s,
+		dry_run=dry_run,
+		visual_stim=visual_stim,
+		visual_cfg=visual_cfg,
+		rng=rng,
+		relay=relay,
+		want=want,
+		f0_s=f0_s,
+		f1_s=f1_s,
+		frame_poll_s=frame_poll_s,
+		wait_s=wait_s,
+	)
 
 	_finish_trial_frames(
 		row,
@@ -1226,6 +1385,31 @@ def main(argv: list[str] | None = None) -> None:
 		action="store_false",
 		help="stim_mode=slm: one -MarkAllPoints per group (trigger_index always 0)",
 	)
+	visual_g = p.add_mutually_exclusive_group()
+	visual_g.add_argument(
+		"--visual",
+		dest="visual_enabled",
+		action="store_true",
+		default=None,
+		help="Enable embedded PsychoPy gratings (analysis PC, second monitor)",
+	)
+	visual_g.add_argument(
+		"--no-visual",
+		dest="visual_enabled",
+		action="store_false",
+		help="Disable PsychoPy gratings (default when not in config)",
+	)
+	p.add_argument("--visual-screen", type=int, default=None)
+	p.add_argument("--visual-refresh-hz", type=float, default=None)
+	p.add_argument("--visual-isi-s", type=float, default=None)
+	p.add_argument(
+		"--visual-lead-ms",
+		type=float,
+		default=None,
+		help="DTR delay after grating/RTS onset (legacy stimOnTime @ refresh)",
+	)
+	p.add_argument("--visual-dtr-frames", type=int, default=None)
+	p.add_argument("--visual-grating-frames", type=int, default=None)
 	# Parse full argv (includes --config) so --help lists every flag once.
 	args = p.parse_args(argv)
 
@@ -1250,6 +1434,7 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("disk_radius", 3)
 	opt.setdefault("stim_mode", "series")
 	opt.setdefault("slm_pack", True)
+	opt.setdefault("visual_enabled", False)
 
 	series = opt.get("series")
 	if not series:
@@ -1433,6 +1618,7 @@ def main(argv: list[str] | None = None) -> None:
 			stim_mode=stim_mode,
 			slm_pack=bool(opt.get("slm_pack", True)),
 			images_dir=opt.get("images_dir"),
+			visual_cfg=opt,
 		)
 	finally:
 		log.close()

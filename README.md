@@ -224,6 +224,29 @@ DTR photostim on COM3 (wire DTR to PFI1) — one paste:
 python -m prairie_live mp-sync --series D:\MarkPoints.xml --via-relay 10.33.107.147:25100 --iterations 1 --n-groups 2 --group-size 9 --powers 0,75 --trigger serial --serial COM3 --mock-scores --log trials.jsonl
 ```
 
+### Embedded PsychoPy gratings (analysis PC)
+
+mp-sync can drive the animal monitor and own **COM3** in one process (no
+standalone PsychoPy script). **RTS** marks the visual grating epoch; **DTR**
+still pulses PFI1 for photostim.
+
+- Second monitor: set `visual_screen` (default `1`) in `experiment.json`
+- Install PsychoPy on the analysis PC only:
+  `pip install -r requirements-visual.txt`
+- Enable via config (`"visual_enabled": true`) or CLI `--visual`
+
+```powershell
+python -m prairie_live mp-sync --config experiment.json --visual --trigger serial --serial COM3
+```
+
+Key `visual_*` fields in `experiment.json`: `visual_lead_ms` (DTR delay after
+grating onset, legacy `stimOnTime=12` @ 120 Hz), `visual_dtr_frames` (hold
+width), `visual_grating_frames`, `visual_orientations`, `visual_contrasts`,
+`visual_isi_s`. Trial JSONL / `trials.txt` log `visual_ori_deg`,
+`visual_contrast_pct`, `t_rts_mono`, and `t_ttl_mono`.
+
+The scope PC still runs `relay --grab`; PsychoPy runs on the analysis PC only.
+
 `--via-relay` replaces `--scope-xml` + direct port 1236 for Mark Points. The
 relay must already be running on the scope. PrairieView script password is
 still `0000` on the relay process (`--password`), not a Windows share login.

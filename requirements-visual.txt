@@ -1,0 +1,2 @@
+# Windows analysis PC only — embedded PsychoPy gratings in mp-sync.
+psychopy>=2024.1

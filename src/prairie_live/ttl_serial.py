@@ -10,7 +10,7 @@ import time
 
 
 class SerialTtl:
-	"""Pulse DTR (photostim) and/or RTS (visual) on a serial port."""
+	"""Pulse or hold DTR (photostim) and/or RTS (visual) on a serial port."""
 
 	def __init__(self, port: str, baudrate: int = 9600):
 		try:
@@ -25,20 +25,30 @@ class SerialTtl:
 		self._ser.dtr = False
 		self._ser.rts = False
 
-	def pulse_dtr(self, width_s: float = 0.01) -> float:
-		"""Rising DTR edge for photostim; returns monotonic time of edge."""
+	def set_dtr(self, on: bool) -> float:
+		"""Hold DTR high/low; returns monotonic time of the edge."""
 		t0 = time.monotonic()
-		self._ser.dtr = True
+		self._ser.dtr = bool(on)
+		return t0
+
+	def set_rts(self, on: bool) -> float:
+		"""Hold RTS high/low; returns monotonic time of the edge."""
+		t0 = time.monotonic()
+		self._ser.rts = bool(on)
+		return t0
+
+	def pulse_dtr(self, width_s: float = 0.01) -> float:
+		"""Rising DTR edge for photostim; returns monotonic time of rising edge."""
+		t0 = self.set_dtr(True)
 		time.sleep(max(width_s, 0.001))
-		self._ser.dtr = False
+		self.set_dtr(False)
 		return t0
 
 	def pulse_rts(self, width_s: float = 0.01) -> float:
-		"""Rising RTS edge for visual; returns monotonic time of edge."""
-		t0 = time.monotonic()
-		self._ser.rts = True
+		"""Rising RTS edge for visual; returns monotonic time of rising edge."""
+		t0 = self.set_rts(True)
 		time.sleep(max(width_s, 0.001))
-		self._ser.rts = False
+		self.set_rts(False)
 		return t0
 
 	def close(self) -> None:
