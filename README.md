@@ -67,6 +67,22 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 
 Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 
+## Analysis PC — live ROI intensity
+
+Same relay stream, mean PMT counts plotted as frames arrive. Starts as the
+full FOV; drag a box or click a disk on the image. `r` resets to the full
+frame. Keys: `t` T-series, `a` abort, `l` live scan, `q` quit.
+
+```powershell
+python -m prairie_live view --relay 10.33.107.147:25100
+python -m prairie_live view --relay 10.33.107.147:25100 --window-s 8 --disk-radius 8
+python -m prairie_live view --mock
+```
+
+The left panel is the live image (percentile-scaled so 13–16 bit data is
+visible). The right panel is the ROI mean in **raw counts** over the last
+`--window-s` seconds — autoscaling that trace would hide the signal.
+
 ## Analysis PC — run mp-sync
 
 Edit `experiment.json` (series path, relay IP, COM port, powers, etc.), then:
