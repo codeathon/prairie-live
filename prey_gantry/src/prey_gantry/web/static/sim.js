@@ -83,39 +83,24 @@ function drawThreatRings() {
 	if (!f.valid) return;
 	const [cx, cy] = mmToPx(f.x_mm, f.y_mm);
 	const gsd = canvas.width / state.arena.width_mm;
-	ctx.strokeStyle = "rgba(211,107,94,0.35)";
-	circle(cx, cy, state.policy.threat_distance_mm * gsd);
-	ctx.strokeStyle = "rgba(226,184,74,0.25)";
-	circle(cx, cy, state.policy.creep_distance_mm * gsd);
+	const pref = state.policy.preferred_gap_mm || state.policy.threat_distance_mm;
+	const minG = state.policy.min_gap_mm || pref * 0.4;
+	ctx.strokeStyle = "rgba(226,184,74,0.35)";
+	circle(cx, cy, pref * gsd);
+	ctx.strokeStyle = "rgba(211,107,94,0.3)";
+	circle(cx, cy, minG * gsd);
+	// Wall keep-out band (arena edge margin).
+	const m = (state.policy.wall_margin_mm || 280) * gsd;
+	ctx.strokeStyle = "rgba(126,200,196,0.2)";
+	ctx.strokeRect(m, m, canvas.width - 2 * m, canvas.height - 2 * m);
 }
 
 function drawCone() {
-	const f = state.ferret_camera;
-	if (!f.valid) return;
-	const half = (state.policy.cone_half_angle_deg * Math.PI) / 180;
-	const heading = (-f.direction_deg * Math.PI) / 180;
-	const [cx, cy] = mmToPx(f.x_mm, f.y_mm);
-	const len = 180;
-	ctx.fillStyle = "rgba(226,184,74,0.12)";
-	ctx.beginPath();
-	ctx.moveTo(cx, cy);
-	ctx.lineTo(cx + Math.cos(heading - half) * len, cy + Math.sin(heading - half) * len);
-	ctx.lineTo(cx + Math.cos(heading + half) * len, cy + Math.sin(heading + half) * len);
-	ctx.closePath();
-	ctx.fill();
+	// Soft keep-away no longer uses cone-of-impact flees.
 }
 
 function drawFlee() {
-	const d = state.decision;
-	if (!d.use_planned_flee) return;
-	const [x, y] = mmToPx(d.flee_x_mm, d.flee_y_mm);
-	ctx.strokeStyle = "#d36b5e";
-	ctx.beginPath();
-	ctx.moveTo(x - 7, y - 7);
-	ctx.lineTo(x + 7, y + 7);
-	ctx.moveTo(x + 7, y - 7);
-	ctx.lineTo(x - 7, y + 7);
-	ctx.stroke();
+	// No discrete flee target marker.
 }
 
 function drawGhost() {
@@ -214,9 +199,11 @@ function renderHud() {
 
 		<h2>Chase decision @ ${s.control_hz.toFixed(0)} Hz</h2>
 		<div class="reason">${esc(d.reason)}</div>
-		${row("threat", `${d.threat.toFixed(2)} = dist ${d.dist_threat.toFixed(2)} × cone ${d.cone_threat.toFixed(2)} × approach ${d.approach_threat.toFixed(2)}`)}
-		${row("creep v", `${d.vx_mm_s.toFixed(0)}, ${d.vy_mm_s.toFixed(0)} mm/s`)}
-		${row("flee target", d.use_planned_flee ? `${d.flee_x_mm.toFixed(0)}, ${d.flee_y_mm.toFixed(0)} (${d.flee_mm.toFixed(0)} mm)` : "—")}
+		${row("preferred gap", (s.policy.preferred_gap_mm || 0).toFixed(0) + " mm")}
+		${row("gap error", (d.gap_error_mm || 0).toFixed(0) + " mm (+: too close)")}
+		${row("wall push", (d.wall_push || 0).toFixed(2))}
+		${row("cmd v", `${d.vx_mm_s.toFixed(0)}, ${d.vy_mm_s.toFixed(0)} mm/s`)}
+		${row("cap", (s.policy.max_engage_speed_mm_s || 0).toFixed(0) + " mm/s")}
 		${row("policy compute", d.compute_ms.toFixed(3) + " ms")}
 		${row("stale stops", String(d.stale_stops), d.stale_stops ? "warn" : "")}
 	`;

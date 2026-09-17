@@ -1,5 +1,5 @@
 {
-	"_comment": "Dimensions and timings from codeathon/pylon-track (Basler a2A1920-160umPRO @ 1.2 m, 4 mm lens) plus Zaber X-MCC USB CDC model.",
+	"_comment": "Soft keep-away hunt: hold preferred gap, nudge slightly, dodge walls. Camera timings still from pylon-track.",
 	"camera": {
 		"model": "a2A1920-160umPRO",
 		"pixel_format": "Mono8",
@@ -17,18 +17,20 @@
 		"grab_strategy": "LatestImageOnly"
 	},
 	"chase_policy": {
-		"min_chain_speed_mps": 1.0,
-		"max_chain_speed_mps": 1.4,
+		"preferred_gap_mm": 420.0,
+		"min_gap_mm": 180.0,
+		"max_pull_mm": 350.0,
+		"away_gain": 2.2,
+		"toward_gain": 1.1,
+		"lateral_gain": 0.35,
+		"wall_margin_mm": 280.0,
+		"wall_gain": 900.0,
+		"corner_gain": 1200.0,
+		"velocity_gain_s": 0.55,
+		"max_engage_speed_mm_s": 480.0,
 		"cone_half_angle_deg": 45.0,
-		"threat_distance_mm": 800.0,
-		"creep_distance_mm": 2000.0,
-		"flee_threat_threshold": 0.35,
-		"min_flee_mm": 200.0,
-		"max_flee_mm": 600.0,
-		"flee_gap_gain": 0.25,
-		"flee_speed_gain": 0.15,
-		"flee_accel_mps2": 2.5,
-		"hunt_event_min_interval_ms": 1500
+		"threat_distance_mm": 420.0,
+		"creep_distance_mm": 840.0
 	},
 	"zaber": {
 		"comm": "usb_cdc",

@@ -53,18 +53,23 @@ class CameraTiming:
 
 @dataclass(frozen=True)
 class ChasePolicyConfig:
-	min_chain_speed_mps: float
-	max_chain_speed_mps: float
+	"""Soft keep-away gains. Speeds stay low so the chase stays playable."""
+
+	preferred_gap_mm: float
+	min_gap_mm: float
+	max_pull_mm: float
+	away_gain: float
+	toward_gain: float
+	lateral_gain: float
+	wall_margin_mm: float
+	wall_gain: float
+	corner_gain: float
+	velocity_gain_s: float
+	max_engage_speed_mm_s: float
+	# Kept for HUD rings / older fields; not used for discrete flees anymore.
 	cone_half_angle_deg: float
 	threat_distance_mm: float
 	creep_distance_mm: float
-	flee_threat_threshold: float
-	min_flee_mm: float
-	max_flee_mm: float
-	flee_gap_gain: float
-	flee_speed_gain: float
-	flee_accel_mps2: float
-	hunt_event_min_interval_ms: int
 
 
 @dataclass(frozen=True)
@@ -107,18 +112,20 @@ def load_sim_config(path: Path | None = None) -> SimConfig:
 			lens_mm=float(cam["lens_mm"]),
 		),
 		chase=ChasePolicyConfig(
-			min_chain_speed_mps=float(ch["min_chain_speed_mps"]),
-			max_chain_speed_mps=float(ch["max_chain_speed_mps"]),
-			cone_half_angle_deg=float(ch["cone_half_angle_deg"]),
-			threat_distance_mm=float(ch["threat_distance_mm"]),
-			creep_distance_mm=float(ch["creep_distance_mm"]),
-			flee_threat_threshold=float(ch["flee_threat_threshold"]),
-			min_flee_mm=float(ch["min_flee_mm"]),
-			max_flee_mm=float(ch["max_flee_mm"]),
-			flee_gap_gain=float(ch["flee_gap_gain"]),
-			flee_speed_gain=float(ch["flee_speed_gain"]),
-			flee_accel_mps2=float(ch["flee_accel_mps2"]),
-			hunt_event_min_interval_ms=int(ch["hunt_event_min_interval_ms"]),
+			preferred_gap_mm=float(ch["preferred_gap_mm"]),
+			min_gap_mm=float(ch["min_gap_mm"]),
+			max_pull_mm=float(ch["max_pull_mm"]),
+			away_gain=float(ch["away_gain"]),
+			toward_gain=float(ch["toward_gain"]),
+			lateral_gain=float(ch["lateral_gain"]),
+			wall_margin_mm=float(ch["wall_margin_mm"]),
+			wall_gain=float(ch["wall_gain"]),
+			corner_gain=float(ch["corner_gain"]),
+			velocity_gain_s=float(ch["velocity_gain_s"]),
+			max_engage_speed_mm_s=float(ch["max_engage_speed_mm_s"]),
+			cone_half_angle_deg=float(ch.get("cone_half_angle_deg", 45.0)),
+			threat_distance_mm=float(ch.get("threat_distance_mm", ch["preferred_gap_mm"])),
+			creep_distance_mm=float(ch.get("creep_distance_mm", ch["preferred_gap_mm"] * 2)),
 		),
 		zaber=ZaberConfig(
 			command_rtt_ms=float(zb["command_rtt_ms"]),

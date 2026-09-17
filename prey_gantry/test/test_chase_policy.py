@@ -1,4 +1,4 @@
-"""Chase policy gates and 2D flee direction."""
+"""Soft keep-away policy: preferred gap, slight nudge, wall dodge."""
 
 from prey_gantry.chase_policy import compute_chase_decision, fill_tracking_derived
 from prey_gantry.config import load_sim_config
@@ -33,30 +33,44 @@ def test_idle_when_trial_not_running():
 	assert not d.enable_motion
 
 
-def test_close_head_on_is_flee():
+def test_close_nudge_away_not_flee():
 	cfg = _cfg()
-	# Ferret at left, heading right (0°), prey to the right — in cone, close, approaching.
+	# Ferret presses from the left — prey should ease right, no discrete flee.
 	d = compute_chase_decision(
-		_scene(400, 600, 700, 600, heading=0.0, speed=900.0),
+		_scene(400, 600, 550, 600, heading=0.0, speed=900.0),
 		cfg.chase,
 		cfg.camera.width_mm,
 		cfg.camera.height_mm,
 	)
 	assert d.enable_motion
-	assert d.threat > cfg.chase.flee_threat_threshold
-	assert d.use_planned_flee
-	assert d.reason == "flee_plan"
-	assert d.flee_x_mm > 700.0
+	assert not d.use_planned_flee
+	assert d.reason in ("nudge_away", "press")
+	assert d.target_vx_mm_s > 0
+	assert abs(d.target_vx_mm_s) <= cfg.chase.max_engage_speed_mm_s + 1
 
 
-def test_behind_ferret_low_cone_threat():
+def test_far_reels_back_to_keep_hunt_alive():
 	cfg = _cfg()
-	# Prey is behind a right-facing ferret.
+	# Gap >> preferred — prey should move toward ferret (negative x here).
 	d = compute_chase_decision(
-		_scene(800, 600, 200, 600, heading=0.0, speed=900.0),
+		_scene(400, 600, 1400, 600, heading=0.0, speed=100.0),
 		cfg.chase,
 		cfg.camera.width_mm,
 		cfg.camera.height_mm,
 	)
-	assert d.cone_threat < 0.5
-	assert not d.use_planned_flee
+	assert d.reason == "reel_in"
+	assert d.target_vx_mm_s < 0
+
+
+def test_corner_pushes_inward():
+	cfg = _cfg()
+	d = compute_chase_decision(
+		_scene(400, 400, 40, 40, heading=225.0, speed=200.0),
+		cfg.chase,
+		cfg.camera.width_mm,
+		cfg.camera.height_mm,
+	)
+	assert d.wall_push > 0.3
+	assert d.target_vx_mm_s > 0
+	assert d.target_vy_mm_s > 0
+	assert d.reason == "edge_dodge"

@@ -1,4 +1,8 @@
-"""2D cone-of-impact chase. Why: same threat math as pylon-track, XY flee vector."""
+"""Soft keep-away hunt: nudge slightly off the ferret, stay engaged, dodge walls.
+
+Why: discrete 200–600 mm flees ended the chase. This policy holds a preferred
+gap, only inches away when pressed, and steers toward arena center near edges.
+"""
 
 from __future__ import annotations
 
@@ -13,15 +17,15 @@ def _clamp01(v: float) -> float:
 	return max(0.0, min(1.0, v))
 
 
-def _angle_diff_deg(a: float, b: float) -> float:
-	d = abs(a - b) % 360.0
-	if d > 180.0:
-		d = 360.0 - d
-	return d
-
-
 def _clampf(v: float, lo: float, hi: float) -> float:
 	return max(lo, min(hi, v))
+
+
+def _norm(x: float, y: float) -> tuple[float, float, float]:
+	n = math.hypot(x, y)
+	if n < 1e-6:
+		return 0.0, 0.0, 0.0
+	return x / n, y / n, n
 
 
 @dataclass
@@ -40,6 +44,8 @@ class ChaseDecision:
 	flee_y_mm: float = 0.0
 	flee_mm: float = 0.0
 	flee_speed_mm_s: float = 0.0
+	gap_error_mm: float = 0.0
+	wall_push: float = 0.0
 	reason: str = "idle"
 
 
@@ -62,16 +68,6 @@ def fill_tracking_derived(frame: TrackingFrame) -> None:
 		frame.closing_speed_mm_s = (vx * dx + vy * dy) / dist
 
 
-def _away_unit(frame: TrackingFrame) -> tuple[float, float]:
-	dx = frame.prey.x_mm - frame.ferret.x_mm
-	dy = frame.prey.y_mm - frame.ferret.y_mm
-	n = math.hypot(dx, dy)
-	if n < 1e-3:
-		rad = math.radians(frame.ferret.direction_deg + 180.0)
-		return math.cos(rad), -math.sin(rad)
-	return dx / n, dy / n
-
-
 def compute_chase_decision(
 	scene: TrackingFrame,
 	cfg: ChasePolicyConfig,
@@ -90,64 +86,100 @@ def compute_chase_decision(
 		return out
 
 	out.enable_motion = True
-	dist = scene.distance_mm
-	out.dist_threat, out.cone_threat, out.approach_threat = _threat_parts(scene, cfg)
-	out.threat = _clamp01(out.dist_threat * out.cone_threat * out.approach_threat)
-
-	speed_span = cfg.max_chain_speed_mps - cfg.min_chain_speed_mps
-	speed_mps = cfg.min_chain_speed_mps + out.threat * speed_span
-	ux, uy = _away_unit(scene)
-	out.flee_direction_deg = math.degrees(math.atan2(-uy, ux))
-	out.target_vx_mm_s = ux * speed_mps * 1000.0
-	out.target_vy_mm_s = uy * speed_mps * 1000.0
-
-	if out.threat > cfg.flee_threat_threshold:
-		return _attach_flee(out, scene, cfg, ux, uy, speed_mps, width_mm, height_mm)
-	out.reason = "chase" if out.threat > 0.05 else "creep"
+	ax, ay, reason = _engage_accel(scene, cfg, width_mm, height_mm, out)
+	out.reason = reason
+	# Why: convert soft accel (mm/s² scale) to a capped velocity command for Zaber.
+	vx = ax * cfg.velocity_gain_s
+	vy = ay * cfg.velocity_gain_s
+	spd = math.hypot(vx, vy)
+	cap = cfg.max_engage_speed_mm_s
+	if spd > cap and spd > 1e-6:
+		s = cap / spd
+		vx *= s
+		vy *= s
+	out.target_vx_mm_s = vx
+	out.target_vy_mm_s = vy
+	out.flee_direction_deg = math.degrees(math.atan2(-vy, vx)) if spd > 1 else 0.0
+	out.threat = _clamp01(out.dist_threat)
 	return out
 
 
-def _threat_parts(
-	scene: TrackingFrame, cfg: ChasePolicyConfig
-) -> tuple[float, float, float]:
-	dist = scene.distance_mm
-	dist_threat = 1.0
-	if dist > cfg.threat_distance_mm:
-		span = max(1.0, cfg.creep_distance_mm - cfg.threat_distance_mm)
-		dist_threat = 1.0 - _clamp01((dist - cfg.threat_distance_mm) / span)
-	heading_delta = _angle_diff_deg(scene.ferret.direction_deg, scene.bearing_deg)
-	cone_threat = 1.0
-	if heading_delta > cfg.cone_half_angle_deg:
-		cone_threat = 1.0 - _clamp01(
-			(heading_delta - cfg.cone_half_angle_deg) / 90.0
-		)
-	approach = 1.0 if scene.closing_speed_mm_s > 0.0 else 0.2
-	return dist_threat, cone_threat, approach
-
-
-def _attach_flee(
-	out: ChaseDecision,
+def _engage_accel(
 	scene: TrackingFrame,
 	cfg: ChasePolicyConfig,
-	ux: float,
-	uy: float,
-	speed_mps: float,
 	width_mm: float,
 	height_mm: float,
-) -> ChaseDecision:
+	out: ChaseDecision,
+) -> tuple[float, float, str]:
+	px, py = scene.prey.x_mm, scene.prey.y_mm
+	fx, fy = scene.ferret.x_mm, scene.ferret.y_mm
+	ux, uy, dist = _norm(px - fx, py - fy)
+	if dist < 1e-3:
+		# Overlap: break out toward arena center so we do not freeze.
+		ux, uy, _ = _norm(width_mm * 0.5 - px, height_mm * 0.5 - py)
+		dist = 0.0
+
+	preferred = cfg.preferred_gap_mm
+	gap_err = preferred - dist
+	out.gap_error_mm = gap_err
+	# Close → push away; far → ease back toward ferret (keeps the hunt alive).
+	if gap_err > 0:
+		out.dist_threat = _clamp01(gap_err / max(preferred - cfg.min_gap_mm, 1.0))
+		radial = ux * gap_err * cfg.away_gain
+		radial_y = uy * gap_err * cfg.away_gain
+		tag = "nudge_away"
+	else:
+		out.dist_threat = 0.0
+		pull = min(-gap_err, cfg.max_pull_mm)
+		radial = -ux * pull * cfg.toward_gain
+		radial_y = -uy * pull * cfg.toward_gain
+		tag = "reel_in"
+
+	# Lateral slip when pressed: avoid head-on stall, stay playful.
+	tx, ty = -uy, ux
 	closing = max(0.0, scene.closing_speed_mm_s)
-	flee_mag = cfg.flee_gap_gain * max(0.0, scene.distance_mm) + cfg.flee_speed_gain * closing
-	flee_mag = _clampf(flee_mag, cfg.min_flee_mm, cfg.max_flee_mm)
-	tx = scene.prey.x_mm + ux * flee_mag
-	ty = scene.prey.y_mm + uy * flee_mag
-	margin = 40.0
-	out.flee_x_mm = _clampf(tx, margin, width_mm - margin)
-	out.flee_y_mm = _clampf(ty, margin, height_mm - margin)
-	out.flee_mm = math.hypot(out.flee_x_mm - scene.prey.x_mm, out.flee_y_mm - scene.prey.y_mm)
-	out.flee_speed_mm_s = speed_mps * 1000.0
-	if out.flee_mm < 20.0:
-		out.reason = "flee_infeasible_creep"
-		return out
-	out.use_planned_flee = True
-	out.reason = "flee_plan"
-	return out
+	lateral = closing * cfg.lateral_gain
+	# Bias slip toward center so we do not choose the wall side of a tangent.
+	cx, cy = width_mm * 0.5 - px, height_mm * 0.5 - py
+	if tx * cx + ty * cy < 0:
+		tx, ty = -tx, -ty
+
+	wx, wy, wall = _wall_push(px, py, width_mm, height_mm, cfg)
+	out.wall_push = wall
+	out.approach_threat = _clamp01(closing / 800.0)
+	out.cone_threat = wall
+
+	ax = radial + tx * lateral + wx
+	ay = radial_y + ty * lateral + wy
+	if wall > 0.35:
+		tag = "edge_dodge"
+	elif dist < cfg.min_gap_mm:
+		tag = "press"
+	return ax, ay, tag
+
+
+def _wall_push(
+	x: float,
+	y: float,
+	width_mm: float,
+	height_mm: float,
+	cfg: ChasePolicyConfig,
+) -> tuple[float, float, float]:
+	"""Repel from edges/corners toward open space. Strength grows inside margin."""
+	m = cfg.wall_margin_mm
+	left = max(0.0, m - x) / m
+	right = max(0.0, m - (width_mm - x)) / m
+	top = max(0.0, m - y) / m
+	bottom = max(0.0, m - (height_mm - y)) / m
+	# Squared so corners (two walls) kick harder than a single edge.
+	# Near left → +x; near top → +y (origin is top-left in arena mm).
+	px = (left * left - right * right) * cfg.wall_gain
+	py = (top * top - bottom * bottom) * cfg.wall_gain
+	# Extra center pull when deep in a corner.
+	corner = max(left, right) * max(top, bottom)
+	if corner > 0:
+		cx, cy, _ = _norm(width_mm * 0.5 - x, height_mm * 0.5 - y)
+		px += cx * corner * cfg.corner_gain
+		py += cy * corner * cfg.corner_gain
+	strength = max(left, right, top, bottom)
+	return px, py, strength

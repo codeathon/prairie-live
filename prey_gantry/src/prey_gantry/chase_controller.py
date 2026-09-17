@@ -1,4 +1,4 @@
-"""50 Hz chase loop. Why: same period as pylon-track ChaseController (20 ms)."""
+"""50 Hz chase loop: continuous soft velocity, no discrete flees."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import time
 
 from prey_gantry.chase_policy import ChaseDecision, compute_chase_decision
 from prey_gantry.config import ChasePolicyConfig
-from prey_gantry.hunt_event import HuntArmState, evaluate_hunt_event, note_hunt_flee_complete
 from prey_gantry.tracking_frame import TrackingFrame
 from prey_gantry.zaber_sim import SimulatedGantry
 
@@ -30,8 +29,6 @@ class ChaseController:
 		self._stale_s = stale_ms * 1e-3
 		self._next_s = 0.0
 		self._latest: TrackingFrame | None = None
-		self._arm = HuntArmState()
-		self._fleeing = False
 		self.last_decision = ChaseDecision()
 		self.last_decision_ms = 0.0
 		self.stale_stops = 0
@@ -53,12 +50,6 @@ class ChaseController:
 				reason="stale_frame", decision_time_ns=frame.host_time_ns
 			)
 			return
-		# Why: pylon-track does not preempt an active flee (MotionPlanner busy).
-		if self._fleeing and self._gantry.is_busy():
-			return
-		if self._fleeing and not self._gantry.is_busy():
-			note_hunt_flee_complete(self._arm, frame.host_time_ns)
-			self._fleeing = False
 		self._tick_decision(frame)
 
 	def _tick_decision(self, frame: TrackingFrame) -> None:
@@ -70,21 +61,5 @@ class ChaseController:
 			if self._gantry.is_busy() or math.hypot(*self._gantry.get_velocity()) > 1.0:
 				self._gantry.stop()
 			return
-		if evaluate_hunt_event(
-			decision.use_planned_flee,
-			frame.host_time_ns,
-			self._cfg.hunt_event_min_interval_ms,
-			self._arm,
-		) and decision.use_planned_flee:
-			self._gantry.move_absolute(
-				decision.flee_x_mm,
-				decision.flee_y_mm,
-				wait_until_idle=False,
-				velocity=decision.flee_speed_mm_s,
-				acceleration=self._cfg.flee_accel_mps2 * 1000.0,
-			)
-			self._fleeing = True
-			return
-		if self._gantry.is_busy():
-			return
+		# Why: soft keep-away is always velocity — no move_absolute flees.
 		self._gantry.move_velocity(decision.target_vx_mm_s, decision.target_vy_mm_s)

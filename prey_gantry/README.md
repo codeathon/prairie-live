@@ -15,12 +15,12 @@ The ferret is **your mouse pointer**. The prey toy is the gantry, commanded thro
 | Tracking | MOG2 + associator budget | 1.2 ms |
 | Chase loop | `ChaseController` | 50 Hz (20 ms) |
 | Zaber RTT | X-MCC USB CDC | 4 ms |
-| Creep / flee speeds | `arena_experiment.json` | 1.0–1.4 m/s, flee 200–600 mm |
-| Gantry accel | hanging-toy derate (chain used 50 m/s²) | 2.5 m/s² |
+| Soft keep-away | preferred gap / max engage speed | ~420 mm / ≤480 mm/s |
+| Wall margin | edge dodge band | 280 mm |
 
 The grey ghost on the arena is the ferret pose the chase loop has actually received (mid-exposure sample + USB + track). Prey XY is the **encoder** (Zaber `get_position`), as on a gantry.
 
-Chase policy is the pylon-track cone-of-impact: threat = distance × heading cone × approach, then creep velocity or a discrete `move_absolute` flee with 1.5 s re-arm. Flees are **not** preempted.
+Chase policy is a **soft keep-away**: hold ~420 mm from the ferret, nudge slightly when pressed, reel back in when too far (so the hunt stays alive), and steer inward near edges/corners. Continuous `move_velocity` only — no discrete flees.
 
 ## Run
 
