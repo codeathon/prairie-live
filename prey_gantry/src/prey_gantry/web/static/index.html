@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Prey gantry hunt sim</title>
+	<link rel="stylesheet" href="/static/sim.css" />
+</head>
+<body>
+	<header>
+		<div>
+			<h1>Hunt sim</h1>
+			<p class="sub">pylon-track arena · Basler ace 2 delay · Zaber XY API</p>
+		</div>
+		<div class="keys">
+			<button type="button" data-trial="start">Start trial (S)</button>
+			<button type="button" data-trial="end">End (E)</button>
+			<button type="button" data-trial="reset">Reset (R)</button>
+			<span id="trial-badge" class="badge">warmup</span>
+		</div>
+	</header>
+	<main>
+		<section class="arena-wrap">
+			<canvas id="arena" width="960" height="600"></canvas>
+			<p class="hint">Move the pointer in the arena — that is the ferret. Grey ghost is what the camera has delivered (exposure + USB + track delay). Prey is the gantry carriage.</p>
+		</section>
+		<aside id="hud"></aside>
+	</main>
+	<script src="/static/sim.js"></script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+:root {
+	--bg: #121410;
+	--panel: #1c1f18;
+	--ink: #e8eadf;
+	--muted: #9aa190;
+	--line: #2e3328;
+	--ferret: #e2b84a;
+	--ghost: #8a7a4a;
+	--prey: #7ec8c4;
+	--flee: #d36b5e;
+	--ok: #8fbf6a;
+	font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--ink);
+	min-height: 100vh;
+}
+
+header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 12px 20px;
+	border-bottom: 1px solid var(--line);
+	background: var(--panel);
+}
+
+h1 { margin: 0; font-size: 1.15rem; font-weight: 600; }
+.sub { margin: 2px 0 0; color: var(--muted); font-size: 0.8rem; }
+
+.keys { display: flex; gap: 8px; align-items: center; }
+
+button {
+	background: #2a2f24;
+	color: var(--ink);
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	padding: 6px 10px;
+	cursor: pointer;
+	font: inherit;
+}
+
+button:hover { border-color: var(--ferret); }
+
+.badge {
+	font-variant: small-caps;
+	letter-spacing: 0.06em;
+	padding: 4px 8px;
+	border: 1px solid var(--line);
+	border-radius: 4px;
+	color: var(--muted);
+}
+
+.badge.running { color: var(--ok); border-color: var(--ok); }
+.badge.ended { color: var(--flee); border-color: var(--flee); }
+
+main {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 380px;
+	gap: 0;
+	height: calc(100vh - 64px);
+}
+
+.arena-wrap {
+	padding: 16px;
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+canvas {
+	width: 100%;
+	height: auto;
+	background: #0d0f0c;
+	border: 1px solid var(--line);
+	cursor: none;
+	max-height: calc(100vh - 130px);
+}
+
+.hint { color: var(--muted); font-size: 0.78rem; margin: 8px 0 0; }
+
+#hud {
+	border-left: 1px solid var(--line);
+	background: var(--panel);
+	overflow: auto;
+	padding: 12px 14px 24px;
+	font-family: "IBM Plex Mono", ui-monospace, monospace;
+	font-size: 11.5px;
+	line-height: 1.45;
+}
+
+#hud h2 {
+	font-family: "IBM Plex Sans", sans-serif;
+	font-size: 0.72rem;
+	text-transform: uppercase;
+	letter-spacing: 0.08em;
+	color: var(--muted);
+	margin: 14px 0 6px;
+	border-bottom: 1px solid var(--line);
+	padding-bottom: 3px;
+}
+
+#hud h2:first-child { margin-top: 0; }
+
+.row { display: flex; justify-content: space-between; gap: 8px; }
+.k { color: var(--muted); }
+.v { color: var(--ink); }
+.v.warn { color: var(--flee); }
+.v.ok { color: var(--ok); }
+.reason { color: var(--ferret); font-weight: 600; }
+
+.calls { margin: 0; padding-left: 16px; color: var(--muted); }
+.calls li { margin: 2px 0; }
