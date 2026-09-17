@@ -189,13 +189,26 @@ class SimulatedGantry:
 		self.y_mm += self.vy_mm_s * dt_s
 
 	def _clamp(self) -> None:
-		nx = min(max(self.x_mm, 0.0), self.width_mm)
-		ny = min(max(self.y_mm, 0.0), self.height_mm)
-		if nx != self.x_mm:
+		# Why: only kill the blocked axis so creep can slide along a wall.
+		if self.x_mm < 0.0:
+			self.x_mm = 0.0
 			self.vx_mm_s = 0.0
-		if ny != self.y_mm:
+			self._cmd_vx = 0.0
+		elif self.x_mm > self.width_mm:
+			self.x_mm = self.width_mm
+			self.vx_mm_s = 0.0
+			self._cmd_vx = 0.0
+		if self.y_mm < 0.0:
+			self.y_mm = 0.0
 			self.vy_mm_s = 0.0
-		self.x_mm, self.y_mm = nx, ny
+			self._cmd_vy = 0.0
+		elif self.y_mm > self.height_mm:
+			self.y_mm = self.height_mm
+			self.vy_mm_s = 0.0
+			self._cmd_vy = 0.0
+		if self._mode == "position":
+			self._tgt_x = min(max(self._tgt_x, 0.0), self.width_mm)
+			self._tgt_y = min(max(self._tgt_y, 0.0), self.height_mm)
 
 	def _drain_blocking(self) -> None:
 		# Sim does not block the engine thread; chase uses wait_until_idle=False.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 
 from prey_gantry.chase_policy import ChaseDecision, compute_chase_decision
@@ -66,7 +67,8 @@ class ChaseController:
 		self.last_decision_ms = (time.perf_counter() - t0) * 1e3
 		self.last_decision = decision
 		if not decision.enable_motion:
-			self._gantry.stop()
+			if self._gantry.is_busy() or math.hypot(*self._gantry.get_velocity()) > 1.0:
+				self._gantry.stop()
 			return
 		if evaluate_hunt_event(
 			decision.use_planned_flee,
