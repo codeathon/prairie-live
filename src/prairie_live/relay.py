@@ -62,10 +62,14 @@ class Relay:
 		self.com.connect()
 		self.script_com = self.com
 		if self._grab_enabled:
-			# Let Connect finish before the first GetImage_2.
+			# Let Connect finish before the first grab (ReadImage or GetImage_2).
 			time.sleep(0.3)
 			threading.Thread(target=self._grab_loop, daemon=True).start()
-			print("grab ON (GetImage_2); use without --grab if PV shows -gi errors")
+			kind = getattr(self.com, "grab_api", None) or "GetImage_2"
+			print(f"grab ON ({kind}); use without --grab if PV shows -gi errors")
+			to = getattr(self.com, "timeout_api", None)
+			if to:
+				print(f"COM timeout: {to}")
 		else:
 			print("grab OFF (default); pass --grab only when you need live frames")
 
@@ -397,13 +401,13 @@ def main(argv=None) -> None:
 	p.add_argument("--port", type=int, default=DEFAULT_PORT)
 	p.add_argument("--channel", type=int, default=1)
 	p.add_argument("--fps", type=float, default=20.0)
-	# Avoid COM PixelsPerLine(); pass known FOV size into GetImage_2.
-	p.add_argument("--width", type=int, default=512, help="pixelsPerLine for GetImage_2")
-	p.add_argument("--height", type=int, default=512, help="linesPerFrame for GetImage_2")
+	# Avoid COM PixelsPerLine(); seed FOV size for GetImage_2 fallback.
+	p.add_argument("--width", type=int, default=512, help="pixelsPerLine for grab fallback")
+	p.add_argument("--height", type=int, default=512, help="linesPerFrame for grab fallback")
 	p.add_argument(
 		"--grab",
 		action="store_true",
-		help="Enable GetImage_2 frame streaming (off by default; can trip PV -gi errors)",
+		help="Enable frame streaming (off by default; can trip PV -gi errors)",
 	)
 	p.add_argument(
 		"--no-grab",

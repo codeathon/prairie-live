@@ -29,6 +29,104 @@ def _dispatch():
 	)
 
 
+# 6.1 SetTimeoutAndRetries defaults to 2s; packed -slm needs a long wait.
+_SCRIPT_TIMEOUT_MS = 120_000
+
+
+def apply_script_timeout(pl) -> str | None:
+	"""Call SetTimeoutAndRetries when present (PV 6.1). 5.8 has no such method."""
+	fn = getattr(pl, "SetTimeoutAndRetries", None)
+	if not callable(fn):
+		return None
+	# Builds differ: (ms) vs (ms, retries). TypeError → try the other arity.
+	for args in ((_SCRIPT_TIMEOUT_MS,), (_SCRIPT_TIMEOUT_MS, 3)):
+		try:
+			fn(*args)
+			return f"SetTimeoutAndRetries{args}"
+		except TypeError:
+			continue
+		except Exception:
+			return None
+	return None
+
+
+def detect_grab_api(pl) -> str:
+	"""Prefer 6.1 ReadImage/ReadImages; GetImage_2 is the 5.8 fallback."""
+	for name in ("ReadImage", "ReadImages", "GetImage_2"):
+		if callable(getattr(pl, name, None)):
+			return name
+	return "GetImage_2"
+
+
+def _pixels_ok(raw) -> bool:
+	if raw is None:
+		return False
+	try:
+		return int(np.asarray(raw).size) > 0
+	except Exception:
+		return False
+
+
+def _call_read_image(fn, channel: int, last_wh):
+	# Some 6.1 builds take (channel); others (channel, width, height).
+	try:
+		return fn(channel)
+	except TypeError:
+		h, w = last_wh if last_wh else (512, 512)
+		return fn(channel, int(w), int(h))
+
+
+def _from_readimages(bundle, channel: int):
+	"""Pick one PMT channel from ReadImages (list, dict, or n×h×w)."""
+	if bundle is None:
+		return None
+	if isinstance(bundle, dict):
+		for key in (channel, str(channel), channel - 1):
+			if key in bundle and _pixels_ok(bundle[key]):
+				return bundle[key]
+		return None
+	if isinstance(bundle, (list, tuple)):
+		for i in (channel - 1, channel):
+			if 0 <= i < len(bundle) and _pixels_ok(bundle[i]):
+				return bundle[i]
+		return None
+	arr = np.asarray(bundle)
+	if arr.ndim == 3:
+		for i in (channel - 1, channel):
+			if 0 <= i < arr.shape[0] and arr[i].size > 0:
+				return arr[i]
+	return bundle if _pixels_ok(arr) else None
+
+
+def grab_raw(pl, channel: int, last_wh, failed: set[str]):
+	"""6.1 ReadImage/ReadImages first; GetImage_2 if missing or those APIs error."""
+	if "ReadImage" not in failed:
+		fn = getattr(pl, "ReadImage", None)
+		if callable(fn):
+			try:
+				raw = _call_read_image(fn, channel, last_wh)
+				if _pixels_ok(raw):
+					return raw
+			except Exception:
+				# Cache failure so a broken ReadImage does not run every frame.
+				failed.add("ReadImage")
+		else:
+			failed.add("ReadImage")
+	if "ReadImages" not in failed:
+		fn = getattr(pl, "ReadImages", None)
+		if callable(fn):
+			try:
+				raw = _from_readimages(fn(), channel)
+				if _pixels_ok(raw):
+					return raw
+			except Exception:
+				failed.add("ReadImages")
+		else:
+			failed.add("ReadImages")
+	h, w = last_wh if last_wh else (512, 512)
+	return pl.GetImage_2(channel, int(w), int(h))
+
+
 class PrairieCom:
 	def __init__(self, host: str, password: str = "0000"):
 		self.host = host
@@ -40,6 +138,10 @@ class PrairieCom:
 		self._last_reconnect = 0.0
 		# Grab thread and command thread share one COM object.
 		self._io = threading.Lock()
+		self.timeout_api: str | None = None
+		self.grab_api = "GetImage_2"
+		# APIs that raised once this session — skip them on later frames.
+		self._grab_failed: set[str] = set()
 
 	def connect(self) -> None:
 		try:
@@ -60,6 +162,10 @@ class PrairieCom:
 				"Use the scope IPv4 from the analysis PC, or 127.0.0.1 on the scope PC."
 			)
 		# PV 5.8 aborts the TCP session on this command; only try it for T-series.
+		# 6.1 defaults to a 2s script timeout; raise it so packed -slm can finish.
+		self._grab_failed.clear()
+		self.timeout_api = apply_script_timeout(self._pl)
+		self.grab_api = detect_grab_api(self._pl)
 
 	def start_tseries(self) -> dict:
 		# Older PV needed this so -TSeries would not block the COM client.
@@ -204,10 +310,10 @@ class PrairieCom:
 		return frame
 
 	def _grab_raw(self, pl, channel: int):
-		# GetImage_2 only — COM GetImage maps to script -gi and can race Connect
-		# as "unexpected parameter 0000-gi" on PV 5.8.
-		h, w = self._last_wh if self._last_wh else (512, 512)
-		return pl.GetImage_2(channel, int(w), int(h))
+		# GetImage maps to script -gi and can race Connect as
+		# "unexpected parameter 0000-gi" on PV 5.8 — never call it.
+		# 6.1 ReadImage/ReadImages first; GetImage_2 remains the 5.8 path.
+		return grab_raw(pl, channel, self._last_wh, self._grab_failed)
 
 	def _reconnect_if_dropped(self, err: Exception) -> None:
 		msg = str(err).lower()
