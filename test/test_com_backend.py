@@ -4,6 +4,7 @@ import numpy as np
 
 from prairie_live.com_backend import (
 	PrairieCom,
+	_as_frame_auto,
 	apply_script_timeout,
 	detect_grab_api,
 	grab_raw,
@@ -131,5 +132,38 @@ def test_prairiecom_get_frame_readimage():
 	com._pl = _ReadImagePL(frame.reshape(-1))
 	com._last_wh = (2, 2)
 	got = com.get_frame(1)
+	assert got is not None
+	assert got.shape == (2, 2)
+
+
+def test_readimage_none_cells_fall_back_to_getimage2():
+	# Why: 6.1 ReadImage returned VARIANT Nones and killed the grab thread.
+	pl = _ReadImagePL(np.array([None, None, None, None], dtype=object))
+	failed: set[str] = set()
+	out = grab_raw(pl, 1, (2, 2), failed)
+	assert out.size == 4
+	assert "ReadImage" in failed
+	assert pl.gi2 == [(1, 2, 2)]
+
+
+def test_readimage_tuple_with_trailing_none():
+	frame = np.arange(4, dtype=np.uint16)
+	pl = _ReadImagePL((frame, None))
+	failed: set[str] = set()
+	out = grab_raw(pl, 1, (2, 2), failed)
+	assert np.array_equal(out[0] if isinstance(out, tuple) else out, frame)
+	assert pl.gi2 == []
+
+
+def test_as_frame_auto_none_cells_does_not_raise():
+	assert _as_frame_auto(np.array([None, 1], dtype=object), (1, 2)) is None
+
+
+def test_get_frame_survives_none_variant():
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _ReadImagePL(np.array([None] * 4, dtype=object))
+	com._last_wh = (2, 2)
+	got = com.get_frame(1)
+	# Falls back to GetImage_2 ones(2*2).
 	assert got is not None
 	assert got.shape == (2, 2)
