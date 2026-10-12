@@ -29,6 +29,142 @@ def _dispatch():
 	)
 
 
+# 6.1 SetTimeoutAndRetries defaults to 2s; packed -slm needs a long wait.
+_SCRIPT_TIMEOUT_MS = 120_000
+
+
+def apply_script_timeout(pl) -> str | None:
+	"""Call SetTimeoutAndRetries when present (PV 6.1). 5.8 has no such method."""
+	fn = getattr(pl, "SetTimeoutAndRetries", None)
+	if not callable(fn):
+		return None
+	# Builds differ: (ms) vs (ms, retries). TypeError → try the other arity.
+	for args in ((_SCRIPT_TIMEOUT_MS,), (_SCRIPT_TIMEOUT_MS, 3)):
+		try:
+			fn(*args)
+			return f"SetTimeoutAndRetries{args}"
+		except TypeError:
+			continue
+		except Exception:
+			return None
+	return None
+
+
+def detect_grab_api(pl) -> str:
+	"""Prefer 6.1 ReadImage/ReadImages; GetImage_2 is the 5.8 fallback."""
+	for name in ("ReadImage", "ReadImages", "GetImage_2"):
+		if callable(getattr(pl, name, None)):
+			return name
+	return "GetImage_2"
+
+
+def _unwrap_com_image(raw):
+	# 6.1 ReadImage sometimes returns (pixels, unused) with unused=None.
+	if isinstance(raw, tuple) and raw and raw[0] is not None:
+		if len(raw) > 1 and all(x is None for x in raw[1:]):
+			return raw[0]
+	return raw
+
+
+def _payload_kind(raw) -> str:
+	"""ok=numeric pixels, empty=no frame yet, bad=None cells / non-numeric VARIANT."""
+	raw = _unwrap_com_image(raw)
+	if raw is None:
+		return "empty"
+	try:
+		arr = np.array(raw)
+	except Exception:
+		return "bad"
+	if arr.size == 0:
+		return "empty"
+	if arr.dtype == object:
+		# Why: PV 6.1 ReadImage can yield VARIANT None cells; astype(uint16) then crashes.
+		flat = arr.reshape(-1)
+		if any(x is None for x in flat):
+			return "bad"
+		try:
+			np.asarray(list(flat), dtype=np.uint16)
+		except (TypeError, ValueError):
+			return "bad"
+		return "ok"
+	if not np.issubdtype(arr.dtype, np.number):
+		return "bad"
+	return "ok"
+
+
+def _call_read_image(fn, channel: int, last_wh):
+	# Some 6.1 builds take (channel); others (channel, width, height).
+	try:
+		return fn(channel)
+	except TypeError:
+		h, w = last_wh if last_wh else (512, 512)
+		return fn(channel, int(w), int(h))
+
+
+def _from_readimages(bundle, channel: int):
+	"""Pick one PMT channel from ReadImages (list, dict, or n×h×w)."""
+	if bundle is None:
+		return None
+	if isinstance(bundle, dict):
+		for key in (channel, str(channel), channel - 1):
+			if key in bundle and _payload_kind(bundle[key]) == "ok":
+				return bundle[key]
+		return None
+	if isinstance(bundle, (list, tuple)):
+		for i in (channel - 1, channel):
+			if 0 <= i < len(bundle) and _payload_kind(bundle[i]) == "ok":
+				return bundle[i]
+		return None
+	arr = np.asarray(bundle)
+	if arr.ndim == 3:
+		for i in (channel - 1, channel):
+			if 0 <= i < arr.shape[0] and arr[i].size > 0:
+				return arr[i]
+	return bundle if _payload_kind(arr) == "ok" else None
+
+
+def _try_new_grab(name: str, fn, failed: set[str]) -> object | None:
+	"""Run a 6.1 grab once. bad/error → cache-fail; empty → None (keep trying)."""
+	try:
+		raw = fn()
+	except Exception:
+		failed.add(name)
+		return None
+	kind = _payload_kind(raw)
+	if kind == "ok":
+		return raw
+	if kind == "bad":
+		# Unusable VARIANT — fall through to GetImage_2 next.
+		failed.add(name)
+	return None
+
+
+def grab_raw(pl, channel: int, last_wh, failed: set[str]):
+	"""6.1 ReadImage/ReadImages first; GetImage_2 if missing or those APIs error."""
+	if "ReadImage" not in failed:
+		fn = getattr(pl, "ReadImage", None)
+		if callable(fn):
+			raw = _try_new_grab(
+				"ReadImage", lambda: _call_read_image(fn, channel, last_wh), failed
+			)
+			if raw is not None:
+				return raw
+		else:
+			failed.add("ReadImage")
+	if "ReadImages" not in failed:
+		fn = getattr(pl, "ReadImages", None)
+		if callable(fn):
+			raw = _try_new_grab(
+				"ReadImages", lambda: _from_readimages(fn(), channel), failed
+			)
+			if raw is not None:
+				return raw
+		else:
+			failed.add("ReadImages")
+	h, w = last_wh if last_wh else (512, 512)
+	return pl.GetImage_2(channel, int(w), int(h))
+
+
 class PrairieCom:
 	def __init__(self, host: str, password: str = "0000"):
 		self.host = host
@@ -40,6 +176,10 @@ class PrairieCom:
 		self._last_reconnect = 0.0
 		# Grab thread and command thread share one COM object.
 		self._io = threading.Lock()
+		self.timeout_api: str | None = None
+		self.grab_api = "GetImage_2"
+		# APIs that raised once this session — skip them on later frames.
+		self._grab_failed: set[str] = set()
 
 	def connect(self) -> None:
 		try:
@@ -60,6 +200,10 @@ class PrairieCom:
 				"Use the scope IPv4 from the analysis PC, or 127.0.0.1 on the scope PC."
 			)
 		# PV 5.8 aborts the TCP session on this command; only try it for T-series.
+		# 6.1 defaults to a 2s script timeout; raise it so packed -slm can finish.
+		self._grab_failed.clear()
+		self.timeout_api = apply_script_timeout(self._pl)
+		self.grab_api = detect_grab_api(self._pl)
 
 	def start_tseries(self) -> dict:
 		# Older PV needed this so -TSeries would not block the COM client.
@@ -193,21 +337,22 @@ class PrairieCom:
 		try:
 			with self._io:
 				raw = self._grab_raw(pl, channel)
+			# Why: 6.1 ReadImage None-VARIANT crashed here and killed the grab thread.
+			frame = _as_frame_auto(raw, self._last_wh)
 		except Exception as e:
 			self.last_error = str(e)
 			self._reconnect_if_dropped(e)
 			return None
-		frame = _as_frame_auto(raw, self._last_wh)
 		if frame is not None:
 			self._last_wh = frame.shape
 			self.last_error = ""
 		return frame
 
 	def _grab_raw(self, pl, channel: int):
-		# GetImage_2 only — COM GetImage maps to script -gi and can race Connect
-		# as "unexpected parameter 0000-gi" on PV 5.8.
-		h, w = self._last_wh if self._last_wh else (512, 512)
-		return pl.GetImage_2(channel, int(w), int(h))
+		# GetImage maps to script -gi and can race Connect as
+		# "unexpected parameter 0000-gi" on PV 5.8 — never call it.
+		# 6.1 ReadImage/ReadImages first; GetImage_2 remains the 5.8 path.
+		return grab_raw(pl, channel, self._last_wh, self._grab_failed)
 
 	def _reconnect_if_dropped(self, err: Exception) -> None:
 		msg = str(err).lower()
@@ -242,12 +387,23 @@ def _unique_mp_path(path: str | None) -> str:
 
 
 def _as_frame_auto(raw, last_wh) -> np.ndarray | None:
+	raw = _unwrap_com_image(raw)
 	if raw is None:
 		return None
-	arr = np.array(raw)
-	if arr.size == 0:
+	try:
+		arr = np.array(raw)
+		if arr.size == 0:
+			return None
+		if arr.dtype == object:
+			flat = list(arr.reshape(-1))
+			# None cells are a bad VARIANT, not a dim-0 frame.
+			if any(x is None for x in flat):
+				return None
+			arr = np.asarray(flat, dtype=np.uint16)
+		else:
+			arr = arr.astype(np.uint16, copy=False).reshape(-1)
+	except (TypeError, ValueError):
 		return None
-	arr = arr.astype(np.uint16, copy=False).reshape(-1)
 	n = int(arr.size)
 	if last_wh is not None:
 		h, w = last_wh

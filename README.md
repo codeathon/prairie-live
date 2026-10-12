@@ -57,7 +57,9 @@ New-NetFirewallRule -DisplayName "prairie-live relay" -Direction Inbound -Action
 Start **Live** in PrairieView first. Leave this window open.
 
 `--grab` streams frames for ΔF/F scoring and `trial_images/` PNGs (required for
-mp-sync with `images_dir` set).
+mp-sync with `images_dir` set). PrairieView 6.1 uses `ReadImage`/`ReadImages`
+and `SetTimeoutAndRetries(120000)` when those COM methods exist; 5.8 still
+uses `GetImage_2`. Same `relay --grab` flag and ports.
 
 ```powershell
 cd C:\Users\schollab\code\prairie-live
