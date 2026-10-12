@@ -69,6 +69,17 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 
 Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 
+## Analysis PC — live FOV
+
+Rolling mean of the last `--avg-s` seconds (same `mean_stack` as
+`trial_images/f0.png`). Keys: `t` T-series, `a` abort, `l` live scan, `q` quit.
+
+```powershell
+python -m prairie_live view --relay 10.33.107.147:25100
+python -m prairie_live view --relay 10.33.107.147:25100 --avg-s 0.5
+python -m prairie_live view --mock
+```
+
 ## Analysis PC — run mp-sync
 
 Edit `experiment.json` (series path, relay IP, COM port, powers, etc.), then:

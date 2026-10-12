@@ -1,4 +1,4 @@
-"""Continuous live display. Keys: t T-series, a abort, l live scan, q quit."""
+"""Continuous live display (rolling stack mean). Keys: t T-series, a abort, l, q."""
 
 from __future__ import annotations
 
@@ -7,14 +7,12 @@ import time
 
 import numpy as np
 
+from prairie_live.trial_images import FrameBuffer, to_u8
 
-def _autoscale(frame: np.ndarray) -> np.ndarray:
-	# 13–16 bit PMT data looks black if shown as raw uint16.
-	lo, hi = np.percentile(frame, (1.0, 99.5))
-	if hi <= lo:
-		hi = lo + 1
-	scaled = np.clip((frame.astype(np.float32) - lo) / (hi - lo), 0, 1)
-	return scaled
+
+def _avg_n(avg_s: float, interval_ms: int) -> int:
+	# Same window math as f0_s at this poll rate; at least two frames.
+	return max(int(round(avg_s * 1000.0 / max(interval_ms, 1))), 2)
 
 
 def _make_backend(args):
@@ -84,10 +82,34 @@ class MockScope:
 		}
 
 
-def run_viewer(client, interval_ms: int) -> None:
+def _on_frame(client, buf: FrameBuffer, im, title, state) -> None:
+	frame = client.get_frame()
+	if frame is None:
+		err = getattr(client, "last_error", "") or "no frame"
+		# Keep the window up; COM aborts must not kill the animation.
+		title.set_text(err[:80])
+		return
+	buf.push(frame)
+	avg = buf.mean()
+	if avg is None:
+		return
+	# Same percentile stretch as trial_images f0.png (to_u8), mapped to 0–1.
+	im.set_data(to_u8(avg).astype(np.float32) / 255.0)
+	im.set_extent((0, avg.shape[1], avg.shape[0], 0))
+	state["n"] += 1
+	dt = time.monotonic() - state["t0"]
+	fps = state["n"] / dt if dt > 0 else 0
+	h, w = avg.shape
+	title.set_text(
+		f"{w}x{h}  avg {len(buf)}/{buf.n}  {fps:.1f} fps  t/a/l/q"
+	)
+
+
+def run_viewer(client, interval_ms: int, avg_s: float = 0.5) -> None:
 	import matplotlib.pyplot as plt
 	from matplotlib.animation import FuncAnimation
 
+	buf = FrameBuffer(_avg_n(avg_s, interval_ms))
 	fig, ax = plt.subplots()
 	im = ax.imshow(np.zeros((32, 32)), cmap="gray", vmin=0, vmax=1)
 	title = ax.set_title("waiting for frames  (t/a/l/q)")
@@ -105,23 +127,16 @@ def run_viewer(client, interval_ms: int) -> None:
 			plt.close(fig)
 
 	def update(_):
-		frame = client.get_frame()
-		if frame is None:
-			err = getattr(client, "last_error", "") or "no frame"
-			# Keep the window up; COM aborts must not kill the animation.
-			title.set_text(err[:80])
-			return (im, title)
-		im.set_data(_autoscale(frame))
-		im.set_extent((0, frame.shape[1], frame.shape[0], 0))
-		state["n"] += 1
-		dt = time.monotonic() - state["t0"]
-		fps = state["n"] / dt if dt > 0 else 0
-		title.set_text(f"{frame.shape[1]}x{frame.shape[0]}  {fps:.1f} fps  t/a/l/q")
-		return im, title
+		_on_frame(client, buf, im, title, state)
+		return (im, title)
 
 	fig.canvas.mpl_connect("key_press_event", on_key)
-	FuncAnimation(fig, update, interval=interval_ms, blit=False, cache_frame_data=False)
+	# Keep a reference; matplotlib only holds a weakref.
+	anim = FuncAnimation(
+		fig, update, interval=interval_ms, blit=False, cache_frame_data=False
+	)
 	plt.show()
+	_ = anim
 
 
 def main(argv=None) -> None:
@@ -131,12 +146,20 @@ def main(argv=None) -> None:
 	p.add_argument("--relay", help="optional host[:port] if this PC has no PrairieLink")
 	p.add_argument("--channel", type=int, default=1)
 	p.add_argument("--interval-ms", type=int, default=50)
+	p.add_argument(
+		"--avg-s",
+		type=float,
+		default=0.5,
+		help="rolling image-mean window (seconds); same stack mean as f0.png",
+	)
 	p.add_argument("--mock", action="store_true")
 	args = p.parse_args(argv)
+	if args.avg_s <= 0:
+		raise SystemExit("--avg-s must be > 0")
 
 	client = _make_backend(args)
 	try:
-		run_viewer(client, args.interval_ms)
+		run_viewer(client, args.interval_ms, args.avg_s)
 	finally:
 		client.disconnect()
 

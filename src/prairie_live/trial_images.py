@@ -55,6 +55,35 @@ def mean_stack(frames: list[np.ndarray]) -> np.ndarray:
 	return np.mean(np.stack(frames, axis=0), axis=0).astype(np.float64)
 
 
+class FrameBuffer:
+	"""Newest-on-the-right ring of 2-D frames; mean() is f0/f1 mean_stack."""
+
+	def __init__(self, n: int):
+		if n < 1:
+			raise ValueError("n must be >= 1")
+		self.n = n
+		self._frames: list[np.ndarray] = []
+
+	def push(self, frame: np.ndarray) -> None:
+		img = np.asarray(frame)
+		if img.ndim != 2:
+			raise ValueError("frame must be 2-D")
+		# Zoom / size change would make mean_stack fail — start a new stack.
+		if self._frames and img.shape != self._frames[-1].shape:
+			self._frames.clear()
+		self._frames.append(img)
+		if len(self._frames) > self.n:
+			self._frames.pop(0)
+
+	def __len__(self) -> int:
+		return len(self._frames)
+
+	def mean(self) -> np.ndarray | None:
+		if not self._frames:
+			return None
+		return mean_stack(self._frames)
+
+
 def to_u8(img: np.ndarray, *, p_lo: float = 1.0, p_hi: float = 99.0) -> np.ndarray:
 	"""Percentile-stretch float/int frame → uint8 for display."""
 	lo, hi = np.percentile(img, (p_lo, p_hi))
