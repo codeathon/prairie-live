@@ -34,6 +34,7 @@ from prairie_live.markpoints import (
 )
 from prairie_live.prairie_link import PrairieLink
 from prairie_live.tcp_backend import DEFAULT_PORT
+from prairie_live.trial_images import disk_mean
 
 
 def form_groups(
@@ -105,26 +106,6 @@ def aggregate_point_scores(trials: list[dict]) -> dict[str, float]:
 		for pid in row.get("point_ids", []):
 			acc.setdefault(str(pid), []).append(float(score))
 	return {pid: float(np.mean(vals)) for pid, vals in acc.items()}
-
-
-def disk_mean(frame: np.ndarray, x_norm: float, y_norm: float, radius: int) -> float | None:
-	"""
-	Mean intensity in a disk; x/y are FOV-normalized (0–1 = visible frame).
-
-	Prairie allows Mark Points X/Y outside 0–1 (uncaging galvo range). Those
-	fall off the imaging frame — return None so callers skip them.
-	"""
-	h, w = frame.shape[:2]
-	cx = int(round(float(x_norm) * (w - 1)))
-	cy = int(round(float(y_norm) * (h - 1)))
-	# Entire disk must miss the frame → not scoreable on this image.
-	if cx + radius < 0 or cy + radius < 0 or cx - radius >= w or cy - radius >= h:
-		return None
-	yy, xx = np.ogrid[:h, :w]
-	mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
-	if not np.any(mask):
-		return None
-	return float(frame[mask].mean())
 
 
 def score_group_dff(

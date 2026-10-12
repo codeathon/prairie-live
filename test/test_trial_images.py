@@ -5,9 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from prairie_live.trial_images import (
 	FrameBuffer,
+	disk_mean,
 	draw_point_pool,
 	mean_stack,
 	power_tag,
@@ -16,7 +18,14 @@ from prairie_live.trial_images import (
 	to_u8,
 	trial_dir_name,
 )
-from prairie_live.viewer import _avg_n, _on_frame
+from prairie_live.viewer import (
+	IntensityBuffer,
+	_avg_n,
+	_fov_rgb,
+	_load_view_points,
+	_on_frame,
+	_update_traces,
+)
 
 
 def test_power_tag_and_trial_dir_name():
@@ -136,7 +145,7 @@ class _SeqClient:
 
 
 def test_on_frame_shows_stack_mean_not_last_raw():
-	# Two flats: last raw is 30; displayed image must be mean 20 → to_u8.
+	# Two flats: last raw is 30; displayed image must be mean 20 → to_u8 RGB.
 	a = np.full((8, 8), 10.0, dtype=np.float32)
 	b = np.full((8, 8), 30.0, dtype=np.float32)
 	buf = FrameBuffer(2)
@@ -146,6 +155,81 @@ def test_on_frame_shows_stack_mean_not_last_raw():
 	client = _SeqClient([a, b])
 	_on_frame(client, buf, im, title, state)
 	_on_frame(client, buf, im, title, state)
-	expect = to_u8(mean_stack([a, b])).astype(np.float32) / 255.0
-	assert np.allclose(im.data, expect)
+	expect = _fov_rgb(mean_stack([a, b]), [], 3)
+	assert np.array_equal(im.data, expect)
 	assert "avg 2/2" in title.text
+
+
+class _FakeLine:
+	def __init__(self):
+		self.xy = None
+
+	def set_data(self, x, y):
+		self.xy = (x, y)
+
+
+class _FakeAx:
+	def __init__(self):
+		self.xlim = None
+		self.ylim = None
+
+	def set_xlim(self, a, b):
+		self.xlim = (a, b)
+
+	def set_ylim(self, a, b):
+		self.ylim = (a, b)
+
+
+def test_load_view_points_from_sample_xml():
+	pts, r = _load_view_points("samples/MarkPoints_8fov.xml", None, None)
+	assert len(pts) == 8
+	assert r == 3
+	assert all(0.0 <= float(p["x"]) <= 1.0 for p in pts)
+
+
+def test_load_view_points_empty_without_series():
+	pts, r = _load_view_points(None, None, 5)
+	assert pts == []
+	assert r == 5
+
+
+def test_update_traces_blob_raises_pool_and_skips_oob():
+	# Bright blob at (0.5,0.5); OOB point must not enter the pool mean.
+	frame = np.full((32, 32), 10.0, dtype=np.float32)
+	frame[14:18, 14:18] = 80.0
+	points = [
+		{"id": "1", "x": 0.5, "y": 0.5},
+		{"id": "oob", "x": -2.0, "y": 0.5},
+	]
+	n = 8
+	traces = {
+		"points": points,
+		"radius": 2,
+		"buffers": {
+			"1": IntensityBuffer(n),
+			"oob": IntensityBuffer(n),
+			"pool": IntensityBuffer(n),
+		},
+		"lines": {"1": _FakeLine(), "oob": _FakeLine(), "pool": _FakeLine()},
+		"ax": _FakeAx(),
+		"dt": 0.05,
+	}
+	_update_traces(frame, traces)
+	assert len(traces["buffers"]["1"]) == 1
+	assert len(traces["buffers"]["oob"]) == 0
+	assert traces["buffers"]["pool"].as_array()[-1] == pytest.approx(
+		disk_mean(frame, 0.5, 0.5, 2)
+	)
+	assert traces["buffers"]["1"].as_array()[-1] > 10.0
+
+
+def test_on_frame_without_series_still_updates_fov():
+	frame = np.full((8, 8), 12.0, dtype=np.float32)
+	buf = FrameBuffer(4)
+	im = _FakeIm()
+	title = _FakeTitle()
+	state = {"n": 0, "t0": 0.0}
+	_on_frame(_SeqClient([frame]), buf, im, title, state, traces=None)
+	assert im.data is not None
+	assert im.data.ndim == 3
+	assert "avg 1/4" in title.text

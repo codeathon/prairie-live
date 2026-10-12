@@ -93,6 +93,26 @@ def to_u8(img: np.ndarray, *, p_lo: float = 1.0, p_hi: float = 99.0) -> np.ndarr
 	return np.clip(scaled * 255.0, 0, 255).astype(np.uint8)
 
 
+def disk_mean(frame: np.ndarray, x_norm: float, y_norm: float, radius: int) -> float | None:
+	"""
+	Mean intensity in a disk; x/y are FOV-normalized (0–1 = visible frame).
+
+	Prairie allows Mark Points X/Y outside 0–1 (uncaging galvo range). Those
+	fall off the imaging frame — return None so callers skip them.
+	"""
+	h, w = frame.shape[:2]
+	cx = int(round(float(x_norm) * (w - 1)))
+	cy = int(round(float(y_norm) * (h - 1)))
+	# Entire disk must miss the frame → not scoreable on this image.
+	if cx + radius < 0 or cy + radius < 0 or cx - radius >= w or cy - radius >= h:
+		return None
+	yy, xx = np.ogrid[:h, :w]
+	mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+	if not np.any(mask):
+		return None
+	return float(frame[mask].mean())
+
+
 def draw_point_rings(
 	rgb: np.ndarray,
 	points: list[dict],

@@ -7,7 +7,7 @@ import time
 
 import numpy as np
 
-from prairie_live.trial_images import FrameBuffer, to_u8
+from prairie_live.trial_images import FrameBuffer, disk_mean, draw_point_rings, to_u8
 
 
 def _avg_n(avg_s: float, interval_ms: int) -> int:
@@ -82,7 +82,97 @@ class MockScope:
 		}
 
 
-def _on_frame(client, buf: FrameBuffer, im, title, state) -> None:
+class IntensityBuffer:
+	"""Newest-on-the-right rolling scalar samples (raw PMT counts)."""
+
+	def __init__(self, n: int):
+		if n < 1:
+			raise ValueError("n must be >= 1")
+		self.n = n
+		self._data = np.zeros(n, dtype=np.float32)
+		self._i = 0
+		self._filled = 0
+
+	def push(self, value: float) -> None:
+		self._data[self._i % self.n] = np.float32(value)
+		self._i += 1
+		if self._filled < self.n:
+			self._filled += 1
+
+	def __len__(self) -> int:
+		return self._filled
+
+	def as_array(self) -> np.ndarray:
+		if self._filled < self.n:
+			return self._data[: self._filled].copy()
+		start = self._i % self.n
+		return np.concatenate((self._data[start:], self._data[:start]))
+
+
+def _load_view_points(series: str | None, config: str | None, disk_radius: int | None):
+	"""Prairie has no GetMarkPoints — coords come from the same xml/gpl as mp-sync."""
+	cfg: dict = {}
+	if config:
+		from prairie_live.experiment_config import load_experiment
+
+		cfg = load_experiment(config)
+	path = series or cfg.get("series")
+	radius = int(disk_radius if disk_radius is not None else cfg.get("disk_radius") or 3)
+	if not path:
+		return [], radius
+	from prairie_live.markpoints import extract_unique_points, load_mark_points_file
+
+	return extract_unique_points(load_mark_points_file(str(path))), radius
+
+
+def _fov_rgb(avg: np.ndarray, points: list, radius: int) -> np.ndarray:
+	# Same stretch as f0.png; rings use the same cyan overlay as trial dumps.
+	u8 = to_u8(avg)
+	rgb = np.stack([u8, u8, u8], axis=-1)
+	if points:
+		draw_point_rings(rgb, points, radius=max(int(radius), 2))
+	return rgb
+
+
+def _set_trace_ylim(ax, buffers: dict) -> None:
+	chunks = [b.as_array() for b in buffers.values() if len(b)]
+	if not chunks:
+		return
+	y = np.concatenate(chunks)
+	lo, hi = float(y.min()), float(y.max())
+	if hi <= lo:
+		hi = lo + 1.0
+	pad = 0.05 * (hi - lo)
+	ax.set_ylim(lo - pad, hi + pad)
+
+
+def _draw_line(ax, line, buf: IntensityBuffer, dt: float) -> None:
+	y = buf.as_array()
+	if y.size == 0:
+		return
+	x = (np.arange(y.size) - (y.size - 1)) * dt
+	line.set_data(x, y)
+	ax.set_xlim(float(x[0]) if y.size > 1 else -dt, 0.0)
+
+
+def _update_traces(frame: np.ndarray, traces: dict) -> None:
+	vals: list[float] = []
+	for pt in traces["points"]:
+		pid = str(pt["id"])
+		m = disk_mean(frame, pt["x"], pt["y"], traces["radius"])
+		if m is None:
+			continue
+		traces["buffers"][pid].push(m)
+		_draw_line(traces["ax"], traces["lines"][pid], traces["buffers"][pid], traces["dt"])
+		vals.append(m)
+	if not vals:
+		return
+	traces["buffers"]["pool"].push(float(np.mean(vals)))
+	_draw_line(traces["ax"], traces["lines"]["pool"], traces["buffers"]["pool"], traces["dt"])
+	_set_trace_ylim(traces["ax"], traces["buffers"])
+
+
+def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 	frame = client.get_frame()
 	if frame is None:
 		err = getattr(client, "last_error", "") or "no frame"
@@ -93,28 +183,62 @@ def _on_frame(client, buf: FrameBuffer, im, title, state) -> None:
 	avg = buf.mean()
 	if avg is None:
 		return
-	# Same percentile stretch as trial_images f0.png (to_u8), mapped to 0–1.
-	im.set_data(to_u8(avg).astype(np.float32) / 255.0)
+	points = (traces or {}).get("points") or []
+	radius = int((traces or {}).get("radius") or 3)
+	im.set_data(_fov_rgb(avg, points, radius))
 	im.set_extent((0, avg.shape[1], avg.shape[0], 0))
+	if traces:
+		_update_traces(frame, traces)
 	state["n"] += 1
 	dt = time.monotonic() - state["t0"]
 	fps = state["n"] / dt if dt > 0 else 0
 	h, w = avg.shape
+	n_pts = len(points)
 	title.set_text(
-		f"{w}x{h}  avg {len(buf)}/{buf.n}  {fps:.1f} fps  t/a/l/q"
+		f"{w}x{h}  avg {len(buf)}/{buf.n}  pts={n_pts}  {fps:.1f} fps  t/a/l/q"
 	)
 
 
-def run_viewer(client, interval_ms: int, avg_s: float = 0.5) -> None:
+def _build_trace_window(points: list, n: int, dt: float, radius: int):
 	import matplotlib.pyplot as plt
-	from matplotlib.animation import FuncAnimation
 
-	buf = FrameBuffer(_avg_n(avg_s, interval_ms))
-	fig, ax = plt.subplots()
-	im = ax.imshow(np.zeros((32, 32)), cmap="gray", vmin=0, vmax=1)
-	title = ax.set_title("waiting for frames  (t/a/l/q)")
-	ax.set_axis_off()
-	state = {"n": 0, "t0": time.monotonic()}
+	fig, ax = plt.subplots(figsize=(8, 4.5))
+	ax.set_xlabel("s")
+	ax.set_ylabel("mean (counts)")
+	ax.axvline(0.0, color="0.7", lw=0.6)
+	buffers: dict[str, IntensityBuffer] = {}
+	lines: dict = {}
+	cmap = plt.get_cmap("tab10")
+	for i, pt in enumerate(points):
+		pid = str(pt["id"])
+		buffers[pid] = IntensityBuffer(n)
+		(line,) = ax.plot([], [], lw=0.9, color=cmap(i % 10), label=pid)
+		lines[pid] = line
+	buffers["pool"] = IntensityBuffer(n)
+	(pool_line,) = ax.plot([], [], lw=2.2, color="0.1", label="pool")
+	lines["pool"] = pool_line
+	ax.legend(loc="upper left", fontsize=8, ncol=2)
+	fig.suptitle("markpoint disk means (raw counts)", fontsize=10)
+	return fig, {
+		"points": points,
+		"radius": radius,
+		"buffers": buffers,
+		"lines": lines,
+		"ax": ax,
+		"dt": dt,
+	}
+
+
+def _bind_viewer_keys(client, fig, fig_tr, state) -> None:
+	import matplotlib.pyplot as plt
+
+	def close_all(_event=None) -> None:
+		if state["closing"]:
+			return
+		state["closing"] = True
+		plt.close(fig)
+		if fig_tr is not None:
+			plt.close(fig_tr)
 
 	def on_key(event) -> None:
 		if event.key == "t":
@@ -124,13 +248,46 @@ def run_viewer(client, interval_ms: int, avg_s: float = 0.5) -> None:
 		elif event.key == "l":
 			print(client.start_live())
 		elif event.key in ("q", "escape"):
-			plt.close(fig)
+			close_all()
+
+	canvases = [fig.canvas]
+	if fig_tr is not None:
+		canvases.append(fig_tr.canvas)
+	for canv in canvases:
+		canv.mpl_connect("key_press_event", on_key)
+		canv.mpl_connect("close_event", close_all)
+
+
+def run_viewer(
+	client,
+	interval_ms: int,
+	avg_s: float = 0.5,
+	points: list | None = None,
+	disk_radius: int = 3,
+	window_s: float = 8.0,
+) -> None:
+	import matplotlib.pyplot as plt
+	from matplotlib.animation import FuncAnimation
+
+	points = list(points or [])
+	buf = FrameBuffer(_avg_n(avg_s, interval_ms))
+	dt = interval_ms / 1000.0
+	fig, ax = plt.subplots()
+	im = ax.imshow(np.zeros((32, 32, 3), dtype=np.uint8))
+	title = ax.set_title("waiting for frames  (t/a/l/q)")
+	ax.set_axis_off()
+	state = {"n": 0, "t0": time.monotonic(), "closing": False}
+	fig_tr = traces = None
+	if points:
+		fig_tr, traces = _build_trace_window(
+			points, _avg_n(window_s, interval_ms), dt, disk_radius
+		)
+	_bind_viewer_keys(client, fig, fig_tr, state)
 
 	def update(_):
-		_on_frame(client, buf, im, title, state)
+		_on_frame(client, buf, im, title, state, traces)
 		return (im, title)
 
-	fig.canvas.mpl_connect("key_press_event", on_key)
 	# Keep a reference; matplotlib only holds a weakref.
 	anim = FuncAnimation(
 		fig, update, interval=interval_ms, blit=False, cache_frame_data=False
@@ -152,14 +309,35 @@ def main(argv=None) -> None:
 		default=0.5,
 		help="rolling image-mean window (seconds); same stack mean as f0.png",
 	)
+	p.add_argument("--series", default=None, help="MarkPoints .xml/.gpl for disk ROIs")
+	p.add_argument("--config", default=None, help="experiment.json (series + disk_radius)")
+	p.add_argument("--disk-radius", type=int, default=None, help="pixel radius (default 3)")
+	p.add_argument(
+		"--window-s",
+		type=float,
+		default=8.0,
+		help="trace window length (seconds)",
+	)
 	p.add_argument("--mock", action="store_true")
 	args = p.parse_args(argv)
 	if args.avg_s <= 0:
 		raise SystemExit("--avg-s must be > 0")
+	if args.window_s <= 0:
+		raise SystemExit("--window-s must be > 0")
+	points, radius = _load_view_points(args.series, args.config, args.disk_radius)
+	if args.disk_radius is not None and args.disk_radius < 1:
+		raise SystemExit("--disk-radius must be >= 1")
 
 	client = _make_backend(args)
 	try:
-		run_viewer(client, args.interval_ms, args.avg_s)
+		run_viewer(
+			client,
+			args.interval_ms,
+			args.avg_s,
+			points=points,
+			disk_radius=radius,
+			window_s=args.window_s,
+		)
 	finally:
 		client.disconnect()
 
