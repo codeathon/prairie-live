@@ -74,10 +74,11 @@ Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 Rolling mean of the last `--avg-s` seconds (same `mean_stack` as
 `trial_images/f0.png`). Keys: `t` T-series, `a` abort, `l` live scan, `q` quit.
 
-With `--series` or `--config`, a **second window** plots disk-mean intensity at
-each Mark Points coordinate (same `disk_mean` as mp-sync ΔF/F). Cyan rings on
-the FOV match `f0.png`. `--config experiment.json` reads `series` and
-`disk_radius`. Omit `--series` for FOV-only.
+With `--series` or `--config`, the **same window** adds a right panel with
+disk-mean intensity at each Mark Points coordinate (same `disk_mean` as mp-sync
+ΔF/F). Cyan rings on the FOV match `f0.png`. `--config experiment.json` reads
+`series` and `disk_radius`. Omit `--series` for FOV-only. Later panels go on
+this grid, not extra windows.
 
 ```powershell
 python -m prairie_live view --relay 10.33.107.147:25100

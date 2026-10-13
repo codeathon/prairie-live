@@ -199,12 +199,28 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 	)
 
 
-def _build_trace_window(points: list, n: int, dt: float, radius: int):
+def _make_layout(n_cols: int, *, nrows: int = 1, width_ratios=None):
+	"""One viewer window. New panels: bump nrows/n_cols and add_subplot(gs[r, c]).
+
+	Why: do not call plt.figure()/plt.subplots() again — extra views stay on
+	this GridSpec so the operator has a single window.
+	"""
 	import matplotlib.pyplot as plt
 
-	fig, ax = plt.subplots(figsize=(8, 4.5))
+	fig = plt.figure(figsize=(6.4 * max(n_cols, 1), 5.4 * max(nrows, 1)))
+	gs = fig.add_gridspec(
+		nrows, n_cols, width_ratios=width_ratios, wspace=0.28, hspace=0.32
+	)
+	return fig, gs
+
+
+def _fill_trace_axis(ax, points: list, n: int, dt: float, radius: int) -> dict:
+	"""Right-hand (or later grid) panel: per-point disk means + pool."""
+	import matplotlib.pyplot as plt
+
 	ax.set_xlabel("s")
 	ax.set_ylabel("mean (counts)")
+	ax.set_title("markpoint disk means (raw counts)", fontsize=10)
 	ax.axvline(0.0, color="0.7", lw=0.6)
 	buffers: dict[str, IntensityBuffer] = {}
 	lines: dict = {}
@@ -218,8 +234,7 @@ def _build_trace_window(points: list, n: int, dt: float, radius: int):
 	(pool_line,) = ax.plot([], [], lw=2.2, color="0.1", label="pool")
 	lines["pool"] = pool_line
 	ax.legend(loc="upper left", fontsize=8, ncol=2)
-	fig.suptitle("markpoint disk means (raw counts)", fontsize=10)
-	return fig, {
+	return {
 		"points": points,
 		"radius": radius,
 		"buffers": buffers,
@@ -229,16 +244,8 @@ def _build_trace_window(points: list, n: int, dt: float, radius: int):
 	}
 
 
-def _bind_viewer_keys(client, fig, fig_tr, state) -> None:
+def _bind_viewer_keys(client, fig) -> None:
 	import matplotlib.pyplot as plt
-
-	def close_all(_event=None) -> None:
-		if state["closing"]:
-			return
-		state["closing"] = True
-		plt.close(fig)
-		if fig_tr is not None:
-			plt.close(fig_tr)
 
 	def on_key(event) -> None:
 		if event.key == "t":
@@ -248,14 +255,9 @@ def _bind_viewer_keys(client, fig, fig_tr, state) -> None:
 		elif event.key == "l":
 			print(client.start_live())
 		elif event.key in ("q", "escape"):
-			close_all()
+			plt.close(fig)
 
-	canvases = [fig.canvas]
-	if fig_tr is not None:
-		canvases.append(fig_tr.canvas)
-	for canv in canvases:
-		canv.mpl_connect("key_press_event", on_key)
-		canv.mpl_connect("close_event", close_all)
+	fig.canvas.mpl_connect("key_press_event", on_key)
 
 
 def run_viewer(
@@ -272,17 +274,21 @@ def run_viewer(
 	points = list(points or [])
 	buf = FrameBuffer(_avg_n(avg_s, interval_ms))
 	dt = interval_ms / 1000.0
-	fig, ax = plt.subplots()
-	im = ax.imshow(np.zeros((32, 32, 3), dtype=np.uint8))
-	title = ax.set_title("waiting for frames  (t/a/l/q)")
-	ax.set_axis_off()
-	state = {"n": 0, "t0": time.monotonic(), "closing": False}
-	fig_tr = traces = None
+	n_cols = 2 if points else 1
+	fig, gs = _make_layout(n_cols, width_ratios=([1.05, 1.0] if points else None))
+	ax_img = fig.add_subplot(gs[0, 0])
+	im = ax_img.imshow(np.zeros((32, 32, 3), dtype=np.uint8))
+	title = ax_img.set_title("waiting for frames  (t/a/l/q)")
+	ax_img.set_axis_off()
+	traces = None
 	if points:
-		fig_tr, traces = _build_trace_window(
-			points, _avg_n(window_s, interval_ms), dt, disk_radius
+		# Next panel: fig.add_subplot(gs[0, 2]) after _make_layout(n_cols=3), not a new window.
+		ax_tr = fig.add_subplot(gs[0, 1])
+		traces = _fill_trace_axis(
+			ax_tr, points, _avg_n(window_s, interval_ms), dt, disk_radius
 		)
-	_bind_viewer_keys(client, fig, fig_tr, state)
+	_bind_viewer_keys(client, fig)
+	state = {"n": 0, "t0": time.monotonic()}
 
 	def update(_):
 		_on_frame(client, buf, im, title, state, traces)

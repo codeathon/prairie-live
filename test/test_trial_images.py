@@ -23,6 +23,7 @@ from prairie_live.viewer import (
 	_avg_n,
 	_fov_rgb,
 	_load_view_points,
+	_make_layout,
 	_on_frame,
 	_update_traces,
 )
@@ -221,6 +222,19 @@ def test_update_traces_blob_raises_pool_and_skips_oob():
 		disk_mean(frame, 0.5, 0.5, 2)
 	)
 	assert traces["buffers"]["1"].as_array()[-1] > 10.0
+
+
+def test_make_layout_one_figure_for_all_panels():
+	# Why: extra views must share this GridSpec, not spawn a second window.
+	import matplotlib
+
+	matplotlib.use("Agg")
+	fig, gs = _make_layout(2, width_ratios=[1.05, 1.0])
+	a0 = fig.add_subplot(gs[0, 0])
+	a1 = fig.add_subplot(gs[0, 1])
+	assert a0.figure is fig
+	assert a1.figure is fig
+	assert a0.figure is a1.figure
 
 
 def test_on_frame_without_series_still_updates_fov():
