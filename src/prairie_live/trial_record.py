@@ -23,8 +23,10 @@ _TRIAL_KEY_ORDER = (
 	"group_name",
 	"point_ids",
 	"power",
+	"repetitions",
 	"score",
 	"score_kind",
+	"point_scores",
 	"stim_mode",
 	"trigger",
 	"trigger_selection",
@@ -71,6 +73,13 @@ def format_trial_summary(row: dict[str, Any]) -> str:
 	return " · ".join(parts)
 
 
+def _format_point_scores(ps) -> str:
+	if not isinstance(ps, dict) or not ps:
+		return "  (none)"
+	bits = [f"{k}={float(v):.4f}" for k, v in ps.items()]
+	return "  " + " ".join(bits)
+
+
 def format_trial_readable(row: dict[str, Any]) -> str:
 	"""Multi-line block for trials.txt / readable.txt (human log)."""
 	pts = ", ".join(str(p) for p in row.get("point_ids") or [])
@@ -97,6 +106,8 @@ def format_trial_readable(row: dict[str, Any]) -> str:
 		f"  Fired points:  {pts}",
 		f"  Group name:    {row.get('group_name')}",
 		f"  Laser power:   {row.get('power')}  (Prairie UI UncagingLaserPower)",
+		f"  Repetitions:   {row.get('repetitions')}",
+		f"  Per-point ΔF/F:{_format_point_scores(row.get('point_scores'))}",
 		f"  Stim mode:     {row.get('stim_mode')}   trigger={row.get('trigger')}  "
 		f"line={row.get('trigger_selection')}",
 		f"  TTL / pulse:   {pulse}",

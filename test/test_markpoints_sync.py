@@ -24,6 +24,7 @@ from prairie_live.sync_loop import (
 	form_groups,
 	run_sync_loop,
 	score_group_dff,
+	score_points_dff,
 )
 
 FAT_XML = """<?xml version="1.1"?>
@@ -152,6 +153,8 @@ def test_aggregate_and_dff():
 	pts = [{"id": "1", "x": 0.5, "y": 0.5}]
 	s = score_group_dff([f0], [f1], pts, radius=2)
 	assert s > 0.4
+	per = score_points_dff([f0], [f1], pts, radius=2)
+	assert "1" in per and per["1"] == s
 	assert disk_mean(f1, 0.5, 0.5, 2) > 10
 
 
@@ -197,6 +200,7 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 			disk_radius=3,
 			elite_frac=0.5,
 			dry_run=True,
+			show_candidate_gui=False,
 		)
 	finally:
 		log.close()
@@ -205,12 +209,14 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 	assert len(rows) == 8
 	assert Path(scope).is_file()
 	lines = log_path.read_text(encoding="utf-8").strip().splitlines()
-	# armed + done per trial + session recommendation
-	assert len(lines) == 17
-	assert json.loads(lines[-1])["phase"] == "recommendation"
+	# armed + done per trial + recommendation + candidates
+	assert len(lines) == 18
+	assert json.loads(lines[-1])["phase"] == "candidates"
+	assert json.loads(lines[-2])["phase"] == "recommendation"
 	done = [json.loads(ln) for ln in lines if json.loads(ln).get("phase") == "done"]
 	assert done[0]["trial_index"] == 0
 	assert done[0]["score_kind"] == "mock"
+	assert done[0].get("point_scores")
 	assert estimate_series_ms(
 		[build_group_step(pts[:2], name="G", power=0.5, meta=meta)]
 	) > 0
