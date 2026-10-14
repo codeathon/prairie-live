@@ -120,6 +120,20 @@ def test_mark_all_points_dispatch():
 	assert r.com.calls[0] == ("mark_all_points", parts, 22.1)
 
 
+def test_relay_client_take_frame_skips_tiny():
+	from prairie_live.relay_client import RelayClient
+
+	c = RelayClient("127.0.0.1")
+	c._take_frame(np.zeros((1, 1), dtype=np.uint16))
+	assert c.get_frame() is None
+	assert "skip=1" in c.last_error
+	c._take_frame(np.ones((32, 40), dtype=np.uint16) * 9)
+	got = c.get_frame()
+	assert got is not None
+	assert got.shape == (32, 40)
+	assert int(got.max()) == 9
+
+
 def test_grab_heartbeat_line_none_and_frame():
 	assert "NO FRAME" in grab_heartbeat_line(None, "boom")
 	assert "boom" in grab_heartbeat_line(None, "boom")

@@ -348,17 +348,47 @@ class Relay:
 				pl.close()
 
 
+def _peer(conn: socket.socket) -> str:
+	try:
+		host, port = conn.getpeername()[:2]
+		return f"{host}:{port}"
+	except OSError:
+		return "?"
+
+
+def _push_one_frame(conn, relay, peer: str, n_sent: int, n_tiny: int) -> tuple[int, int]:
+	frame = relay.latest_frame()
+	if frame is None:
+		return n_sent, n_tiny
+	h, w = frame.shape[:2]
+	if min(h, w) < 32:
+		if n_tiny == 0:
+			print(f"frame NOT sent {peer} tiny {int(w)}x{int(h)}", flush=True)
+		return n_sent, n_tiny + 1
+	conn.sendall(pack_frame(frame, extra=relay.channel))
+	if n_sent == 0:
+		print(
+			f"frame send {peer} {int(w)}x{int(h)} max={int(frame.max())}",
+			flush=True,
+		)
+	return n_sent + 1, n_tiny
+
+
 def _serve_frames(conn: socket.socket, relay: Relay, fps: float) -> None:
 	period = 1.0 / max(fps, 1.0)
 	try:
-		while not relay._stop.is_set():
-			frame = relay.latest_frame()
-			# 1×1 / 1×N is not an FOV — sending it locks the analysis title.
-			if frame is not None and min(frame.shape[:2]) >= 32:
-				conn.sendall(pack_frame(frame, extra=relay.channel))
-			time.sleep(period)
-	except (ConnectionError, OSError):
+		conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+	except OSError:
 		pass
+	peer = _peer(conn)
+	print(f"frame client {peer}", flush=True)
+	n_sent = n_tiny = 0
+	try:
+		while not relay._stop.is_set():
+			n_sent, n_tiny = _push_one_frame(conn, relay, peer, n_sent, n_tiny)
+			time.sleep(period)
+	except (ConnectionError, OSError) as e:
+		print(f"frame client {peer} closed: {e}", flush=True)
 	finally:
 		conn.close()
 
