@@ -128,6 +128,8 @@ gratings on for one run.
 | `trials.txt` | Human-readable trial blocks (open this first) |
 | `trial_images/run_…/` | Per-trial `f0.png`, `f1.png`, `dff.png` |
 | `trial_images/run_…/recommendation.txt` | Best group×power summary |
+| `trial_images/run_…/candidates.txt` | Ranked points (lowest stimulating power first) |
+| `trial_images/run_…/candidates_top.xml` | Top-third fat XML for the next `--series` |
 | `trial_images/run_…/summary.txt` | One line per trial |
 
 ## `experiment.json` reference
@@ -149,6 +151,8 @@ CLI flag names use hyphens (`--via-relay`, `--n-groups`, …).
 | `n_groups` | int | Number of random point groups per iteration |
 | `group_size` | int | Target points per group (minimum 3 enforced) |
 | `powers` | list[float] | Uncaging laser powers — same scale as PV UI `UncagingLaserPower` (not 0–1) |
+| `repetitions` | int | Fixed Mark Points / SLM repetitions on every generated trial (≥1) |
+| `stim_dff_min` | float | Disk ΔF/F threshold to count a point as stimulated (f0/f1) |
 | `seed` | int | RNG seed for group formation (`0` = deterministic) |
 | `trigger` | string | TTL mode: `serial` (DTR on `serial` port), `wait` (PFI wait), or `none` |
 | `serial` | string | COM port for DTR photostim pulse, e.g. `COM3` |
