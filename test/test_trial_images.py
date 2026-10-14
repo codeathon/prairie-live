@@ -30,6 +30,7 @@ from prairie_live.viewer import (
 	_make_layout,
 	_on_frame,
 	_update_traces,
+	rot90_cw,
 )
 
 
@@ -157,6 +158,14 @@ class _HoldClient:
 
 	def get_frame(self):
 		return self._frame
+
+
+def test_rot90_cw_bottom_left_to_top_left():
+	img = np.zeros((4, 6), dtype=np.uint16)
+	img[-1, 0] = 9
+	out = rot90_cw(img)
+	assert out.shape == (6, 4)
+	assert int(out[0, 0]) == 9
 
 
 def test_on_frame_shows_stack_mean_not_last_raw():

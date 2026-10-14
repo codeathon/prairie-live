@@ -10,6 +10,11 @@ import numpy as np
 from prairie_live.trial_images import FrameBuffer, disk_mean, draw_point_rings, to_u8
 
 
+def rot90_cw(frame: np.ndarray) -> np.ndarray:
+	"""PrairieLink FOV → PrairieView on-screen (90° clockwise)."""
+	return np.ascontiguousarray(np.rot90(frame, -1))
+
+
 def _avg_n(avg_s: float, interval_ms: int) -> int:
 	# Same window math as f0_s at this poll rate; at least two frames.
 	return max(int(round(avg_s * 1000.0 / max(interval_ms, 1))), 2)
@@ -269,6 +274,8 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 			state,
 		)
 		return
+	# COM buffer is 90° CCW from the PrairieView window.
+	frame = rot90_cw(frame)
 	buf.push(frame)
 	avg = buf.mean()
 	if avg is None:
