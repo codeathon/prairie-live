@@ -194,3 +194,23 @@ def test_readimage_constant_falls_back_to_getimage2():
 	# empty, not bad — keep retrying ReadImage on later frames.
 	assert "ReadImage" not in failed
 	assert pl.gi2 == [(1, 512, 512)]
+
+
+def test_stale_readimage_switches_to_getimage2(monkeypatch):
+	# Why: GUI Live can refresh PV while ReadImage stays on the last T-series.
+	times = [100.0]
+	monkeypatch.setattr("prairie_live.com_backend.time.monotonic", lambda: times[0])
+	raw = np.arange(32 * 32, dtype=np.uint16)
+	pl = _ReadImagePL(raw)
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = pl
+	com._last_wh = (32, 32)
+	assert com.get_frame(1) is not None
+	assert pl.gi2 == []
+	times[0] = 103.0
+	com.get_frame(1)
+	assert "ReadImage" in com._grab_failed
+	third = com.get_frame(1)
+	assert pl.gi2 == [(1, 32, 32)]
+	assert third is not None
+	assert third.shape == (32, 32)

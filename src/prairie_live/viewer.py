@@ -210,6 +210,30 @@ def _update_traces(frame: np.ndarray, traces: dict) -> None:
 	_set_trace_ylim(traces["ax"], traces["buffers"])
 
 
+_STALE_TICKS = 40  # ~2 s at the default 50 ms view interval
+
+
+def _frame_sig(frame: np.ndarray) -> tuple:
+	return (
+		frame.shape,
+		int(frame.min()),
+		int(frame.max()),
+		int(frame.flat[0]),
+		int(frame.flat[-1]),
+	)
+
+
+def _live_tag(state: dict, frame: np.ndarray) -> str:
+	# LIVE = pixels changed recently. STALE = PrairieLink is not following Live Scan.
+	sig = _frame_sig(frame)
+	if sig == state.get("sig"):
+		state["same"] = int(state.get("same") or 0) + 1
+	else:
+		state["sig"] = sig
+		state["same"] = 0
+	return "LIVE" if state["same"] < _STALE_TICKS else "STALE"
+
+
 def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 	frame = client.get_frame()
 	if frame is None:
@@ -240,9 +264,11 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 	dt = time.monotonic() - state["t0"]
 	fps = state["n"] / dt if dt > 0 else 0
 	n_pts = len(points)
+	tag = _live_tag(state, frame)
 	# max=0 on a 512² title means grab never saw PMT data (wrong channel / not Live).
+	# STALE means Live in PV is not filling the PrairieLink buffer — press l.
 	title.set_text(
-		f"{w}x{h}  avg {len(buf)}/{buf.n}  pts={n_pts}  "
+		f"{w}x{h}  {tag}  avg {len(buf)}/{buf.n}  pts={n_pts}  "
 		f"max={float(frame.max()):.0f}  {fps:.1f} fps  t/a/l/q"
 	)
 

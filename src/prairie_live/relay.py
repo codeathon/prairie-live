@@ -59,6 +59,7 @@ class Relay:
 		self._script_lock = threading.Lock()
 		# One-shot so the console shows whether grab is zeros vs a real FOV.
 		self._logged_first_grab = False
+		self._logged_gi2 = False
 
 	def start(self) -> None:
 		self.com.connect()
@@ -66,6 +67,7 @@ class Relay:
 		if self._grab_enabled:
 			# Let Connect finish before the first grab (ReadImage or GetImage_2).
 			time.sleep(0.3)
+			self._arm_live_grab()
 			threading.Thread(target=self._grab_loop, daemon=True).start()
 			kind = getattr(self.com, "grab_api", None) or "GetImage_2"
 			print(f"grab ON ({kind}); use without --grab if PV shows -gi errors")
@@ -74,6 +76,16 @@ class Relay:
 				print(f"COM timeout: {to}")
 		else:
 			print("grab OFF (default); pass --grab only when you need live frames")
+
+	def _arm_live_grab(self) -> None:
+		# Why: the PV Live Scan *button* refreshes the PV window; PrairieLink's
+		# GetImage/ReadImage buffer often stays on the last T-series until
+		# -LiveScan is sent on this COM connection. Markpoints are not required.
+		try:
+			self.com.start_live()
+			print("sent -LiveScan; FOV grab should move with no markpoints")
+		except Exception as e:
+			print(f"-LiveScan failed ({e}); press l in view or click Live in PV")
 
 	def stop(self) -> None:
 		self._stop.set()
@@ -109,6 +121,10 @@ class Relay:
 						f"min={int(frame.min())} max={int(frame.max())} "
 						f"mean={float(frame.mean()):.1f}"
 					)
+				failed = getattr(self.com, "_grab_failed", ())
+				if (not self._logged_gi2) and "ReadImage" in failed:
+					self._logged_gi2 = True
+					print("ReadImage frozen during Live; grabbing via GetImage_2")
 			else:
 				time.sleep(0.01)
 

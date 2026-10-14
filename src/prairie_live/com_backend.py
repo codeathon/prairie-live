@@ -31,6 +31,9 @@ def _dispatch():
 
 # 6.1 SetTimeoutAndRetries defaults to 2s; packed -slm needs a long wait.
 _SCRIPT_TIMEOUT_MS = 120_000
+# GUI Live can refresh PV while ReadImage sits on the last T-series; after
+# this many seconds of identical pixels, skip ReadImage and use GetImage_2.
+_STALE_S = 2.0
 
 
 def apply_script_timeout(pl) -> str | None:
@@ -221,6 +224,8 @@ class PrairieCom:
 		self.grab_api = "GetImage_2"
 		# APIs that raised once this session — skip them on later frames.
 		self._grab_failed: set[str] = set()
+		self._grab_sig = None
+		self._grab_sig_t = 0.0
 
 	def connect(self) -> None:
 		try:
@@ -243,6 +248,8 @@ class PrairieCom:
 		# PV 5.8 aborts the TCP session on this command; only try it for T-series.
 		# 6.1 defaults to a 2s script timeout; raise it so packed -slm can finish.
 		self._grab_failed.clear()
+		self._grab_sig = None
+		self._grab_sig_t = 0.0
 		self.timeout_api = apply_script_timeout(self._pl)
 		self.grab_api = detect_grab_api(self._pl)
 
@@ -390,7 +397,24 @@ class PrairieCom:
 			if h * w >= 32 * 32:
 				self._last_wh = frame.shape
 			self.last_error = ""
+			self._note_stale_grab(frame)
 		return frame
+
+	def _note_stale_grab(self, frame: np.ndarray) -> None:
+		# Cheap signature — full-frame hash on every COM grab is too costly.
+		sig = (frame.shape, int(frame.min()), int(frame.max()), int(frame.flat[0]), int(frame.flat[-1]))
+		now = time.monotonic()
+		if sig != self._grab_sig:
+			self._grab_sig = sig
+			self._grab_sig_t = now
+			return
+		if now - self._grab_sig_t < _STALE_S:
+			return
+		if "ReadImage" in self._grab_failed:
+			return
+		# Why: PV Live button ≠ PrairieLink buffer until we drop snapshot APIs.
+		self._grab_failed.add("ReadImage")
+		self._grab_failed.add("ReadImages")
 
 	def _grab_raw(self, pl, channel: int):
 		# GetImage maps to script -gi and can race Connect as

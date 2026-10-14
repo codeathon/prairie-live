@@ -20,6 +20,7 @@ from prairie_live.trial_images import (
 )
 from prairie_live.viewer import (
 	IntensityBuffer,
+	_STALE_TICKS,
 	_avg_n,
 	_fit_fov_axes,
 	_flash_overlay,
@@ -148,6 +149,15 @@ class _SeqClient:
 		return self._frames.pop(0) if self._frames else None
 
 
+class _HoldClient:
+	def __init__(self, frame):
+		self._frame = frame
+		self.last_error = ""
+
+	def get_frame(self):
+		return self._frame
+
+
 def test_on_frame_shows_stack_mean_not_last_raw():
 	# Two flats: last raw is 30; displayed image must be mean 20 → to_u8 RGB.
 	a = np.full((8, 8), 10.0, dtype=np.float32)
@@ -263,6 +273,22 @@ def test_on_frame_without_series_still_updates_fov():
 	assert im.data.ndim == 3
 	assert "avg 1/4" in title.text
 	assert "max=12" in title.text
+	assert "LIVE" in title.text
+
+
+def test_on_frame_title_stale_when_pixels_frozen():
+	# Same buffer every tick → STALE (Live not filling PrairieLink).
+	frame = np.arange(64, dtype=np.uint16).reshape(8, 8)
+	buf = FrameBuffer(8)
+	im = _FakeIm()
+	title = _FakeTitle()
+	state = {"n": 0, "t0": 0.0}
+	client = _HoldClient(frame)
+	_on_frame(client, buf, im, title, state)
+	assert "LIVE" in title.text
+	for _ in range(_STALE_TICKS):
+		_on_frame(client, buf, im, title, state)
+	assert "STALE" in title.text
 
 
 def test_on_frame_rescales_axes_from_placeholder():

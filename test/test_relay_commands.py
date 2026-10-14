@@ -116,6 +116,13 @@ def test_mark_all_points_dispatch():
 	assert r.com.calls[0] == ("mark_all_points", parts, 22.1)
 
 
+def test_arm_live_grab_sends_livescan():
+	# Why: PV Live button does not always fill the PrairieLink grab buffer.
+	r = _relay()
+	r._arm_live_grab()
+	assert r.com.calls == ["live"]
+
+
 def test_unknown_command_is_rejected():
 	r = _relay()
 	out = r.handle_command({"cmd": "shutdown"})

@@ -71,6 +71,13 @@ Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 
 ## Analysis PC — live FOV
 
+**Live Scan alone should already stream the FOV.** Mark Points are not required
+for the left image (or the `fov` / `p99` traces). Hitting Live in PrairieView
+refreshes the PV window; the analysis PC only moves if `relay --grab` is running
+and PrairieLink is following that Live buffer. Relay sends `-LiveScan` when grab
+starts; if the figure title stays `STALE`, click the analysis window and press
+`l` (same command over COM). Title `LIVE` + `max=` > 0 means frames are new.
+
 Rolling mean of the last `--avg-s` seconds (same `mean_stack` as
 `trial_images/f0.png`). Keys: `t` T-series, `a` abort, `l` live scan, `q` quit.
 
