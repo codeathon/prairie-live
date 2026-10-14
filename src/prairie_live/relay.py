@@ -29,6 +29,18 @@ _GRAB_DRAIN_S = 0.35
 _COM_SCRIPT_TIMEOUT_S = 45.0
 
 
+def grab_heartbeat_line(frame, last_error: str) -> str:
+	"""Scope-console line so a dark analysis FOV can be diagnosed without the plot."""
+	if frame is None:
+		return f"grab heartbeat: NO FRAME  {last_error or 'no COM frame'}"
+	h, w = frame.shape[:2]
+	return (
+		f"grab heartbeat: {int(w)}x{int(h)} "
+		f"min={int(frame.min())} max={int(frame.max())} "
+		f"mean={float(frame.mean()):.1f}"
+	)
+
+
 class Relay:
 	def __init__(
 		self,
@@ -60,6 +72,7 @@ class Relay:
 		# One-shot so the console shows whether grab is zeros vs a real FOV.
 		self._logged_first_grab = False
 		self._logged_gi2 = False
+		self._hb_t = 0.0
 
 	def start(self) -> None:
 		self.com.connect()
@@ -127,6 +140,11 @@ class Relay:
 					print("ReadImage frozen during Live; grabbing via GetImage_2")
 			else:
 				time.sleep(0.01)
+			now = time.monotonic()
+			if now - self._hb_t >= 2.0:
+				self._hb_t = now
+				err = getattr(self.com, "last_error", "") or ""
+				print(grab_heartbeat_line(frame, err), flush=True)
 
 	def latest_frame(self):
 		with self._lock:

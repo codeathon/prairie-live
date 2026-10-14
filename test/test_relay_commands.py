@@ -1,5 +1,7 @@
+import numpy as np
+
 from prairie_live.com_backend import PrairieCom
-from prairie_live.relay import Relay
+from prairie_live.relay import Relay, grab_heartbeat_line
 
 
 class FakeCom:
@@ -114,6 +116,15 @@ def test_mark_all_points_dispatch():
 	assert out["ok"] is True
 	assert out["cmd"] == "mark_all_points"
 	assert r.com.calls[0] == ("mark_all_points", parts, 22.1)
+
+
+def test_grab_heartbeat_line_none_and_frame():
+	assert "NO FRAME" in grab_heartbeat_line(None, "boom")
+	assert "boom" in grab_heartbeat_line(None, "boom")
+	frame = np.arange(4, dtype=np.uint16).reshape(2, 2)
+	line = grab_heartbeat_line(frame, "")
+	assert "2x2" in line
+	assert "max=3" in line
 
 
 def test_arm_live_grab_sends_livescan():

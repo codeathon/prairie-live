@@ -21,6 +21,7 @@ from prairie_live.trial_images import (
 from prairie_live.viewer import (
 	IntensityBuffer,
 	_STALE_TICKS,
+	_apply_status,
 	_avg_n,
 	_fit_fov_axes,
 	_flash_overlay,
@@ -248,6 +249,21 @@ def test_make_layout_one_figure_for_all_panels():
 	assert a0.figure is fig
 	assert a1.figure is fig
 	assert a0.figure is a1.figure
+
+
+def test_on_frame_none_says_no_frame_from_relay():
+	title = _FakeTitle()
+	state = {"n": 0, "t0": 0.0}
+	_on_frame(_SeqClient([]), FrameBuffer(2), _FakeIm(), title, state)
+	assert "no frame from relay" in title.text
+
+
+def test_apply_status_updates_hud():
+	title = _FakeTitle()
+	hud = _FakeTitle()
+	_apply_status(title, "512x512  LIVE  max=40", {"hud": hud})
+	assert title.text == "512x512  LIVE  max=40"
+	assert hud.text == "512x512  LIVE  max=40"
 
 
 def test_on_frame_skips_1x1_grab():

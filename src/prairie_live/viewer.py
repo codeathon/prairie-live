@@ -234,18 +234,39 @@ def _live_tag(state: dict, frame: np.ndarray) -> str:
 	return "LIVE" if state["same"] < _STALE_TICKS else "STALE"
 
 
+def _apply_status(title, text: str, state: dict) -> None:
+	"""Axes title is easy to miss on a black FOV — also overlay, caption, stdout."""
+	title.set_text(text)
+	hud = state.get("hud")
+	if hud is not None:
+		hud.set_text(text)
+	fig = state.get("fig")
+	if fig is not None:
+		fig.suptitle(text, fontsize=12, color="#ffee55")
+		mgr = getattr(fig.canvas, "manager", None)
+		setter = getattr(mgr, "set_window_title", None) if mgr is not None else None
+		if callable(setter):
+			setter("prairie-live  " + text[:90])
+	if state.get("log") and (time.monotonic() - float(state.get("print_t") or 0)) >= 1.0:
+		state["print_t"] = time.monotonic()
+		print(text, flush=True)
+
+
 def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 	frame = client.get_frame()
 	if frame is None:
-		err = getattr(client, "last_error", "") or "no frame"
-		# Keep the window up; COM aborts must not kill the animation.
-		title.set_text(err[:80])
+		# RelayClient has no last_error — "no frame from relay" means --grab is off
+		# or the analysis socket never received a packet.
+		err = getattr(client, "last_error", "") or "no frame from relay"
+		_apply_status(title, err[:80], state)
 		return
 	h0, w0 = frame.shape[:2]
 	if min(h0, w0) < 8:
 		# 1×1 grab is not an FOV — don't fill the rolling mean with it.
-		title.set_text(
-			f"grab {w0}x{h0} (not an FOV)  wait for GetImage_2 / Live  t/a/l/q"
+		_apply_status(
+			title,
+			f"grab {w0}x{h0} (not an FOV)  wait for GetImage_2 / Live  t/a/l/q",
+			state,
 		)
 		return
 	buf.push(frame)
@@ -267,9 +288,11 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 	tag = _live_tag(state, frame)
 	# max=0 on a 512² title means grab never saw PMT data (wrong channel / not Live).
 	# STALE means Live in PV is not filling the PrairieLink buffer — press l.
-	title.set_text(
+	_apply_status(
+		title,
 		f"{w}x{h}  {tag}  avg {len(buf)}/{buf.n}  pts={n_pts}  "
-		f"max={float(frame.max()):.0f}  {fps:.1f} fps  t/a/l/q"
+		f"max={float(frame.max()):.0f}  {fps:.1f} fps  t/a/l/q",
+		state,
 	)
 
 
@@ -358,28 +381,55 @@ def run_viewer(
 	dt = interval_ms / 1000.0
 	# Always two panels: FOV + traces (fov/p99 even when --series is omitted).
 	fig, gs = _make_layout(2, width_ratios=[1.05, 1.0])
+	fig.patch.set_facecolor("#222222")
+	fig.subplots_adjust(top=0.88)
 	ax_img = fig.add_subplot(gs[0, 0])
+	ax_img.set_facecolor("#111111")
 	im = ax_img.imshow(np.zeros((512, 512, 3), dtype=np.uint8), origin="upper")
-	title = ax_img.set_title("waiting for frames  (t/a/l/q)")
+	# Yellow on the image — axes title on a black FOV was easy to miss.
+	wait = "waiting for frames from relay  (t/a/l/q)"
+	title = ax_img.set_title(wait, color="#ffee55", fontsize=12)
+	hud = ax_img.text(
+		0.02,
+		0.98,
+		wait,
+		transform=ax_img.transAxes,
+		va="top",
+		ha="left",
+		fontsize=13,
+		color="#ffee55",
+		bbox={"facecolor": "black", "alpha": 0.75, "pad": 6},
+	)
 	ax_img.set_axis_off()
+	fig.suptitle(wait, fontsize=12, color="#ffee55")
 	# Next panel: fig.add_subplot(gs[0, 2]) after _make_layout(n_cols=3), not a new window.
 	ax_tr = fig.add_subplot(gs[0, 1])
 	traces = _fill_trace_axis(
 		ax_tr, points, _avg_n(window_s, interval_ms), dt, disk_radius
 	)
 	_bind_viewer_keys(client, fig)
-	state = {"n": 0, "t0": time.monotonic()}
+	state = {
+		"n": 0,
+		"t0": time.monotonic(),
+		"hud": hud,
+		"fig": fig,
+		"log": True,
+		"print_t": 0.0,
+	}
+	mgr = getattr(fig.canvas, "manager", None)
+	if mgr is not None and callable(getattr(mgr, "set_window_title", None)):
+		fig.canvas.manager.set_window_title("prairie-live  waiting for frames")
 
 	def update(_):
 		_on_frame(client, buf, im, title, state, traces)
-		return (im, title)
+		return (im, title, hud)
 
-	# Keep a reference; matplotlib only holds a weakref.
+	# Keep a reference on the figure; matplotlib only holds a weakref.
 	anim = FuncAnimation(
 		fig, update, interval=interval_ms, blit=False, cache_frame_data=False
 	)
+	fig._prairie_anim = anim
 	plt.show()
-	_ = anim
 
 
 def main(argv=None) -> None:
@@ -406,6 +456,7 @@ def main(argv=None) -> None:
 	)
 	p.add_argument("--mock", action="store_true")
 	args = p.parse_args(argv)
+	print("prairie-live view HUD v4 — yellow overlay + window title show max=", flush=True)
 	if args.avg_s <= 0:
 		raise SystemExit("--avg-s must be > 0")
 	if args.window_s <= 0:
