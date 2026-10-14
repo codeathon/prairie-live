@@ -122,9 +122,23 @@ def test_grab_heartbeat_line_none_and_frame():
 	assert "NO FRAME" in grab_heartbeat_line(None, "boom")
 	assert "boom" in grab_heartbeat_line(None, "boom")
 	frame = np.arange(4, dtype=np.uint16).reshape(2, 2)
-	line = grab_heartbeat_line(frame, "")
+	line = grab_heartbeat_line(frame, "", channel=2)
 	assert "2x2" in line
 	assert "max=3" in line
+	assert "ch=2" in line
+
+
+def test_probe_and_pick_channel_switches():
+	r = _relay()
+	r.channel = 1
+	r.com.probe_live_grab = lambda preferred: {
+		"wh": (32, 64),
+		"channel": 3,
+		"scores": {1: 0.0, 2: 0.0, 3: 12.0, 4: 0.0},
+		"rows": ["ch3 64x32 max=12 ptp=12"],
+	}
+	r._probe_and_pick_channel()
+	assert r.channel == 3
 
 
 def test_arm_live_grab_sends_livescan():

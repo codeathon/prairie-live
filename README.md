@@ -76,7 +76,10 @@ for the left image (or the `fov` / `p99` traces). Hitting Live in PrairieView
 refreshes the PV window; the analysis PC only moves if `relay --grab` is running
 and PrairieLink is following that Live buffer. Relay sends `-LiveScan` when grab
 starts; if the figure stays `STALE`, click the analysis window and press
-`l` (same command over COM). Status is in three places: the **window caption**,
+`l` (same command over COM). On grab start the relay prints a `grab probe`
+table (`ch1…ch4 max=`). If every channel is `max=0` after Live, PrairieLink
+is not the PV image window — take one **Snapshot** in PV, leave Live on, and
+watch `max=` on the heartbeat. Status is in three places: the **window caption**,
 a **yellow overlay** on the FOV, and stdout (`HUD v4`). `LIVE` + `max=` > 0
 means frames are new. `no frame from relay` means `--grab` is off or the TCP
 link is not delivering packets. Relay prints `grab heartbeat:` every 2s.

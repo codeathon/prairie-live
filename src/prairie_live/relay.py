@@ -29,13 +29,14 @@ _GRAB_DRAIN_S = 0.35
 _COM_SCRIPT_TIMEOUT_S = 45.0
 
 
-def grab_heartbeat_line(frame, last_error: str) -> str:
+def grab_heartbeat_line(frame, last_error: str, channel: int | None = None) -> str:
 	"""Scope-console line so a dark analysis FOV can be diagnosed without the plot."""
+	ch = f" ch={int(channel)}" if channel is not None else ""
 	if frame is None:
-		return f"grab heartbeat: NO FRAME  {last_error or 'no COM frame'}"
+		return f"grab heartbeat:{ch} NO FRAME  {last_error or 'no COM frame'}"
 	h, w = frame.shape[:2]
 	return (
-		f"grab heartbeat: {int(w)}x{int(h)} "
+		f"grab heartbeat:{ch} {int(w)}x{int(h)} "
 		f"min={int(frame.min())} max={int(frame.max())} "
 		f"mean={float(frame.mean()):.1f}"
 	)
@@ -81,6 +82,7 @@ class Relay:
 			# Let Connect finish before the first grab (ReadImage or GetImage_2).
 			time.sleep(0.3)
 			self._arm_live_grab()
+			self._probe_and_pick_channel()
 			threading.Thread(target=self._grab_loop, daemon=True).start()
 			kind = getattr(self.com, "grab_api", None) or "GetImage_2"
 			print(f"grab ON ({kind}); use without --grab if PV shows -gi errors")
@@ -89,6 +91,29 @@ class Relay:
 				print(f"COM timeout: {to}")
 		else:
 			print("grab OFF (default); pass --grab only when you need live frames")
+
+	def _probe_and_pick_channel(self) -> None:
+		# Why: Live can be on PMT2/3 or 256/1024² while we asked GetImage_2 for 512 ch1.
+		try:
+			probe = self.com.probe_live_grab(self.channel)
+		except Exception as e:
+			print(f"grab probe failed: {e}")
+			return
+		print(f"grab probe FOV {int(probe['wh'][1])}x{int(probe['wh'][0])}")
+		for row in probe["rows"]:
+			print(f"  {row}")
+		if int(probe["channel"]) != int(self.channel):
+			print(
+				f"switching grab channel {self.channel} -> {probe['channel']} "
+				"(Live counts were on a different PMT)"
+			)
+			self.channel = int(probe["channel"])
+		scores = probe.get("scores") or {}
+		if max(scores.values(), default=-1.0) <= 0:
+			print(
+				"all channels max=0 after Live — PrairieLink is not the PV window. "
+				"Take one Snapshot in PV, leave Live running, watch max=."
+			)
 
 	def _arm_live_grab(self) -> None:
 		# Why: the PV Live Scan *button* refreshes the PV window; PrairieLink's
@@ -144,7 +169,7 @@ class Relay:
 			if now - self._hb_t >= 2.0:
 				self._hb_t = now
 				err = getattr(self.com, "last_error", "") or ""
-				print(grab_heartbeat_line(frame, err), flush=True)
+				print(grab_heartbeat_line(frame, err, self.channel), flush=True)
 
 	def latest_frame(self):
 		with self._lock:

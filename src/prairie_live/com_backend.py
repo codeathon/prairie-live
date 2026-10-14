@@ -209,6 +209,60 @@ def grab_raw(pl, channel: int, last_wh, failed: set[str]):
 	return pl.GetImage_2(channel, int(w), int(h))
 
 
+def parse_state_int(raw) -> int | None:
+	"""Parse GetState pixelsPerLine / linesPerFrame; ignore junk / tiny values."""
+	if raw is None:
+		return None
+	try:
+		n = int(float(str(raw).strip().split()[0]))
+	except (TypeError, ValueError):
+		return None
+	return n if n >= 32 else None
+
+
+def _getstate_int(pl, key: str) -> int | None:
+	fn = getattr(pl, "GetState", None)
+	if not callable(fn):
+		return None
+	try:
+		return parse_state_int(fn(key))
+	except Exception:
+		return None
+
+
+def fov_wh_from_pl(pl, last_wh) -> tuple[int, int]:
+	"""(height, width) from GetState; PixelsPerLine() only if GetState missing.
+
+	Why: GetImage_2(512,512) on a 256 or 1024 Live FOV returns a dead buffer.
+	PixelsPerLine() aborted PV 5.8, so GetState is first.
+	"""
+	w = _getstate_int(pl, "pixelsPerLine")
+	h = _getstate_int(pl, "linesPerFrame")
+	if w and h:
+		return (int(h), int(w))
+	try:
+		w = int(pl.PixelsPerLine())
+		h = int(pl.LinesPerFrame())
+		if w >= 32 and h >= 32:
+			return (int(h), int(w))
+	except Exception:
+		pass
+	return last_wh if last_wh else (512, 512)
+
+
+def pick_grab_channel(scores: dict[int, float], preferred: int) -> int:
+	"""Keep --channel when it has contrast; otherwise the PMT with the largest ptp."""
+	if float(scores.get(preferred, -1.0)) > 0:
+		return int(preferred)
+	best_ch = int(preferred)
+	best = -1.0
+	for ch, s in scores.items():
+		if float(s) > best:
+			best = float(s)
+			best_ch = int(ch)
+	return best_ch if best > 0 else int(preferred)
+
+
 class PrairieCom:
 	def __init__(self, host: str, password: str = "0000"):
 		self.host = host
@@ -252,6 +306,28 @@ class PrairieCom:
 		self._grab_sig_t = 0.0
 		self.timeout_api = apply_script_timeout(self._pl)
 		self.grab_api = detect_grab_api(self._pl)
+
+	def probe_live_grab(self, preferred: int = 1) -> dict:
+		"""After -LiveScan: real FOV size + which PMT actually has counts."""
+		pl = self._require()
+		with self._io:
+			wh = fov_wh_from_pl(pl, self._last_wh)
+			self._last_wh = wh
+			scores: dict[int, float] = {}
+			rows: list[str] = []
+			for ch in (1, 2, 3, 4):
+				raw = grab_raw(pl, ch, wh, set())
+				frame = _as_frame_auto(raw, wh)
+				ptp = -1.0 if frame is None else float(np.ptp(frame))
+				mx = 0 if frame is None else int(frame.max())
+				scores[ch] = ptp
+				rows.append(f"ch{ch} {int(wh[1])}x{int(wh[0])} max={mx} ptp={ptp:.0f}")
+			return {
+				"wh": wh,
+				"channel": pick_grab_channel(scores, preferred),
+				"scores": scores,
+				"rows": rows,
+			}
 
 	def start_tseries(self) -> dict:
 		# Older PV needed this so -TSeries would not block the COM client.

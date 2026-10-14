@@ -7,7 +7,10 @@ from prairie_live.com_backend import (
 	_as_frame_auto,
 	apply_script_timeout,
 	detect_grab_api,
+	fov_wh_from_pl,
 	grab_raw,
+	parse_state_int,
+	pick_grab_channel,
 )
 
 
@@ -194,6 +197,46 @@ def test_readimage_constant_falls_back_to_getimage2():
 	# empty, not bad — keep retrying ReadImage on later frames.
 	assert "ReadImage" not in failed
 	assert pl.gi2 == [(1, 512, 512)]
+
+
+def test_parse_state_int_and_fov_wh():
+	assert parse_state_int("256") == 256
+	assert parse_state_int("16") is None
+	assert parse_state_int("nope") is None
+
+	class _StatePL:
+		def GetState(self, key):
+			return {"pixelsPerLine": "256", "linesPerFrame": "128"}[key]
+
+	assert fov_wh_from_pl(_StatePL(), (512, 512)) == (128, 256)
+
+
+def test_pick_grab_channel_keeps_preferred_if_live():
+	assert pick_grab_channel({1: 40.0, 2: 80.0}, 1) == 1
+	assert pick_grab_channel({1: 0.0, 2: 80.0, 3: 10.0}, 1) == 2
+	assert pick_grab_channel({1: 0.0, 2: 0.0}, 1) == 1
+
+
+class _ProbePL:
+	def GetState(self, key):
+		return {"pixelsPerLine": "64", "linesPerFrame": "32"}[key]
+
+	def GetImage_2(self, ch, w, h):
+		n = int(w) * int(h)
+		if ch == 3:
+			return np.arange(n, dtype=np.uint16)
+		return np.zeros(n, dtype=np.uint16)
+
+
+def test_probe_live_grab_picks_channel_with_contrast():
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _ProbePL()
+	com._last_wh = (512, 512)
+	out = com.probe_live_grab(preferred=1)
+	assert out["wh"] == (32, 64)
+	assert out["channel"] == 3
+	assert out["scores"][1] == 0.0
+	assert out["scores"][3] > 0
 
 
 def test_stale_readimage_switches_to_getimage2(monkeypatch):
