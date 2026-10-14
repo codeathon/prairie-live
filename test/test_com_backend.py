@@ -5,12 +5,14 @@ import numpy as np
 from prairie_live.com_backend import (
 	PrairieCom,
 	_as_frame_auto,
+	_unwrap_com_image,
 	apply_script_timeout,
 	detect_grab_api,
 	fov_wh_from_pl,
 	grab_raw,
 	parse_state_int,
 	pick_grab_channel,
+	raw_summary,
 )
 
 
@@ -196,6 +198,28 @@ def test_poisoned_1x1_last_wh_falls_back_to_512():
 	assert out.size == 512 * 512
 	assert "ReadImage" in failed
 	assert pl.gi2 == [(1, 512, 512)]
+
+
+def test_unwrap_pixels_width_height_tuple():
+	pixels = np.arange(32 * 32, dtype=np.uint16)
+	assert np.array_equal(_unwrap_com_image((pixels, 32, 32)), pixels)
+	frame = _as_frame_auto((pixels, 32, 32), (32, 32))
+	assert frame is not None
+	assert frame.shape == (32, 32)
+
+
+def test_get_frame_last_error_is_raw_summary():
+	# Why: scope heartbeat was "NO FRAME no COM frame" with no payload hint.
+	class _NoneGI2:
+		def GetImage_2(self, channel, w, h):
+			return None
+
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _NoneGI2()
+	com._last_wh = (32, 32)
+	assert com.get_frame(1) is None
+	assert "raw=None" in com.last_error
+	assert raw_summary(None) == "raw=None"
 
 
 def test_get_frame_drops_tiny_resets_wh():

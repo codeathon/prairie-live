@@ -63,10 +63,39 @@ def detect_grab_api(pl) -> str:
 
 def _unwrap_com_image(raw):
 	# 6.1 ReadImage sometimes returns (pixels, unused) with unused=None.
-	if isinstance(raw, tuple) and raw and raw[0] is not None:
+	# GetImage_2 on some 6.1 builds is (pixels, width, height) with int extras.
+	if isinstance(raw, (tuple, list)) and raw and raw[0] is not None:
 		if len(raw) > 1 and all(x is None for x in raw[1:]):
 			return raw[0]
+		rest_nums = len(raw) > 1 and all(
+			x is None or isinstance(x, (int, float)) for x in raw[1:]
+		)
+		if rest_nums:
+			try:
+				if int(np.array(raw[0]).size) >= 32:
+					return raw[0]
+			except Exception:
+				pass
 	return raw
+
+
+def raw_summary(raw) -> str:
+	"""Heartbeat text when _as_frame_auto returns None (was a blank 'no COM frame')."""
+	raw = _unwrap_com_image(raw)
+	if raw is None:
+		return "raw=None"
+	try:
+		nlen = len(raw)
+	except TypeError:
+		nlen = None
+	try:
+		arr = np.array(raw)
+		return (
+			f"raw type={type(raw).__name__} len={nlen} "
+			f"np={arr.shape}/{arr.dtype}/{int(arr.size)}"
+		)
+	except Exception as e:
+		return f"raw type={type(raw).__name__} len={nlen} np_err={e}"
 
 
 def _payload_kind(raw, last_wh=None) -> str:
@@ -210,7 +239,22 @@ def grab_raw(pl, channel: int, last_wh, failed: set[str]):
 	# Never ask GetImage_2 for 1×1 after a poisoned ReadImage scalar.
 	if int(h) * int(w) <= 1:
 		h, w = 512, 512
-	return pl.GetImage_2(channel, int(w), int(h))
+	return _call_getimage2(pl, channel, int(w), int(h))
+
+
+def _call_getimage2(pl, channel: int, w: int, h: int):
+	"""Try (ch,w,h), then swapped, then (ch,). 6.1 Alpha arities differ."""
+	fn = getattr(pl, "GetImage_2", None)
+	if not callable(fn):
+		fn = getattr(pl, "GetImage", None)
+	if not callable(fn):
+		return None
+	for args in ((channel, w, h), (channel, h, w), (channel,)):
+		try:
+			return fn(*args)
+		except TypeError:
+			continue
+	return None
 
 
 def parse_state_int(raw) -> int | None:
@@ -325,7 +369,12 @@ class PrairieCom:
 				ptp = -1.0 if frame is None else float(np.ptp(frame))
 				mx = 0 if frame is None else int(frame.max())
 				scores[ch] = ptp
-				rows.append(f"ch{ch} {int(wh[1])}x{int(wh[0])} max={mx} ptp={ptp:.0f}")
+				if frame is None:
+					rows.append(f"ch{ch} ptp=-1 {raw_summary(raw)}")
+				else:
+					rows.append(
+						f"ch{ch} {int(wh[1])}x{int(wh[0])} max={mx} ptp={ptp:.0f}"
+					)
 			return {
 				"wh": wh,
 				"channel": pick_grab_channel(scores, preferred),
@@ -472,6 +521,9 @@ class PrairieCom:
 			self._reconnect_if_dropped(e)
 			return None
 		if frame is None:
+			# Why: heartbeat said "no COM frame" while PV Live was on — payload
+			# was unusable, not a missing COM object.
+			self.last_error = raw_summary(raw)
 			return None
 		h, w = frame.shape[:2]
 		# Why: analysis "wait for GetImage_2" was a 1×1/1×N packet, not a live FOV.
@@ -543,7 +595,14 @@ def _as_frame_auto(raw, last_wh) -> np.ndarray | None:
 	if raw is None:
 		return None
 	try:
+		seq_n = len(raw)
+	except TypeError:
+		seq_n = 0
+	try:
 		arr = np.array(raw)
+		# Some 6.1 SAFEARRAYs look like size-1 to numpy; iterate the COM object.
+		if int(arr.size) <= 1 and seq_n >= 32 * 32:
+			arr = np.asarray(list(raw), dtype=np.uint16)
 		if arr.size == 0:
 			return None
 		if arr.dtype == object:
