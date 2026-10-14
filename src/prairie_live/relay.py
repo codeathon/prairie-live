@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import signal
 import socket
 import sys
@@ -27,6 +28,28 @@ DEFAULT_PORT = 25100
 _GRAB_DRAIN_S = 0.35
 # COM script calls must not block the relay ctrl socket forever.
 _COM_SCRIPT_TIMEOUT_S = 45.0
+
+
+def grab_heartbeat_line(
+	frame,
+	last_error: str,
+	channel: int | None = None,
+	sent: str = "",
+) -> str:
+	"""Scope-console line so a dark analysis FOV can be diagnosed without the plot."""
+	ch = f" ch={int(channel)}" if channel is not None else ""
+	if frame is None:
+		line = f"grab heartbeat:{ch} NO FRAME  {last_error or 'no COM frame'}"
+	else:
+		h, w = frame.shape[:2]
+		line = (
+			f"grab heartbeat:{ch} {int(w)}x{int(h)} "
+			f"min={int(frame.min())} max={int(frame.max())} "
+			f"mean={float(frame.mean()):.1f}"
+		)
+	if sent:
+		line = f"{line}  {sent}"
+	return line
 
 
 class Relay:
@@ -57,50 +80,169 @@ class Relay:
 		self._stop = threading.Event()
 		self._pause_grab = threading.Event()
 		self._script_lock = threading.Lock()
+		# One-shot so the console shows whether grab is zeros vs a real FOV.
+		self._logged_first_grab = False
+		self._logged_gi2 = False
+		self._hb_t = 0.0
+		self._send_n = 0
+		self._send_wh = None
+		self._send_max = -1
+		# Jobs run on the grab thread — win32com STA cannot GetImage from another thread.
+		self._com_jobs: queue.Queue = queue.Queue()
+		self._com_ready = threading.Event()
+
+	def note_send(self, w: int, h: int, peak: int) -> None:
+		self._send_n += 1
+		self._send_wh = (int(w), int(h))
+		self._send_max = int(peak)
+
+	def sent_note(self) -> str:
+		if not self._send_n or self._send_wh is None:
+			return "send=none (view not on THIS relay — kill extra python)"
+		w, h = self._send_wh
+		return f"send {w}x{h} n={self._send_n} max={self._send_max}"
 
 	def start(self) -> None:
-		self.com.connect()
-		self.script_com = self.com
 		if self._grab_enabled:
-			# Let Connect finish before the first grab (ReadImage or GetImage_2).
-			time.sleep(0.3)
-			threading.Thread(target=self._grab_loop, daemon=True).start()
-			kind = getattr(self.com, "grab_api", None) or "GetImage_2"
-			print(f"grab ON ({kind}); use without --grab if PV shows -gi errors")
-			to = getattr(self.com, "timeout_api", None)
-			if to:
-				print(f"COM timeout: {to}")
+			# Why: Connect+GetImage must share one thread. Main-thread Connect then
+			# grab-thread GetImage returned None (analysis: "no frame from relay").
+			threading.Thread(
+				target=self._grab_loop, daemon=True, name="pv-grab"
+			).start()
+			if not self._com_ready.wait(30.0):
+				raise RuntimeError("grab thread did not Connect in 30s")
+			if self.script_com is None:
+				raise RuntimeError(
+					"grab Connect failed. PrairieView must be open on this PC."
+				)
 		else:
+			self.com.connect()
+			self.script_com = self.com
 			print("grab OFF (default); pass --grab only when you need live frames")
+
+	def _probe_and_pick_channel(self) -> None:
+		# Why: Live can be on PMT2/3 or 256/1024² while we asked GetImage_2 for 512 ch1.
+		try:
+			probe = self.com.probe_live_grab(self.channel)
+		except Exception as e:
+			print(f"grab probe failed: {e}")
+			return
+		print(f"grab probe FOV {int(probe['wh'][1])}x{int(probe['wh'][0])}")
+		for row in probe["rows"]:
+			print(f"  {row}")
+		if int(probe["channel"]) != int(self.channel):
+			print(
+				f"switching grab channel {self.channel} -> {probe['channel']} "
+				"(Live counts were on a different PMT)"
+			)
+			self.channel = int(probe["channel"])
+		scores = probe.get("scores") or {}
+		if max(scores.values(), default=-1.0) <= 0:
+			print(
+				"all channels max=0 after Live — PrairieLink is not the PV window. "
+				"Take one Snapshot in PV, leave Live running, watch max=."
+			)
+
+	def _arm_live_grab(self) -> None:
+		# Why: the PV Live Scan *button* refreshes the PV window; PrairieLink's
+		# GetImage/ReadImage buffer often stays on the last T-series until
+		# -LiveScan is sent on this COM connection. Markpoints are not required.
+		try:
+			self.com.start_live()
+			print("sent -LiveScan; FOV grab should move with no markpoints")
+		except Exception as e:
+			print(f"-LiveScan failed ({e}); press l in view or click Live in PV")
 
 	def stop(self) -> None:
 		self._stop.set()
 		self._pause_grab.set()
-		if self.com is not None:
+		if not self._grab_enabled and self.com is not None:
 			try:
 				self.com.disconnect()
 			except Exception:
 				pass
-		self.script_com = None
+			self.script_com = None
 
-	def _grab_loop(self) -> None:
-		# win32com must be CoInitialized on every thread that calls COM.
+	def _init_grab_com(self) -> None:
 		try:
 			import pythoncom
 
 			pythoncom.CoInitialize()
 		except Exception:
 			pass
-		while not self._stop.is_set():
-			if self._pause_grab.is_set():
-				time.sleep(0.01)
-				continue
-			frame = self.com.get_frame(self.channel)
-			if frame is not None:
-				with self._lock:
-					self._latest = frame
-			else:
-				time.sleep(0.01)
+		self.com.connect()
+		self.script_com = self.com
+		self._arm_live_grab()
+		self._probe_and_pick_channel()
+		kind = getattr(self.com, "grab_api", None) or "GetImage_2"
+		print(f"grab ON ({kind}) COM-thread; use without --grab if PV shows -gi errors")
+		to = getattr(self.com, "timeout_api", None)
+		if to:
+			print(f"COM timeout: {to}")
+
+	def _grab_loop(self) -> None:
+		try:
+			self._init_grab_com()
+		except Exception as e:
+			print(f"grab Connect failed: {e}")
+			self.script_com = None
+		finally:
+			self._com_ready.set()
+		if self.script_com is None:
+			return
+		try:
+			while not self._stop.is_set():
+				self._drain_com_jobs()
+				if self._pause_grab.is_set():
+					time.sleep(0.01)
+					continue
+				self._grab_one()
+		finally:
+			try:
+				self.com.disconnect()
+			except Exception:
+				pass
+			self.script_com = None
+
+	def _drain_com_jobs(self) -> None:
+		while True:
+			try:
+				fn, box, err, done = self._com_jobs.get_nowait()
+			except queue.Empty:
+				return
+			try:
+				box.append(fn())
+			except BaseException as e:
+				err.append(e)
+			done.set()
+
+	def _grab_one(self) -> None:
+		frame = self.com.get_frame(self.channel)
+		if frame is not None:
+			with self._lock:
+				self._latest = frame
+			if not self._logged_first_grab:
+				# Why: analysis "dark screen" was often grab max=0, not the plot.
+				self._logged_first_grab = True
+				print(
+					f"first grab {int(frame.shape[1])}x{int(frame.shape[0])} "
+					f"min={int(frame.min())} max={int(frame.max())} "
+					f"mean={float(frame.mean()):.1f}"
+				)
+			failed = getattr(self.com, "_grab_failed", ())
+			if (not self._logged_gi2) and "ReadImage" in failed:
+				self._logged_gi2 = True
+				print("ReadImage frozen during Live; grabbing via GetImage_2")
+		else:
+			time.sleep(0.01)
+		now = time.monotonic()
+		if now - self._hb_t >= 2.0:
+			self._hb_t = now
+			err = getattr(self.com, "last_error", "") or ""
+			print(
+				grab_heartbeat_line(frame, err, self.channel, sent=self.sent_note()),
+				flush=True,
+			)
 
 	def latest_frame(self):
 		with self._lock:
@@ -122,26 +264,15 @@ class Relay:
 		return self.script_com
 
 	def _run_script_com(self, fn, *, timeout: float = _COM_SCRIPT_TIMEOUT_S):
-		"""Run a script COM call with a wall-clock timeout."""
+		"""Run a script COM call on the grab thread (same STA as GetImage)."""
+		if not self._grab_enabled:
+			# No grab thread — tests and --no-grab scripts call COM inline.
+			return fn()
+		done = threading.Event()
 		box: list = []
 		err: list[BaseException] = []
-
-		def _worker() -> None:
-			try:
-				import pythoncom
-
-				pythoncom.CoInitialize()
-			except Exception:
-				pass
-			try:
-				box.append(fn())
-			except BaseException as e:
-				err.append(e)
-
-		t = threading.Thread(target=_worker, daemon=True)
-		t.start()
-		t.join(timeout)
-		if t.is_alive():
+		self._com_jobs.put((fn, box, err, done))
+		if not done.wait(timeout):
 			raise TimeoutError(f"COM script timed out after {timeout:.0f}s")
 		if err:
 			raise err[0]
@@ -243,16 +374,47 @@ class Relay:
 				pl.close()
 
 
+def _peer(conn: socket.socket) -> str:
+	try:
+		host, port = conn.getpeername()[:2]
+		return f"{host}:{port}"
+	except OSError:
+		return "?"
+
+
+def _push_one_frame(conn, relay, peer: str, n_sent: int, n_tiny: int) -> tuple[int, int]:
+	frame = relay.latest_frame()
+	if frame is None:
+		return n_sent, n_tiny
+	h, w = frame.shape[:2]
+	# Never put 1×1 on the wire — analysis skip= grows forever on those packets.
+	if min(h, w) < 32:
+		if n_tiny == 0:
+			print(f"frame NOT sent {peer} tiny {int(w)}x{int(h)}", flush=True)
+		return n_sent, n_tiny + 1
+	conn.sendall(pack_frame(frame, extra=relay.channel))
+	peak = int(frame.max())
+	relay.note_send(w, h, peak)
+	if n_sent == 0:
+		print(f"frame send {peer} {int(w)}x{int(h)} max={peak}", flush=True)
+	return n_sent + 1, n_tiny
+
+
 def _serve_frames(conn: socket.socket, relay: Relay, fps: float) -> None:
 	period = 1.0 / max(fps, 1.0)
 	try:
-		while not relay._stop.is_set():
-			frame = relay.latest_frame()
-			if frame is not None:
-				conn.sendall(pack_frame(frame, extra=relay.channel))
-			time.sleep(period)
-	except (ConnectionError, OSError):
+		conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+	except OSError:
 		pass
+	peer = _peer(conn)
+	print(f"frame client {peer}", flush=True)
+	n_sent = n_tiny = 0
+	try:
+		while not relay._stop.is_set():
+			n_sent, n_tiny = _push_one_frame(conn, relay, peer, n_sent, n_tiny)
+			time.sleep(period)
+	except (ConnectionError, OSError) as e:
+		print(f"frame client {peer} closed: {e}", flush=True)
 	finally:
 		conn.close()
 
@@ -386,9 +548,20 @@ def listen(relay: Relay, bind: str, port: int, fps: float) -> None:
 
 
 def _bind(bind: str, port: int) -> socket.socket:
+	# Why: Windows SO_REUSEADDR lets two relays listen on 25100. View then
+	# stays on the old 1×1 sender while the new console shows 512×512.
 	srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-	srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-	srv.bind((bind, port))
+	if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+		srv.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+	else:
+		srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+	try:
+		srv.bind((bind, port))
+	except OSError as e:
+		raise SystemExit(
+			f"port {port} already in use. Task Manager: kill every python.exe "
+			f"on the scope PC, then start ONE `relay --grab`. ({e})"
+		) from e
 	srv.listen(4)
 	return srv
 

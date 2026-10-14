@@ -10,6 +10,7 @@ import numpy as np
 
 from prairie_live.protocol import recv_message
 from prairie_live.relay import DEFAULT_PORT
+from prairie_live.scan_assemble import ScanAssembler
 
 
 class RelayClient:
@@ -23,9 +24,15 @@ class RelayClient:
 		self._latest: np.ndarray | None = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
+		self.last_error = ""
+		self.last_rx = "?"
+		self.last_px = -1
+		self.frames_ok = 0
+		self.frames_skip = 0
+		self._scan = ScanAssembler()
 
 	def connect(self) -> None:
-		self._frame_sock = socket.create_connection((self.host, self.port), timeout=5)
+		self._frame_sock = self._open_frame_sock()
 		self._ctrl_sock = socket.create_connection((self.host, self.port + 1), timeout=5)
 		# create_connection leaves a short timeout on the sock; Mark Points
 		# -lmp via COM can take longer than 5s under load.
@@ -48,7 +55,13 @@ class RelayClient:
 
 	def get_frame(self, channel: int = 1) -> np.ndarray | None:
 		with self._lock:
-			return None if self._latest is None else self._latest.copy()
+			if self._latest is not None:
+				return self._latest.copy()
+		self.last_error = (
+			f"last={self.last_rx} max={self.last_px} skip={self.frames_skip} "
+			f"got={self.frames_ok}"
+		)
+		return None
 
 	def start_tseries(self) -> dict:
 		return self._command({"cmd": "tseries"})
@@ -106,19 +119,76 @@ class RelayClient:
 			raise ConnectionError("control socket closed")
 		return json.loads(line.decode("utf-8"))
 
+	def _open_frame_sock(self):
+		sock = socket.create_connection((self.host, self.port), timeout=5)
+		try:
+			sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+		except OSError:
+			pass
+		sock.settimeout(5.0)
+		return sock
+
 	def _recv_loop(self) -> None:
-		sock = self._frame_sock
-		if sock is None:
-			return
-		sock.settimeout(1.0)
+		# Why: on some Python builds socket.timeout is OSError, so the old
+		# handler treated an idle 1s wait as "socket closed" and never stored
+		# a frame (HUD: no frame from relay) while the scope heartbeat was live.
+		idle = (TimeoutError, getattr(socket, "timeout", TimeoutError))
 		while not self._stop.is_set():
+			sock = self._frame_sock
+			if sock is None:
+				try:
+					sock = self._open_frame_sock()
+					self._frame_sock = sock
+				except OSError as e:
+					print(f"view frame reconnect failed: {e}", flush=True)
+					self._stop.wait(1.0)
+					continue
 			try:
 				kind, payload = recv_message(sock)
-			except TimeoutError:
+			except idle:
 				continue
-			except (ConnectionError, OSError, ValueError):
-				break
+			except (ConnectionError, OSError, ValueError) as e:
+				print(f"view frame socket closed: {e}; reconnecting", flush=True)
+				try:
+					sock.close()
+				except OSError:
+					pass
+				self._frame_sock = None
+				continue
 			if kind != "frame":
 				continue
-			with self._lock:
-				self._latest = payload["image"]
+			self._take_frame(payload["image"])
+
+	def _take_frame(self, img) -> None:
+		h, w = int(img.shape[0]), int(img.shape[1])
+		self.last_rx = f"{w}x{h}"
+		self.last_px = int(img.flat[0]) if img.size else -1
+		out = self._scan.push(img)
+		if out is None:
+			self.frames_skip += 1
+			if self.frames_skip % 20 == 1:
+				print(
+					f"view skip {self.last_rx} max={self.last_px} n={self.frames_skip} "
+					f"— kill extra python on scope, one relay --grab",
+					flush=True,
+				)
+				self._drop_frame_sock()
+			return
+		self.frames_ok += 1
+		if self.frames_ok == 1:
+			print(
+				f"view got {self.last_rx} -> {int(out.shape[1])}x{int(out.shape[0])} "
+				f"max={int(out.max())}",
+				flush=True,
+			)
+		with self._lock:
+			self._latest = out
+
+	def _drop_frame_sock(self) -> None:
+		sock = self._frame_sock
+		self._frame_sock = None
+		if sock is not None:
+			try:
+				sock.close()
+			except OSError:
+				pass

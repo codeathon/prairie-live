@@ -5,9 +5,14 @@ import numpy as np
 from prairie_live.com_backend import (
 	PrairieCom,
 	_as_frame_auto,
+	_unwrap_com_image,
 	apply_script_timeout,
 	detect_grab_api,
+	fov_wh_from_pl,
 	grab_raw,
+	parse_state_int,
+	pick_grab_channel,
+	raw_summary,
 )
 
 
@@ -128,12 +133,12 @@ def test_grab_58_getimage2():
 
 def test_prairiecom_get_frame_readimage():
 	com = PrairieCom("127.0.0.1", "0000")
-	frame = np.arange(4, dtype=np.uint16).reshape(2, 2)
-	com._pl = _ReadImagePL(frame.reshape(-1))
-	com._last_wh = (2, 2)
+	frame = np.arange(32 * 32, dtype=np.uint16)
+	com._pl = _ReadImagePL(frame)
+	com._last_wh = (32, 32)
 	got = com.get_frame(1)
 	assert got is not None
-	assert got.shape == (2, 2)
+	assert got.shape == (32, 32)
 
 
 def test_readimage_none_cells_fall_back_to_getimage2():
@@ -161,9 +166,162 @@ def test_as_frame_auto_none_cells_does_not_raise():
 
 def test_get_frame_survives_none_variant():
 	com = PrairieCom("127.0.0.1", "0000")
-	com._pl = _ReadImagePL(np.array([None] * 4, dtype=object))
-	com._last_wh = (2, 2)
+	com._pl = _ReadImagePL(np.array([None] * 32 * 32, dtype=object))
+	com._last_wh = (32, 32)
 	got = com.get_frame(1)
-	# Falls back to GetImage_2 ones(2*2).
+	# Falls back to GetImage_2 ones(32*32).
 	assert got is not None
-	assert got.shape == (2, 2)
+	assert got.shape == (32, 32)
+
+
+def test_readimage_scalar_does_not_lock_fov_to_1x1():
+	# Why: 6.1 Alpha ReadImage returned one number; title showed 1x1 dark FOV.
+	pl = _ReadImagePL(np.array(16, dtype=np.uint16))
+	failed: set[str] = set()
+	out = grab_raw(pl, 1, (512, 512), failed)
+	assert out.size == 512 * 512
+	assert "ReadImage" in failed
+	assert pl.gi2 == [(1, 512, 512)]
+
+
+def test_as_frame_auto_rejects_scalar_against_512():
+	assert _as_frame_auto(np.array([16], dtype=np.uint16), (512, 512)) is None
+	assert _as_frame_auto(np.arange(4, dtype=np.uint16), (2, 2)).shape == (2, 2)
+	assert _as_frame_auto(np.array([16], dtype=np.uint16), (1, 1)) is None
+
+
+def test_get_frame_assembles_galvo_line():
+	class _LinePL:
+		def GetImage_2(self, channel, w, h):
+			return np.arange(w, dtype=np.uint16)
+
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _LinePL()
+	com._last_wh = (32, 32)
+	got = com.get_frame(1)
+	assert got is not None
+	assert got.shape == (32, 32)
+
+
+def test_as_frame_auto_galvo_line():
+	line = np.arange(512, dtype=np.uint16)
+	got = _as_frame_auto(line, (512, 512))
+	assert got is not None
+	assert got.shape == (1, 512)
+	got2 = _as_frame_auto(line.reshape(1, 512), (512, 512))
+	assert got2 is not None
+	assert got2.shape == (1, 512)
+
+
+def test_poisoned_1x1_last_wh_falls_back_to_512():
+	# Why: analysis "wait for GetImage_2" was a 1×1 packet after last_wh=(1,1).
+	pl = _ReadImagePL(np.array(16, dtype=np.uint16))
+	failed: set[str] = set()
+	out = grab_raw(pl, 1, (1, 1), failed)
+	assert out.size == 512 * 512
+	assert "ReadImage" in failed
+	assert pl.gi2 == [(1, 512, 512)]
+
+
+def test_unwrap_pixels_width_height_tuple():
+	pixels = np.arange(32 * 32, dtype=np.uint16)
+	assert np.array_equal(_unwrap_com_image((pixels, 32, 32)), pixels)
+	frame = _as_frame_auto((pixels, 32, 32), (32, 32))
+	assert frame is not None
+	assert frame.shape == (32, 32)
+
+
+def test_get_frame_last_error_is_raw_summary():
+	# Why: scope heartbeat was "NO FRAME no COM frame" with no payload hint.
+	class _NoneGI2:
+		def GetImage_2(self, channel, w, h):
+			return None
+
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _NoneGI2()
+	com._last_wh = (32, 32)
+	assert com.get_frame(1) is None
+	assert "raw=None" in com.last_error
+	assert raw_summary(None) == "raw=None"
+
+
+def test_get_frame_drops_tiny_resets_wh():
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _ReadImagePL(np.array([16], dtype=np.uint16))
+	com._last_wh = (1, 1)
+	got = com.get_frame(1)
+	assert got is not None
+	assert got.shape == (512, 512)
+	assert com._last_wh == (512, 512)
+
+
+def test_readimage_constant_falls_back_to_getimage2():
+	# Why: 6.1 ReadImage can return a 512² of zeros; that looked like a live FOV.
+	pl = _ReadImagePL(np.zeros(512 * 512, dtype=np.uint16))
+	failed: set[str] = set()
+	out = grab_raw(pl, 1, (512, 512), failed)
+	assert out.size == 512 * 512
+	assert np.all(np.asarray(out) == 1)
+	# empty, not bad — keep retrying ReadImage on later frames.
+	assert "ReadImage" not in failed
+	assert pl.gi2 == [(1, 512, 512)]
+
+
+def test_parse_state_int_and_fov_wh():
+	assert parse_state_int("256") == 256
+	assert parse_state_int("16") is None
+	assert parse_state_int("nope") is None
+
+	class _StatePL:
+		def GetState(self, key):
+			return {"pixelsPerLine": "256", "linesPerFrame": "128"}[key]
+
+	assert fov_wh_from_pl(_StatePL(), (512, 512)) == (128, 256)
+
+
+def test_pick_grab_channel_keeps_preferred_if_live():
+	assert pick_grab_channel({1: 40.0, 2: 80.0}, 1) == 1
+	assert pick_grab_channel({1: 0.0, 2: 80.0, 3: 10.0}, 1) == 2
+	assert pick_grab_channel({1: 0.0, 2: 0.0}, 1) == 1
+
+
+class _ProbePL:
+	def GetState(self, key):
+		return {"pixelsPerLine": "64", "linesPerFrame": "32"}[key]
+
+	def GetImage_2(self, ch, w, h):
+		n = int(w) * int(h)
+		if ch == 3:
+			return np.arange(n, dtype=np.uint16)
+		return np.zeros(n, dtype=np.uint16)
+
+
+def test_probe_live_grab_picks_channel_with_contrast():
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _ProbePL()
+	com._last_wh = (512, 512)
+	out = com.probe_live_grab(preferred=1)
+	assert out["wh"] == (32, 64)
+	assert out["channel"] == 3
+	assert out["scores"][1] == 0.0
+	assert out["scores"][3] > 0
+
+
+def test_stale_readimage_switches_to_getimage2(monkeypatch):
+	# Why: GUI Live can refresh PV while ReadImage stays on the last T-series.
+	times = [100.0]
+	monkeypatch.setattr("prairie_live.com_backend.time.monotonic", lambda: times[0])
+	raw = np.arange(32 * 32, dtype=np.uint16)
+	pl = _ReadImagePL(raw)
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = pl
+	com._last_wh = (32, 32)
+	assert com.get_frame(1) is not None
+	assert pl.gi2 == []
+	times[0] = 103.0
+	com.get_frame(1)
+	assert "ReadImage" in com._grab_failed
+	third = com.get_frame(1)
+	assert pl.gi2 == [(1, 32, 32)]
+	assert third is not None
+	assert third.shape == (32, 32)

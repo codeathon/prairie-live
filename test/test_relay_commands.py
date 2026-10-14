@@ -1,5 +1,9 @@
+import threading
+
+import numpy as np
+
 from prairie_live.com_backend import PrairieCom
-from prairie_live.relay import Relay
+from prairie_live.relay import Relay, grab_heartbeat_line
 
 
 class FakeCom:
@@ -114,6 +118,103 @@ def test_mark_all_points_dispatch():
 	assert out["ok"] is True
 	assert out["cmd"] == "mark_all_points"
 	assert r.com.calls[0] == ("mark_all_points", parts, 22.1)
+
+
+def test_relay_client_take_frame_skips_tiny():
+	from prairie_live.relay_client import RelayClient
+
+	c = RelayClient("127.0.0.1")
+	c._take_frame(np.zeros((1, 1), dtype=np.uint16))
+	assert c.get_frame() is None
+	assert "skip=1" in c.last_error
+	assert "1x1" in c.last_error
+	assert "max=0" in c.last_error
+	c._take_frame(np.ones((32, 40), dtype=np.uint16) * 9)
+	got = c.get_frame()
+	assert got is not None
+	assert got.shape == (32, 40)
+	assert int(got.max()) == 9
+
+
+def test_relay_client_assembles_line_scan():
+	from prairie_live.relay_client import RelayClient
+
+	c = RelayClient("127.0.0.1")
+	c._take_frame(np.arange(32, dtype=np.uint16).reshape(1, 32))
+	got = c.get_frame()
+	assert got is not None
+	assert got.shape == (32, 32)
+	assert c.frames_ok == 1
+	assert c.frames_skip == 0
+
+
+def test_grab_heartbeat_line_none_and_frame():
+	assert "NO FRAME" in grab_heartbeat_line(None, "boom")
+	assert "boom" in grab_heartbeat_line(None, "boom")
+	frame = np.arange(4, dtype=np.uint16).reshape(2, 2)
+	line = grab_heartbeat_line(frame, "", channel=2)
+	assert "2x2" in line
+	assert "max=3" in line
+	assert "ch=2" in line
+	with_send = grab_heartbeat_line(frame, "", sent="send 512x512 n=1 max=9")
+	assert "send 512x512" in with_send
+	assert "max=9" in with_send
+
+
+def test_sent_note_idle_and_after_send():
+	r = _relay()
+	assert "send=none" in r.sent_note()
+	r.note_send(512, 512, 40)
+	assert "send 512x512" in r.sent_note()
+	assert "max=40" in r.sent_note()
+
+
+def test_bind_second_listen_fails():
+	from prairie_live.relay import _bind
+
+	a = _bind("127.0.0.1", 0)
+	port = a.getsockname()[1]
+	try:
+		try:
+			_bind("127.0.0.1", port)
+		except SystemExit as e:
+			assert "already in use" in str(e)
+		else:
+			raise AssertionError("expected SystemExit on second bind")
+	finally:
+		a.close()
+
+
+def test_probe_and_pick_channel_switches():
+	r = _relay()
+	r.channel = 1
+	r.com.probe_live_grab = lambda preferred: {
+		"wh": (32, 64),
+		"channel": 3,
+		"scores": {1: 0.0, 2: 0.0, 3: 12.0, 4: 0.0},
+		"rows": ["ch3 64x32 max=12 ptp=12"],
+	}
+	r._probe_and_pick_channel()
+	assert r.channel == 3
+
+
+def test_drain_com_jobs_runs_fn():
+	r = _relay()
+	box: list = []
+	err: list = []
+	done = threading.Event()
+	r._com_jobs.put((lambda: 7, box, err, done))
+	r._drain_com_jobs()
+	assert box == [7]
+	assert done.is_set()
+	assert err == []
+
+
+def test_arm_live_grab_sends_livescan():
+	# Why: PV Live button does not always fill the PrairieLink grab buffer.
+	r = _relay()
+	r._arm_live_grab()
+	assert r.com.calls == ["live"]
 
 
 def test_unknown_command_is_rejected():

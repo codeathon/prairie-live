@@ -69,6 +69,44 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 
 Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 
+## Analysis PC — live FOV
+
+**Live Scan alone should already stream the FOV.** Mark Points are not required
+for the left image (or the `fov` / `p99` traces). Hitting Live in PrairieView
+refreshes the PV window; the analysis PC only moves if `relay --grab` is running
+and PrairieLink is following that Live buffer. Relay sends `-LiveScan` when grab
+starts; if the figure stays `STALE`, click the analysis window and press
+`l` (same command over COM). On grab start the relay prints a `grab probe`
+table (`ch1…ch4 max=`). If every channel is `max=0` after Live, PrairieLink
+is not the PV image window — take one **Snapshot** in PV, leave Live on, and
+watch `max=` on the heartbeat. Status is in three places: the **window caption**,
+a **yellow overlay** on the FOV, and stdout (`HUD v4`). `LIVE` + `max=` > 0
+means frames are new. `no frame from relay` means `--grab` is off or the TCP
+link is not delivering packets. Relay prints `grab heartbeat:` every 2s.
+
+Rolling mean of the last `--avg-s` seconds (same `mean_stack` as
+`trial_images/f0.png`). Keys: `t` T-series, `a` abort, `l` live scan, `q` quit.
+
+The **same window** always has a right panel: whole-FOV mean (`fov`) and 99.5th
+percentile (`p99`). Photostim of points you just created in PrairieView shows
+up there (and as a red flash on the FOV) even without an XML of those points.
+PrairieView has no GetMarkPoints — colored disk traces and cyan rings come
+only from `--series` / `--config` (same `disk_mean` as mp-sync ΔF/F). Export
+the fat MarkPoints XML of the points you actually fire and pass that file, or
+the per-id lines will sit on the sample 8-point list. `--config experiment.json`
+reads `series` and `disk_radius`. Later panels go on this grid, not extra windows.
+
+Title `max=` is the latest raw PMT peak. `max=0` on a 512² frame means grab is
+empty (wrong `--channel`, or Live not actually filling the PrairieLink buffer).
+`grab 1x1 (not an FOV)` means pull this branch and restart **relay first**, then view.
+
+```powershell
+python -m prairie_live view --relay 10.33.107.147:25100
+python -m prairie_live view --relay 10.33.107.147:25100 --avg-s 0.5
+python -m prairie_live view --relay 10.33.107.147:25100 --config experiment.json --avg-s 0.5 --window-s 8
+python -m prairie_live view --mock --series samples/MarkPoints_8fov.xml
+```
+
 ## Analysis PC — run mp-sync
 
 Edit `experiment.json` (series path, relay IP, COM port, powers, etc.), then:

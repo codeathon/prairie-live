@@ -55,6 +55,35 @@ def mean_stack(frames: list[np.ndarray]) -> np.ndarray:
 	return np.mean(np.stack(frames, axis=0), axis=0).astype(np.float64)
 
 
+class FrameBuffer:
+	"""Newest-on-the-right ring of 2-D frames; mean() is f0/f1 mean_stack."""
+
+	def __init__(self, n: int):
+		if n < 1:
+			raise ValueError("n must be >= 1")
+		self.n = n
+		self._frames: list[np.ndarray] = []
+
+	def push(self, frame: np.ndarray) -> None:
+		img = np.asarray(frame)
+		if img.ndim != 2:
+			raise ValueError("frame must be 2-D")
+		# Zoom / size change would make mean_stack fail — start a new stack.
+		if self._frames and img.shape != self._frames[-1].shape:
+			self._frames.clear()
+		self._frames.append(img)
+		if len(self._frames) > self.n:
+			self._frames.pop(0)
+
+	def __len__(self) -> int:
+		return len(self._frames)
+
+	def mean(self) -> np.ndarray | None:
+		if not self._frames:
+			return None
+		return mean_stack(self._frames)
+
+
 def to_u8(img: np.ndarray, *, p_lo: float = 1.0, p_hi: float = 99.0) -> np.ndarray:
 	"""Percentile-stretch float/int frame → uint8 for display."""
 	lo, hi = np.percentile(img, (p_lo, p_hi))
@@ -62,6 +91,26 @@ def to_u8(img: np.ndarray, *, p_lo: float = 1.0, p_hi: float = 99.0) -> np.ndarr
 		hi = lo + 1.0
 	scaled = (img.astype(np.float64) - lo) / (hi - lo)
 	return np.clip(scaled * 255.0, 0, 255).astype(np.uint8)
+
+
+def disk_mean(frame: np.ndarray, x_norm: float, y_norm: float, radius: int) -> float | None:
+	"""
+	Mean intensity in a disk; x/y are FOV-normalized (0–1 = visible frame).
+
+	Prairie allows Mark Points X/Y outside 0–1 (uncaging galvo range). Those
+	fall off the imaging frame — return None so callers skip them.
+	"""
+	h, w = frame.shape[:2]
+	cx = int(round(float(x_norm) * (w - 1)))
+	cy = int(round(float(y_norm) * (h - 1)))
+	# Entire disk must miss the frame → not scoreable on this image.
+	if cx + radius < 0 or cy + radius < 0 or cx - radius >= w or cy - radius >= h:
+		return None
+	yy, xx = np.ogrid[:h, :w]
+	mask = (xx - cx) ** 2 + (yy - cy) ** 2 <= radius ** 2
+	if not np.any(mask):
+		return None
+	return float(frame[mask].mean())
 
 
 def draw_point_rings(

@@ -14,6 +14,8 @@ import time
 
 import numpy as np
 
+from prairie_live.scan_assemble import ScanAssembler
+
 
 def _dispatch():
 	import win32com.client
@@ -31,6 +33,9 @@ def _dispatch():
 
 # 6.1 SetTimeoutAndRetries defaults to 2s; packed -slm needs a long wait.
 _SCRIPT_TIMEOUT_MS = 120_000
+# GUI Live can refresh PV while ReadImage sits on the last T-series; after
+# this many seconds of identical pixels, skip ReadImage and use GetImage_2.
+_STALE_S = 2.0
 
 
 def apply_script_timeout(pl) -> str | None:
@@ -60,14 +65,43 @@ def detect_grab_api(pl) -> str:
 
 def _unwrap_com_image(raw):
 	# 6.1 ReadImage sometimes returns (pixels, unused) with unused=None.
-	if isinstance(raw, tuple) and raw and raw[0] is not None:
+	# GetImage_2 on some 6.1 builds is (pixels, width, height) with int extras.
+	if isinstance(raw, (tuple, list)) and raw and raw[0] is not None:
 		if len(raw) > 1 and all(x is None for x in raw[1:]):
 			return raw[0]
+		rest_nums = len(raw) > 1 and all(
+			x is None or isinstance(x, (int, float)) for x in raw[1:]
+		)
+		if rest_nums:
+			try:
+				if int(np.array(raw[0]).size) >= 32:
+					return raw[0]
+			except Exception:
+				pass
 	return raw
 
 
-def _payload_kind(raw) -> str:
-	"""ok=numeric pixels, empty=no frame yet, bad=None cells / non-numeric VARIANT."""
+def raw_summary(raw) -> str:
+	"""Heartbeat text when _as_frame_auto returns None (was a blank 'no COM frame')."""
+	raw = _unwrap_com_image(raw)
+	if raw is None:
+		return "raw=None"
+	try:
+		nlen = len(raw)
+	except TypeError:
+		nlen = None
+	try:
+		arr = np.array(raw)
+		return (
+			f"raw type={type(raw).__name__} len={nlen} "
+			f"np={arr.shape}/{arr.dtype}/{int(arr.size)}"
+		)
+	except Exception as e:
+		return f"raw type={type(raw).__name__} len={nlen} np_err={e}"
+
+
+def _payload_kind(raw, last_wh=None) -> str:
+	"""ok=numeric pixels, empty=no frame yet, bad=None cells / scalar / non-FOV."""
 	raw = _unwrap_com_image(raw)
 	if raw is None:
 		return "empty"
@@ -75,7 +109,8 @@ def _payload_kind(raw) -> str:
 		arr = np.array(raw)
 	except Exception:
 		return "bad"
-	if arr.size == 0:
+	n = int(arr.size)
+	if n == 0:
 		return "empty"
 	if arr.dtype == object:
 		# Why: PV 6.1 ReadImage can yield VARIANT None cells; astype(uint16) then crashes.
@@ -86,10 +121,45 @@ def _payload_kind(raw) -> str:
 			np.asarray(list(flat), dtype=np.uint16)
 		except (TypeError, ValueError):
 			return "bad"
-		return "ok"
+		return "ok" if _plausible_n(n, last_wh) else "bad"
 	if not np.issubdtype(arr.dtype, np.number):
 		return "bad"
+	# 6.1 Alpha ReadImage often returns one number; that became a 1×1 FOV.
+	if not _plausible_n(n, last_wh):
+		return "bad"
+	# Constant 512² (all 0s / all 16s) is a dead buffer, not a live FOV —
+	# keep trying GetImage_2 instead of locking the viewer on a black frame.
+	if _is_constant_payload(arr):
+		return "empty"
 	return "ok"
+
+
+def _is_constant_payload(arr) -> bool:
+	"""True for a full-size buffer with no contrast (dead ReadImage)."""
+	# Tiny fixtures in tests are allowed to be constant; only FOV-sized
+	# constants are treated as "no frame yet".
+	if int(arr.size) < 32 * 32:
+		return False
+	return float(np.ptp(arr)) == 0.0
+
+
+def _plausible_n(n: int, last_wh) -> bool:
+	"""True if n can be a 2-D frame at last_wh (or a ≥32² square)."""
+	if last_wh is not None:
+		h, w = int(last_wh[0]), int(last_wh[1])
+		# Poisoned 1×1 last_wh made a scalar ReadImage look like a full FOV.
+		if min(h, w) <= 1:
+			last_wh = None
+		else:
+			expect = h * w
+			if n == expect:
+				return True
+			# Do not treat a scalar as a new FOV size (locks GetImage_2 to 1×1).
+			if expect >= 32 * 32 and n < 32 * 32:
+				return False
+			return n == expect
+	side = int(round(n ** 0.5))
+	return side * side == n and side >= 32
 
 
 def _call_read_image(fn, channel: int, last_wh):
@@ -101,18 +171,18 @@ def _call_read_image(fn, channel: int, last_wh):
 		return fn(channel, int(w), int(h))
 
 
-def _from_readimages(bundle, channel: int):
+def _from_readimages(bundle, channel: int, last_wh=None):
 	"""Pick one PMT channel from ReadImages (list, dict, or n×h×w)."""
 	if bundle is None:
 		return None
 	if isinstance(bundle, dict):
 		for key in (channel, str(channel), channel - 1):
-			if key in bundle and _payload_kind(bundle[key]) == "ok":
+			if key in bundle and _payload_kind(bundle[key], last_wh) == "ok":
 				return bundle[key]
 		return None
 	if isinstance(bundle, (list, tuple)):
 		for i in (channel - 1, channel):
-			if 0 <= i < len(bundle) and _payload_kind(bundle[i]) == "ok":
+			if 0 <= i < len(bundle) and _payload_kind(bundle[i], last_wh) == "ok":
 				return bundle[i]
 		return None
 	arr = np.asarray(bundle)
@@ -120,21 +190,21 @@ def _from_readimages(bundle, channel: int):
 		for i in (channel - 1, channel):
 			if 0 <= i < arr.shape[0] and arr[i].size > 0:
 				return arr[i]
-	return bundle if _payload_kind(arr) == "ok" else None
+	return bundle if _payload_kind(arr, last_wh) == "ok" else None
 
 
-def _try_new_grab(name: str, fn, failed: set[str]) -> object | None:
+def _try_new_grab(name: str, fn, failed: set[str], last_wh) -> object | None:
 	"""Run a 6.1 grab once. bad/error → cache-fail; empty → None (keep trying)."""
 	try:
 		raw = fn()
 	except Exception:
 		failed.add(name)
 		return None
-	kind = _payload_kind(raw)
+	kind = _payload_kind(raw, last_wh)
 	if kind == "ok":
 		return raw
 	if kind == "bad":
-		# Unusable VARIANT — fall through to GetImage_2 next.
+		# Unusable VARIANT / scalar — fall through to GetImage_2 next.
 		failed.add(name)
 	return None
 
@@ -145,7 +215,10 @@ def grab_raw(pl, channel: int, last_wh, failed: set[str]):
 		fn = getattr(pl, "ReadImage", None)
 		if callable(fn):
 			raw = _try_new_grab(
-				"ReadImage", lambda: _call_read_image(fn, channel, last_wh), failed
+				"ReadImage",
+				lambda: _call_read_image(fn, channel, last_wh),
+				failed,
+				last_wh,
 			)
 			if raw is not None:
 				return raw
@@ -155,14 +228,89 @@ def grab_raw(pl, channel: int, last_wh, failed: set[str]):
 		fn = getattr(pl, "ReadImages", None)
 		if callable(fn):
 			raw = _try_new_grab(
-				"ReadImages", lambda: _from_readimages(fn(), channel), failed
+				"ReadImages",
+				lambda: _from_readimages(fn(), channel, last_wh),
+				failed,
+				last_wh,
 			)
 			if raw is not None:
 				return raw
 		else:
 			failed.add("ReadImages")
 	h, w = last_wh if last_wh else (512, 512)
-	return pl.GetImage_2(channel, int(w), int(h))
+	# Never ask GetImage_2 for 1×1 after a poisoned ReadImage scalar.
+	if int(h) * int(w) <= 1:
+		h, w = 512, 512
+	return _call_getimage2(pl, channel, int(w), int(h))
+
+
+def _call_getimage2(pl, channel: int, w: int, h: int):
+	"""Try (ch,w,h), then swapped, then (ch,). 6.1 Alpha arities differ."""
+	fn = getattr(pl, "GetImage_2", None)
+	if not callable(fn):
+		fn = getattr(pl, "GetImage", None)
+	if not callable(fn):
+		return None
+	for args in ((channel, w, h), (channel, h, w), (channel,)):
+		try:
+			return fn(*args)
+		except TypeError:
+			continue
+	return None
+
+
+def parse_state_int(raw) -> int | None:
+	"""Parse GetState pixelsPerLine / linesPerFrame; ignore junk / tiny values."""
+	if raw is None:
+		return None
+	try:
+		n = int(float(str(raw).strip().split()[0]))
+	except (TypeError, ValueError):
+		return None
+	return n if n >= 32 else None
+
+
+def _getstate_int(pl, key: str) -> int | None:
+	fn = getattr(pl, "GetState", None)
+	if not callable(fn):
+		return None
+	try:
+		return parse_state_int(fn(key))
+	except Exception:
+		return None
+
+
+def fov_wh_from_pl(pl, last_wh) -> tuple[int, int]:
+	"""(height, width) from GetState; PixelsPerLine() only if GetState missing.
+
+	Why: GetImage_2(512,512) on a 256 or 1024 Live FOV returns a dead buffer.
+	PixelsPerLine() aborted PV 5.8, so GetState is first.
+	"""
+	w = _getstate_int(pl, "pixelsPerLine")
+	h = _getstate_int(pl, "linesPerFrame")
+	if w and h:
+		return (int(h), int(w))
+	try:
+		w = int(pl.PixelsPerLine())
+		h = int(pl.LinesPerFrame())
+		if w >= 32 and h >= 32:
+			return (int(h), int(w))
+	except Exception:
+		pass
+	return last_wh if last_wh else (512, 512)
+
+
+def pick_grab_channel(scores: dict[int, float], preferred: int) -> int:
+	"""Keep --channel when it has contrast; otherwise the PMT with the largest ptp."""
+	if float(scores.get(preferred, -1.0)) > 0:
+		return int(preferred)
+	best_ch = int(preferred)
+	best = -1.0
+	for ch, s in scores.items():
+		if float(s) > best:
+			best = float(s)
+			best_ch = int(ch)
+	return best_ch if best > 0 else int(preferred)
 
 
 class PrairieCom:
@@ -180,6 +328,9 @@ class PrairieCom:
 		self.grab_api = "GetImage_2"
 		# APIs that raised once this session — skip them on later frames.
 		self._grab_failed: set[str] = set()
+		self._grab_sig = None
+		self._grab_sig_t = 0.0
+		self._scan = ScanAssembler()
 
 	def connect(self) -> None:
 		try:
@@ -202,8 +353,37 @@ class PrairieCom:
 		# PV 5.8 aborts the TCP session on this command; only try it for T-series.
 		# 6.1 defaults to a 2s script timeout; raise it so packed -slm can finish.
 		self._grab_failed.clear()
+		self._grab_sig = None
+		self._grab_sig_t = 0.0
 		self.timeout_api = apply_script_timeout(self._pl)
 		self.grab_api = detect_grab_api(self._pl)
+
+	def probe_live_grab(self, preferred: int = 1) -> dict:
+		"""After -LiveScan: real FOV size + which PMT actually has counts."""
+		pl = self._require()
+		with self._io:
+			wh = fov_wh_from_pl(pl, self._last_wh)
+			self._last_wh = wh
+			scores: dict[int, float] = {}
+			rows: list[str] = []
+			for ch in (1, 2, 3, 4):
+				raw = grab_raw(pl, ch, wh, set())
+				frame = _as_frame_auto(raw, wh)
+				ptp = -1.0 if frame is None else float(np.ptp(frame))
+				mx = 0 if frame is None else int(frame.max())
+				scores[ch] = ptp
+				if frame is None:
+					rows.append(f"ch{ch} ptp=-1 {raw_summary(raw)}")
+				else:
+					rows.append(
+						f"ch{ch} {int(wh[1])}x{int(wh[0])} max={mx} ptp={ptp:.0f}"
+					)
+			return {
+				"wh": wh,
+				"channel": pick_grab_channel(scores, preferred),
+				"scores": scores,
+				"rows": rows,
+			}
 
 	def start_tseries(self) -> dict:
 		# Older PV needed this so -TSeries would not block the COM client.
@@ -343,10 +523,41 @@ class PrairieCom:
 			self.last_error = str(e)
 			self._reconnect_if_dropped(e)
 			return None
-		if frame is not None:
+		if frame is None:
+			# Why: heartbeat said "no COM frame" while PV Live was on — payload
+			# was unusable, not a missing COM object.
+			self.last_error = raw_summary(raw)
+			return None
+		h, w = frame.shape[:2]
+		# 1×1 is junk; 512×1 is a galvo line — fold it into a square FOV.
+		if max(h, w) < 8:
+			self.last_error = f"tiny grab {w}x{h}"
+			self._last_wh = (512, 512)
+			return None
+		frame = self._scan.push(frame)
+		if frame is None:
+			return None
+		if min(frame.shape[:2]) >= 32:
 			self._last_wh = frame.shape
-			self.last_error = ""
+		self.last_error = ""
+		self._note_stale_grab(frame)
 		return frame
+
+	def _note_stale_grab(self, frame: np.ndarray) -> None:
+		# Cheap signature — full-frame hash on every COM grab is too costly.
+		sig = (frame.shape, int(frame.min()), int(frame.max()), int(frame.flat[0]), int(frame.flat[-1]))
+		now = time.monotonic()
+		if sig != self._grab_sig:
+			self._grab_sig = sig
+			self._grab_sig_t = now
+			return
+		if now - self._grab_sig_t < _STALE_S:
+			return
+		if "ReadImage" in self._grab_failed:
+			return
+		# Why: PV Live button ≠ PrairieLink buffer until we drop snapshot APIs.
+		self._grab_failed.add("ReadImage")
+		self._grab_failed.add("ReadImages")
 
 	def _grab_raw(self, pl, channel: int):
 		# GetImage maps to script -gi and can race Connect as
@@ -391,7 +602,14 @@ def _as_frame_auto(raw, last_wh) -> np.ndarray | None:
 	if raw is None:
 		return None
 	try:
+		seq_n = len(raw)
+	except TypeError:
+		seq_n = 0
+	try:
 		arr = np.array(raw)
+		# Some 6.1 SAFEARRAYs look like size-1 to numpy; iterate the COM object.
+		if int(arr.size) <= 1 and seq_n >= 32 * 32:
+			arr = np.asarray(list(raw), dtype=np.uint16)
 		if arr.size == 0:
 			return None
 		if arr.dtype == object:
@@ -401,16 +619,33 @@ def _as_frame_auto(raw, last_wh) -> np.ndarray | None:
 				return None
 			arr = np.asarray(flat, dtype=np.uint16)
 		else:
-			arr = arr.astype(np.uint16, copy=False).reshape(-1)
+			arr = arr.astype(np.uint16, copy=False)
 	except (TypeError, ValueError):
 		return None
+	if arr.ndim >= 2:
+		arr = np.squeeze(arr)
+	if arr.ndim == 2 and max(int(s) for s in arr.shape) >= 32:
+		return np.ascontiguousarray(arr)
+	return _reshape_pixels(arr.reshape(-1), last_wh)
+
+
+def _reshape_pixels(arr, last_wh) -> np.ndarray | None:
 	n = int(arr.size)
 	if last_wh is not None:
-		h, w = last_wh
-		if w * h == n:
+		h, w = int(last_wh[0]), int(last_wh[1])
+		# 1×1 last_wh + n=1 was sent to analysis as "wait for GetImage_2".
+		if min(h, w) > 1 and w * h == n:
 			return arr.reshape(h, w)
+		# Live galvo: k lines of width w (k ≤ h), not a full square yet.
+		if w >= 32 and n % w == 0:
+			rows = n // w
+			if h >= 32 and 1 <= rows <= h:
+				return arr.reshape(rows, w)
+			if rows == 1:
+				return arr.reshape(1, w)
 	side = int(round(n ** 0.5))
-	if side * side == n:
+	# sqrt(1)==1 looked like a valid FOV and froze grab at 1×1.
+	if side * side == n and side >= 32:
 		return arr.reshape(side, side)
 	return None
 
