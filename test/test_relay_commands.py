@@ -128,6 +128,7 @@ def test_relay_client_take_frame_skips_tiny():
 	assert c.get_frame() is None
 	assert "skip=1" in c.last_error
 	assert "1x1" in c.last_error
+	assert "max=0" in c.last_error
 	c._take_frame(np.ones((32, 40), dtype=np.uint16) * 9)
 	got = c.get_frame()
 	assert got is not None
@@ -155,6 +156,33 @@ def test_grab_heartbeat_line_none_and_frame():
 	assert "2x2" in line
 	assert "max=3" in line
 	assert "ch=2" in line
+	with_send = grab_heartbeat_line(frame, "", sent="send 512x512 n=1 max=9")
+	assert "send 512x512" in with_send
+	assert "max=9" in with_send
+
+
+def test_sent_note_idle_and_after_send():
+	r = _relay()
+	assert "send=none" in r.sent_note()
+	r.note_send(512, 512, 40)
+	assert "send 512x512" in r.sent_note()
+	assert "max=40" in r.sent_note()
+
+
+def test_bind_second_listen_fails():
+	from prairie_live.relay import _bind
+
+	a = _bind("127.0.0.1", 0)
+	port = a.getsockname()[1]
+	try:
+		try:
+			_bind("127.0.0.1", port)
+		except SystemExit as e:
+			assert "already in use" in str(e)
+		else:
+			raise AssertionError("expected SystemExit on second bind")
+	finally:
+		a.close()
 
 
 def test_probe_and_pick_channel_switches():

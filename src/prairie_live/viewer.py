@@ -258,7 +258,7 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 		# RelayClient has no last_error — "no frame from relay" means --grab is off
 		# or the analysis socket never received a packet.
 		err = getattr(client, "last_error", "") or "no frame from relay"
-		_apply_status(title, err[:80], state)
+		_apply_status(title, err[:96], state)
 		return
 	h0, w0 = frame.shape[:2]
 	if min(h0, w0) < 8:

@@ -30,17 +30,26 @@ _GRAB_DRAIN_S = 0.35
 _COM_SCRIPT_TIMEOUT_S = 45.0
 
 
-def grab_heartbeat_line(frame, last_error: str, channel: int | None = None) -> str:
+def grab_heartbeat_line(
+	frame,
+	last_error: str,
+	channel: int | None = None,
+	sent: str = "",
+) -> str:
 	"""Scope-console line so a dark analysis FOV can be diagnosed without the plot."""
 	ch = f" ch={int(channel)}" if channel is not None else ""
 	if frame is None:
-		return f"grab heartbeat:{ch} NO FRAME  {last_error or 'no COM frame'}"
-	h, w = frame.shape[:2]
-	return (
-		f"grab heartbeat:{ch} {int(w)}x{int(h)} "
-		f"min={int(frame.min())} max={int(frame.max())} "
-		f"mean={float(frame.mean()):.1f}"
-	)
+		line = f"grab heartbeat:{ch} NO FRAME  {last_error or 'no COM frame'}"
+	else:
+		h, w = frame.shape[:2]
+		line = (
+			f"grab heartbeat:{ch} {int(w)}x{int(h)} "
+			f"min={int(frame.min())} max={int(frame.max())} "
+			f"mean={float(frame.mean()):.1f}"
+		)
+	if sent:
+		line = f"{line}  {sent}"
+	return line
 
 
 class Relay:
@@ -75,9 +84,23 @@ class Relay:
 		self._logged_first_grab = False
 		self._logged_gi2 = False
 		self._hb_t = 0.0
+		self._send_n = 0
+		self._send_wh = None
+		self._send_max = -1
 		# Jobs run on the grab thread — win32com STA cannot GetImage from another thread.
 		self._com_jobs: queue.Queue = queue.Queue()
 		self._com_ready = threading.Event()
+
+	def note_send(self, w: int, h: int, peak: int) -> None:
+		self._send_n += 1
+		self._send_wh = (int(w), int(h))
+		self._send_max = int(peak)
+
+	def sent_note(self) -> str:
+		if not self._send_n or self._send_wh is None:
+			return "send=none (view not on THIS relay — kill extra python)"
+		w, h = self._send_wh
+		return f"send {w}x{h} n={self._send_n} max={self._send_max}"
 
 	def start(self) -> None:
 		if self._grab_enabled:
@@ -216,7 +239,10 @@ class Relay:
 		if now - self._hb_t >= 2.0:
 			self._hb_t = now
 			err = getattr(self.com, "last_error", "") or ""
-			print(grab_heartbeat_line(frame, err, self.channel), flush=True)
+			print(
+				grab_heartbeat_line(frame, err, self.channel, sent=self.sent_note()),
+				flush=True,
+			)
 
 	def latest_frame(self):
 		with self._lock:
@@ -361,16 +387,16 @@ def _push_one_frame(conn, relay, peer: str, n_sent: int, n_tiny: int) -> tuple[i
 	if frame is None:
 		return n_sent, n_tiny
 	h, w = frame.shape[:2]
-	if max(h, w) < 8:
+	# Never put 1×1 on the wire — analysis skip= grows forever on those packets.
+	if min(h, w) < 32:
 		if n_tiny == 0:
 			print(f"frame NOT sent {peer} tiny {int(w)}x{int(h)}", flush=True)
 		return n_sent, n_tiny + 1
 	conn.sendall(pack_frame(frame, extra=relay.channel))
+	peak = int(frame.max())
+	relay.note_send(w, h, peak)
 	if n_sent == 0:
-		print(
-			f"frame send {peer} {int(w)}x{int(h)} max={int(frame.max())}",
-			flush=True,
-		)
+		print(f"frame send {peer} {int(w)}x{int(h)} max={peak}", flush=True)
 	return n_sent + 1, n_tiny
 
 
@@ -522,9 +548,20 @@ def listen(relay: Relay, bind: str, port: int, fps: float) -> None:
 
 
 def _bind(bind: str, port: int) -> socket.socket:
+	# Why: Windows SO_REUSEADDR lets two relays listen on 25100. View then
+	# stays on the old 1×1 sender while the new console shows 512×512.
 	srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-	srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-	srv.bind((bind, port))
+	if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+		srv.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+	else:
+		srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+	try:
+		srv.bind((bind, port))
+	except OSError as e:
+		raise SystemExit(
+			f"port {port} already in use. Task Manager: kill every python.exe "
+			f"on the scope PC, then start ONE `relay --grab`. ({e})"
+		) from e
 	srv.listen(4)
 	return srv
 

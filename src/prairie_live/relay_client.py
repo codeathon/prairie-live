@@ -26,6 +26,7 @@ class RelayClient:
 		self._stop = threading.Event()
 		self.last_error = ""
 		self.last_rx = "?"
+		self.last_px = -1
 		self.frames_ok = 0
 		self.frames_skip = 0
 		self._scan = ScanAssembler()
@@ -57,7 +58,8 @@ class RelayClient:
 			if self._latest is not None:
 				return self._latest.copy()
 		self.last_error = (
-			f"no FOV last={self.last_rx} skip={self.frames_skip} got={self.frames_ok}"
+			f"last={self.last_rx} max={self.last_px} skip={self.frames_skip} "
+			f"got={self.frames_ok}"
 		)
 		return None
 
@@ -158,15 +160,19 @@ class RelayClient:
 			self._take_frame(payload["image"])
 
 	def _take_frame(self, img) -> None:
-		self.last_rx = f"{int(img.shape[1])}x{int(img.shape[0])}"
+		h, w = int(img.shape[0]), int(img.shape[1])
+		self.last_rx = f"{w}x{h}"
+		self.last_px = int(img.flat[0]) if img.size else -1
 		out = self._scan.push(img)
 		if out is None:
 			self.frames_skip += 1
-			if self.frames_skip in (1, 10, 50):
+			if self.frames_skip % 20 == 1:
 				print(
-					f"view skip {self.last_rx} (n={self.frames_skip})",
+					f"view skip {self.last_rx} max={self.last_px} n={self.frames_skip} "
+					f"— kill extra python on scope, one relay --grab",
 					flush=True,
 				)
+				self._drop_frame_sock()
 			return
 		self.frames_ok += 1
 		if self.frames_ok == 1:
@@ -177,3 +183,12 @@ class RelayClient:
 			)
 		with self._lock:
 			self._latest = out
+
+	def _drop_frame_sock(self) -> None:
+		sock = self._frame_sock
+		self._frame_sock = None
+		if sock is not None:
+			try:
+				sock.close()
+			except OSError:
+				pass
