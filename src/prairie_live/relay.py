@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import signal
 import socket
 import sys
@@ -74,22 +75,26 @@ class Relay:
 		self._logged_first_grab = False
 		self._logged_gi2 = False
 		self._hb_t = 0.0
+		# Jobs run on the grab thread — win32com STA cannot GetImage from another thread.
+		self._com_jobs: queue.Queue = queue.Queue()
+		self._com_ready = threading.Event()
 
 	def start(self) -> None:
-		self.com.connect()
-		self.script_com = self.com
 		if self._grab_enabled:
-			# Let Connect finish before the first grab (ReadImage or GetImage_2).
-			time.sleep(0.3)
-			self._arm_live_grab()
-			self._probe_and_pick_channel()
-			threading.Thread(target=self._grab_loop, daemon=True).start()
-			kind = getattr(self.com, "grab_api", None) or "GetImage_2"
-			print(f"grab ON ({kind}); use without --grab if PV shows -gi errors")
-			to = getattr(self.com, "timeout_api", None)
-			if to:
-				print(f"COM timeout: {to}")
+			# Why: Connect+GetImage must share one thread. Main-thread Connect then
+			# grab-thread GetImage returned None (analysis: "no frame from relay").
+			threading.Thread(
+				target=self._grab_loop, daemon=True, name="pv-grab"
+			).start()
+			if not self._com_ready.wait(30.0):
+				raise RuntimeError("grab thread did not Connect in 30s")
+			if self.script_com is None:
+				raise RuntimeError(
+					"grab Connect failed. PrairieView must be open on this PC."
+				)
 		else:
+			self.com.connect()
+			self.script_com = self.com
 			print("grab OFF (default); pass --grab only when you need live frames")
 
 	def _probe_and_pick_channel(self) -> None:
@@ -128,48 +133,90 @@ class Relay:
 	def stop(self) -> None:
 		self._stop.set()
 		self._pause_grab.set()
-		if self.com is not None:
+		if not self._grab_enabled and self.com is not None:
 			try:
 				self.com.disconnect()
 			except Exception:
 				pass
-		self.script_com = None
+			self.script_com = None
 
-	def _grab_loop(self) -> None:
-		# win32com must be CoInitialized on every thread that calls COM.
+	def _init_grab_com(self) -> None:
 		try:
 			import pythoncom
 
 			pythoncom.CoInitialize()
 		except Exception:
 			pass
-		while not self._stop.is_set():
-			if self._pause_grab.is_set():
-				time.sleep(0.01)
-				continue
-			frame = self.com.get_frame(self.channel)
-			if frame is not None:
-				with self._lock:
-					self._latest = frame
-				if not self._logged_first_grab:
-					# Why: analysis "dark screen" was often grab max=0, not the plot.
-					self._logged_first_grab = True
-					print(
-						f"first grab {int(frame.shape[1])}x{int(frame.shape[0])} "
-						f"min={int(frame.min())} max={int(frame.max())} "
-						f"mean={float(frame.mean()):.1f}"
-					)
-				failed = getattr(self.com, "_grab_failed", ())
-				if (not self._logged_gi2) and "ReadImage" in failed:
-					self._logged_gi2 = True
-					print("ReadImage frozen during Live; grabbing via GetImage_2")
-			else:
-				time.sleep(0.01)
-			now = time.monotonic()
-			if now - self._hb_t >= 2.0:
-				self._hb_t = now
-				err = getattr(self.com, "last_error", "") or ""
-				print(grab_heartbeat_line(frame, err, self.channel), flush=True)
+		self.com.connect()
+		self.script_com = self.com
+		self._arm_live_grab()
+		self._probe_and_pick_channel()
+		kind = getattr(self.com, "grab_api", None) or "GetImage_2"
+		print(f"grab ON ({kind}) COM-thread; use without --grab if PV shows -gi errors")
+		to = getattr(self.com, "timeout_api", None)
+		if to:
+			print(f"COM timeout: {to}")
+
+	def _grab_loop(self) -> None:
+		try:
+			self._init_grab_com()
+		except Exception as e:
+			print(f"grab Connect failed: {e}")
+			self.script_com = None
+		finally:
+			self._com_ready.set()
+		if self.script_com is None:
+			return
+		try:
+			while not self._stop.is_set():
+				self._drain_com_jobs()
+				if self._pause_grab.is_set():
+					time.sleep(0.01)
+					continue
+				self._grab_one()
+		finally:
+			try:
+				self.com.disconnect()
+			except Exception:
+				pass
+			self.script_com = None
+
+	def _drain_com_jobs(self) -> None:
+		while True:
+			try:
+				fn, box, err, done = self._com_jobs.get_nowait()
+			except queue.Empty:
+				return
+			try:
+				box.append(fn())
+			except BaseException as e:
+				err.append(e)
+			done.set()
+
+	def _grab_one(self) -> None:
+		frame = self.com.get_frame(self.channel)
+		if frame is not None:
+			with self._lock:
+				self._latest = frame
+			if not self._logged_first_grab:
+				# Why: analysis "dark screen" was often grab max=0, not the plot.
+				self._logged_first_grab = True
+				print(
+					f"first grab {int(frame.shape[1])}x{int(frame.shape[0])} "
+					f"min={int(frame.min())} max={int(frame.max())} "
+					f"mean={float(frame.mean()):.1f}"
+				)
+			failed = getattr(self.com, "_grab_failed", ())
+			if (not self._logged_gi2) and "ReadImage" in failed:
+				self._logged_gi2 = True
+				print("ReadImage frozen during Live; grabbing via GetImage_2")
+		else:
+			time.sleep(0.01)
+		now = time.monotonic()
+		if now - self._hb_t >= 2.0:
+			self._hb_t = now
+			err = getattr(self.com, "last_error", "") or ""
+			print(grab_heartbeat_line(frame, err, self.channel), flush=True)
 
 	def latest_frame(self):
 		with self._lock:
@@ -191,26 +238,15 @@ class Relay:
 		return self.script_com
 
 	def _run_script_com(self, fn, *, timeout: float = _COM_SCRIPT_TIMEOUT_S):
-		"""Run a script COM call with a wall-clock timeout."""
+		"""Run a script COM call on the grab thread (same STA as GetImage)."""
+		if not self._grab_enabled:
+			# No grab thread — tests and --no-grab scripts call COM inline.
+			return fn()
+		done = threading.Event()
 		box: list = []
 		err: list[BaseException] = []
-
-		def _worker() -> None:
-			try:
-				import pythoncom
-
-				pythoncom.CoInitialize()
-			except Exception:
-				pass
-			try:
-				box.append(fn())
-			except BaseException as e:
-				err.append(e)
-
-		t = threading.Thread(target=_worker, daemon=True)
-		t.start()
-		t.join(timeout)
-		if t.is_alive():
+		self._com_jobs.put((fn, box, err, done))
+		if not done.wait(timeout):
 			raise TimeoutError(f"COM script timed out after {timeout:.0f}s")
 		if err:
 			raise err[0]

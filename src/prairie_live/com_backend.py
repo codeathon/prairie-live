@@ -115,14 +115,18 @@ def _is_constant_payload(arr) -> bool:
 def _plausible_n(n: int, last_wh) -> bool:
 	"""True if n can be a 2-D frame at last_wh (or a ≥32² square)."""
 	if last_wh is not None:
-		h, w = last_wh
-		expect = int(h) * int(w)
-		if n == expect:
-			return True
-		# Do not treat a scalar as a new FOV size (locks GetImage_2 to 1×1).
-		if expect >= 32 * 32 and n < 32 * 32:
-			return False
-		return n == expect
+		h, w = int(last_wh[0]), int(last_wh[1])
+		# Poisoned 1×1 last_wh made a scalar ReadImage look like a full FOV.
+		if min(h, w) <= 1:
+			last_wh = None
+		else:
+			expect = h * w
+			if n == expect:
+				return True
+			# Do not treat a scalar as a new FOV size (locks GetImage_2 to 1×1).
+			if expect >= 32 * 32 and n < 32 * 32:
+				return False
+			return n == expect
 	side = int(round(n ** 0.5))
 	return side * side == n and side >= 32
 
@@ -467,13 +471,17 @@ class PrairieCom:
 			self.last_error = str(e)
 			self._reconnect_if_dropped(e)
 			return None
-		if frame is not None:
-			h, w = frame.shape
-			# Why: a 1×1 ReadImage scalar used to overwrite the 512² seed forever.
-			if h * w >= 32 * 32:
-				self._last_wh = frame.shape
-			self.last_error = ""
-			self._note_stale_grab(frame)
+		if frame is None:
+			return None
+		h, w = frame.shape[:2]
+		# Why: analysis "wait for GetImage_2" was a 1×1/1×N packet, not a live FOV.
+		if min(h, w) < 32:
+			self.last_error = f"tiny grab {w}x{h}"
+			self._last_wh = (512, 512)
+			return None
+		self._last_wh = frame.shape
+		self.last_error = ""
+		self._note_stale_grab(frame)
 		return frame
 
 	def _note_stale_grab(self, frame: np.ndarray) -> None:
@@ -550,16 +558,13 @@ def _as_frame_auto(raw, last_wh) -> np.ndarray | None:
 		return None
 	n = int(arr.size)
 	if last_wh is not None:
-		h, w = last_wh
-		if w * h == n:
+		h, w = int(last_wh[0]), int(last_wh[1])
+		# 1×1 last_wh + n=1 was sent to analysis as "wait for GetImage_2".
+		if min(h, w) > 1 and w * h == n:
 			return arr.reshape(h, w)
 	side = int(round(n ** 0.5))
 	# sqrt(1)==1 looked like a valid FOV and froze grab at 1×1.
 	if side * side == n and side >= 32:
-		return arr.reshape(side, side)
-	if last_wh is not None:
-		return None
-	if side * side == n and side >= 2:
 		return arr.reshape(side, side)
 	return None
 

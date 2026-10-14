@@ -116,7 +116,8 @@ class RelayClient:
 				kind, payload = recv_message(sock)
 			except TimeoutError:
 				continue
-			except (ConnectionError, OSError, ValueError):
+			except (ConnectionError, OSError, ValueError) as e:
+				print(f"view frame socket closed: {e}", flush=True)
 				break
 			if kind != "frame":
 				continue

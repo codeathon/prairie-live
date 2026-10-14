@@ -1,3 +1,5 @@
+import threading
+
 import numpy as np
 
 from prairie_live.com_backend import PrairieCom
@@ -139,6 +141,18 @@ def test_probe_and_pick_channel_switches():
 	}
 	r._probe_and_pick_channel()
 	assert r.channel == 3
+
+
+def test_drain_com_jobs_runs_fn():
+	r = _relay()
+	box: list = []
+	err: list = []
+	done = threading.Event()
+	r._com_jobs.put((lambda: 7, box, err, done))
+	r._drain_com_jobs()
+	assert box == [7]
+	assert done.is_set()
+	assert err == []
 
 
 def test_arm_live_grab_sends_livescan():

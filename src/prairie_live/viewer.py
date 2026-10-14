@@ -265,7 +265,7 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 		# 1×1 grab is not an FOV — don't fill the rolling mean with it.
 		_apply_status(
 			title,
-			f"grab {w0}x{h0} (not an FOV)  wait for GetImage_2 / Live  t/a/l/q",
+			f"grab {w0}x{h0} (not an FOV)  pull relay + restart --grab",
 			state,
 		)
 		return

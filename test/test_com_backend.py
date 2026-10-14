@@ -131,12 +131,12 @@ def test_grab_58_getimage2():
 
 def test_prairiecom_get_frame_readimage():
 	com = PrairieCom("127.0.0.1", "0000")
-	frame = np.arange(4, dtype=np.uint16).reshape(2, 2)
-	com._pl = _ReadImagePL(frame.reshape(-1))
-	com._last_wh = (2, 2)
+	frame = np.arange(32 * 32, dtype=np.uint16)
+	com._pl = _ReadImagePL(frame)
+	com._last_wh = (32, 32)
 	got = com.get_frame(1)
 	assert got is not None
-	assert got.shape == (2, 2)
+	assert got.shape == (32, 32)
 
 
 def test_readimage_none_cells_fall_back_to_getimage2():
@@ -164,12 +164,12 @@ def test_as_frame_auto_none_cells_does_not_raise():
 
 def test_get_frame_survives_none_variant():
 	com = PrairieCom("127.0.0.1", "0000")
-	com._pl = _ReadImagePL(np.array([None] * 4, dtype=object))
-	com._last_wh = (2, 2)
+	com._pl = _ReadImagePL(np.array([None] * 32 * 32, dtype=object))
+	com._last_wh = (32, 32)
 	got = com.get_frame(1)
-	# Falls back to GetImage_2 ones(2*2).
+	# Falls back to GetImage_2 ones(32*32).
 	assert got is not None
-	assert got.shape == (2, 2)
+	assert got.shape == (32, 32)
 
 
 def test_readimage_scalar_does_not_lock_fov_to_1x1():
@@ -185,6 +185,27 @@ def test_readimage_scalar_does_not_lock_fov_to_1x1():
 def test_as_frame_auto_rejects_scalar_against_512():
 	assert _as_frame_auto(np.array([16], dtype=np.uint16), (512, 512)) is None
 	assert _as_frame_auto(np.arange(4, dtype=np.uint16), (2, 2)).shape == (2, 2)
+	assert _as_frame_auto(np.array([16], dtype=np.uint16), (1, 1)) is None
+
+
+def test_poisoned_1x1_last_wh_falls_back_to_512():
+	# Why: analysis "wait for GetImage_2" was a 1×1 packet after last_wh=(1,1).
+	pl = _ReadImagePL(np.array(16, dtype=np.uint16))
+	failed: set[str] = set()
+	out = grab_raw(pl, 1, (1, 1), failed)
+	assert out.size == 512 * 512
+	assert "ReadImage" in failed
+	assert pl.gi2 == [(1, 512, 512)]
+
+
+def test_get_frame_drops_tiny_resets_wh():
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _ReadImagePL(np.array([16], dtype=np.uint16))
+	com._last_wh = (1, 1)
+	got = com.get_frame(1)
+	assert got is not None
+	assert got.shape == (512, 512)
+	assert com._last_wh == (512, 512)
 
 
 def test_readimage_constant_falls_back_to_getimage2():
