@@ -14,6 +14,8 @@ import time
 
 import numpy as np
 
+from prairie_live.scan_assemble import ScanAssembler
+
 
 def _dispatch():
 	import win32com.client
@@ -328,6 +330,7 @@ class PrairieCom:
 		self._grab_failed: set[str] = set()
 		self._grab_sig = None
 		self._grab_sig_t = 0.0
+		self._scan = ScanAssembler()
 
 	def connect(self) -> None:
 		try:
@@ -526,12 +529,16 @@ class PrairieCom:
 			self.last_error = raw_summary(raw)
 			return None
 		h, w = frame.shape[:2]
-		# Why: analysis "wait for GetImage_2" was a 1×1/1×N packet, not a live FOV.
-		if min(h, w) < 32:
+		# 1×1 is junk; 512×1 is a galvo line — fold it into a square FOV.
+		if max(h, w) < 8:
 			self.last_error = f"tiny grab {w}x{h}"
 			self._last_wh = (512, 512)
 			return None
-		self._last_wh = frame.shape
+		frame = self._scan.push(frame)
+		if frame is None:
+			return None
+		if min(frame.shape[:2]) >= 32:
+			self._last_wh = frame.shape
 		self.last_error = ""
 		self._note_stale_grab(frame)
 		return frame
@@ -612,15 +619,30 @@ def _as_frame_auto(raw, last_wh) -> np.ndarray | None:
 				return None
 			arr = np.asarray(flat, dtype=np.uint16)
 		else:
-			arr = arr.astype(np.uint16, copy=False).reshape(-1)
+			arr = arr.astype(np.uint16, copy=False)
 	except (TypeError, ValueError):
 		return None
+	if arr.ndim >= 2:
+		arr = np.squeeze(arr)
+	if arr.ndim == 2 and max(int(s) for s in arr.shape) >= 32:
+		return np.ascontiguousarray(arr)
+	return _reshape_pixels(arr.reshape(-1), last_wh)
+
+
+def _reshape_pixels(arr, last_wh) -> np.ndarray | None:
 	n = int(arr.size)
 	if last_wh is not None:
 		h, w = int(last_wh[0]), int(last_wh[1])
 		# 1×1 last_wh + n=1 was sent to analysis as "wait for GetImage_2".
 		if min(h, w) > 1 and w * h == n:
 			return arr.reshape(h, w)
+		# Live galvo: k lines of width w (k ≤ h), not a full square yet.
+		if w >= 32 and n % w == 0:
+			rows = n // w
+			if h >= 32 and 1 <= rows <= h:
+				return arr.reshape(rows, w)
+			if rows == 1:
+				return arr.reshape(1, w)
 	side = int(round(n ** 0.5))
 	# sqrt(1)==1 looked like a valid FOV and froze grab at 1×1.
 	if side * side == n and side >= 32:

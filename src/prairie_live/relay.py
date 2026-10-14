@@ -361,7 +361,7 @@ def _push_one_frame(conn, relay, peer: str, n_sent: int, n_tiny: int) -> tuple[i
 	if frame is None:
 		return n_sent, n_tiny
 	h, w = frame.shape[:2]
-	if min(h, w) < 32:
+	if max(h, w) < 8:
 		if n_tiny == 0:
 			print(f"frame NOT sent {peer} tiny {int(w)}x{int(h)}", flush=True)
 		return n_sent, n_tiny + 1

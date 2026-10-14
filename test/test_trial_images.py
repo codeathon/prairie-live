@@ -255,7 +255,7 @@ def test_on_frame_none_says_no_frame_from_relay():
 	title = _FakeTitle()
 	state = {"n": 0, "t0": 0.0}
 	_on_frame(_SeqClient([]), FrameBuffer(2), _FakeIm(), title, state)
-	assert "no frame from relay" in title.text
+	assert "no frame from relay" in title.text or "no FOV" in title.text
 
 
 def test_apply_status_updates_hud():

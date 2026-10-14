@@ -127,11 +127,24 @@ def test_relay_client_take_frame_skips_tiny():
 	c._take_frame(np.zeros((1, 1), dtype=np.uint16))
 	assert c.get_frame() is None
 	assert "skip=1" in c.last_error
+	assert "1x1" in c.last_error
 	c._take_frame(np.ones((32, 40), dtype=np.uint16) * 9)
 	got = c.get_frame()
 	assert got is not None
 	assert got.shape == (32, 40)
 	assert int(got.max()) == 9
+
+
+def test_relay_client_assembles_line_scan():
+	from prairie_live.relay_client import RelayClient
+
+	c = RelayClient("127.0.0.1")
+	c._take_frame(np.arange(32, dtype=np.uint16).reshape(1, 32))
+	got = c.get_frame()
+	assert got is not None
+	assert got.shape == (32, 32)
+	assert c.frames_ok == 1
+	assert c.frames_skip == 0
 
 
 def test_grab_heartbeat_line_none_and_frame():

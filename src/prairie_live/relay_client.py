@@ -10,6 +10,7 @@ import numpy as np
 
 from prairie_live.protocol import recv_message
 from prairie_live.relay import DEFAULT_PORT
+from prairie_live.scan_assemble import ScanAssembler
 
 
 class RelayClient:
@@ -24,8 +25,10 @@ class RelayClient:
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
 		self.last_error = ""
+		self.last_rx = "?"
 		self.frames_ok = 0
 		self.frames_skip = 0
+		self._scan = ScanAssembler()
 
 	def connect(self) -> None:
 		self._frame_sock = self._open_frame_sock()
@@ -54,7 +57,7 @@ class RelayClient:
 			if self._latest is not None:
 				return self._latest.copy()
 		self.last_error = (
-			f"no frame from relay  got={self.frames_ok} skip={self.frames_skip}"
+			f"no FOV last={self.last_rx} skip={self.frames_skip} got={self.frames_ok}"
 		)
 		return None
 
@@ -155,20 +158,22 @@ class RelayClient:
 			self._take_frame(payload["image"])
 
 	def _take_frame(self, img) -> None:
-		if min(img.shape[:2]) < 32:
+		self.last_rx = f"{int(img.shape[1])}x{int(img.shape[0])}"
+		out = self._scan.push(img)
+		if out is None:
 			self.frames_skip += 1
 			if self.frames_skip in (1, 10, 50):
 				print(
-					f"view skip tiny {img.shape[1]}x{img.shape[0]} "
-					f"(n={self.frames_skip})",
+					f"view skip {self.last_rx} (n={self.frames_skip})",
 					flush=True,
 				)
 			return
 		self.frames_ok += 1
 		if self.frames_ok == 1:
 			print(
-				f"view got {img.shape[1]}x{img.shape[0]} max={int(img.max())}",
+				f"view got {self.last_rx} -> {int(out.shape[1])}x{int(out.shape[0])} "
+				f"max={int(out.max())}",
 				flush=True,
 			)
 		with self._lock:
-			self._latest = img
+			self._latest = out

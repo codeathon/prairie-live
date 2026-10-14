@@ -190,6 +190,29 @@ def test_as_frame_auto_rejects_scalar_against_512():
 	assert _as_frame_auto(np.array([16], dtype=np.uint16), (1, 1)) is None
 
 
+def test_get_frame_assembles_galvo_line():
+	class _LinePL:
+		def GetImage_2(self, channel, w, h):
+			return np.arange(w, dtype=np.uint16)
+
+	com = PrairieCom("127.0.0.1", "0000")
+	com._pl = _LinePL()
+	com._last_wh = (32, 32)
+	got = com.get_frame(1)
+	assert got is not None
+	assert got.shape == (32, 32)
+
+
+def test_as_frame_auto_galvo_line():
+	line = np.arange(512, dtype=np.uint16)
+	got = _as_frame_auto(line, (512, 512))
+	assert got is not None
+	assert got.shape == (1, 512)
+	got2 = _as_frame_auto(line.reshape(1, 512), (512, 512))
+	assert got2 is not None
+	assert got2.shape == (1, 512)
+
+
 def test_poisoned_1x1_last_wh_falls_back_to_512():
 	# Why: analysis "wait for GetImage_2" was a 1×1 packet after last_wh=(1,1).
 	pl = _ReadImagePL(np.array(16, dtype=np.uint16))
