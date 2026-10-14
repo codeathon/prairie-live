@@ -30,7 +30,7 @@ from prairie_live.viewer import (
 	_make_layout,
 	_on_frame,
 	_update_traces,
-	rot90_cw,
+	orient_fov,
 )
 
 
@@ -160,12 +160,13 @@ class _HoldClient:
 		return self._frame
 
 
-def test_rot90_cw_bottom_left_to_top_left():
+def test_orient_fov_90cw_then_mirror_lr():
 	img = np.zeros((4, 6), dtype=np.uint16)
 	img[-1, 0] = 9
-	out = rot90_cw(img)
+	out = orient_fov(img)
 	assert out.shape == (6, 4)
-	assert int(out[0, 0]) == 9
+	# 90° CW puts bottom-left at top-left; fliplr sends it to top-right.
+	assert int(out[0, -1]) == 9
 
 
 def test_on_frame_shows_stack_mean_not_last_raw():
