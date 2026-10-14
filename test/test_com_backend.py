@@ -182,3 +182,15 @@ def test_readimage_scalar_does_not_lock_fov_to_1x1():
 def test_as_frame_auto_rejects_scalar_against_512():
 	assert _as_frame_auto(np.array([16], dtype=np.uint16), (512, 512)) is None
 	assert _as_frame_auto(np.arange(4, dtype=np.uint16), (2, 2)).shape == (2, 2)
+
+
+def test_readimage_constant_falls_back_to_getimage2():
+	# Why: 6.1 ReadImage can return a 512² of zeros; that looked like a live FOV.
+	pl = _ReadImagePL(np.zeros(512 * 512, dtype=np.uint16))
+	failed: set[str] = set()
+	out = grab_raw(pl, 1, (512, 512), failed)
+	assert out.size == 512 * 512
+	assert np.all(np.asarray(out) == 1)
+	# empty, not bad — keep retrying ReadImage on later frames.
+	assert "ReadImage" not in failed
+	assert pl.gi2 == [(1, 512, 512)]

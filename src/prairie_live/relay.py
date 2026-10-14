@@ -57,6 +57,8 @@ class Relay:
 		self._stop = threading.Event()
 		self._pause_grab = threading.Event()
 		self._script_lock = threading.Lock()
+		# One-shot so the console shows whether grab is zeros vs a real FOV.
+		self._logged_first_grab = False
 
 	def start(self) -> None:
 		self.com.connect()
@@ -99,6 +101,14 @@ class Relay:
 			if frame is not None:
 				with self._lock:
 					self._latest = frame
+				if not self._logged_first_grab:
+					# Why: analysis "dark screen" was often grab max=0, not the plot.
+					self._logged_first_grab = True
+					print(
+						f"first grab {int(frame.shape[1])}x{int(frame.shape[0])} "
+						f"min={int(frame.min())} max={int(frame.max())} "
+						f"mean={float(frame.mean()):.1f}"
+					)
 			else:
 				time.sleep(0.01)
 

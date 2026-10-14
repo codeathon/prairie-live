@@ -21,6 +21,8 @@ from prairie_live.trial_images import (
 from prairie_live.viewer import (
 	IntensityBuffer,
 	_avg_n,
+	_fit_fov_axes,
+	_flash_overlay,
 	_fov_rgb,
 	_load_view_points,
 	_make_layout,
@@ -120,6 +122,7 @@ class _FakeIm:
 	def __init__(self):
 		self.data = None
 		self.extent = None
+		self.axes = None
 
 	def set_data(self, arr):
 		self.data = arr
@@ -259,3 +262,56 @@ def test_on_frame_without_series_still_updates_fov():
 	assert im.data is not None
 	assert im.data.ndim == 3
 	assert "avg 1/4" in title.text
+	assert "max=12" in title.text
+
+
+def test_on_frame_rescales_axes_from_placeholder():
+	# Why: stuck 32² xlim cropped a real 512 FOV to a dark corner.
+	frame = np.arange(64, dtype=np.uint16).reshape(8, 8)
+	buf = FrameBuffer(4)
+	im = _FakeIm()
+	im.axes = _FakeAx()
+	title = _FakeTitle()
+	state = {"n": 0, "t0": 0.0}
+	_on_frame(_SeqClient([frame]), buf, im, title, state, traces=None)
+	assert im.extent == (0, 8, 8, 0)
+	assert im.axes.xlim == (0, 8)
+	assert im.axes.ylim == (8, 0)
+
+
+def test_flash_overlay_ignores_global_jump_keeps_spot():
+	avg = np.full((16, 16), 10.0)
+	assert _flash_overlay(avg, avg + 20.0) is None
+	latest = avg.copy()
+	latest[8, 8] = 80.0
+	heat = _flash_overlay(avg, latest)
+	assert heat is not None
+	assert heat[8, 8] > heat[0, 0]
+
+
+def test_update_traces_fov_p99_without_xml_points():
+	# Photostim of newly created PV points must move fov/p99 without --series.
+	frame = np.full((16, 16), 10.0, dtype=np.float32)
+	frame[4:8, 4:8] = 90.0
+	n = 8
+	traces = {
+		"points": [],
+		"radius": 3,
+		"buffers": {
+			"fov": IntensityBuffer(n),
+			"p99": IntensityBuffer(n),
+			"pool": IntensityBuffer(n),
+		},
+		"lines": {"fov": _FakeLine(), "p99": _FakeLine(), "pool": _FakeLine()},
+		"ax": _FakeAx(),
+		"dt": 0.05,
+	}
+	_update_traces(frame, traces)
+	assert traces["buffers"]["p99"].as_array()[-1] > traces["buffers"]["fov"].as_array()[-1]
+	assert len(traces["buffers"]["pool"]) == 0
+
+
+def test_fit_fov_axes_noop_without_axes():
+	im = _FakeIm()
+	_fit_fov_axes(im, 8, 8)
+	assert im.axes is None

@@ -125,13 +125,43 @@ def _load_view_points(series: str | None, config: str | None, disk_radius: int |
 	return extract_unique_points(load_mark_points_file(str(path))), radius
 
 
-def _fov_rgb(avg: np.ndarray, points: list, radius: int) -> np.ndarray:
+def _flash_overlay(avg: np.ndarray, latest: np.ndarray) -> np.ndarray | None:
+	"""Local positive delta as uint8. Global brightness jumps do not count.
+
+	Why: a 10 ms photostim spot is washed out of the rolling mean; paint it
+	red on the FOV so firing points is visible even without matching XML.
+	"""
+	if latest.shape != avg.shape:
+		return None
+	pos = np.clip(latest.astype(np.float64) - avg.astype(np.float64), 0.0, None)
+	pos -= float(np.median(pos))
+	pos = np.clip(pos, 0.0, None)
+	if float(pos.max()) < 5.0:
+		return None
+	return to_u8(pos, p_lo=0.0, p_hi=99.5)
+
+
+def _fov_rgb(avg: np.ndarray, points: list, radius: int, latest=None) -> np.ndarray:
 	# Same stretch as f0.png; rings use the same cyan overlay as trial dumps.
 	u8 = to_u8(avg)
 	rgb = np.stack([u8, u8, u8], axis=-1)
+	heat = _flash_overlay(avg, latest) if latest is not None else None
+	if heat is not None:
+		# Red = this-frame flash; gray rolling mean stays underneath.
+		rgb[:, :, 0] = np.maximum(rgb[:, :, 0], heat)
 	if points:
 		draw_point_rings(rgb, points, radius=max(int(radius), 2))
 	return rgb
+
+
+def _fit_fov_axes(im, h: int, w: int) -> None:
+	# First imshow is a 32² placeholder; set_data(512²) does not expand xlim,
+	# so the panel stayed a dark crop of the corner (photostim never visible).
+	ax = getattr(im, "axes", None)
+	if ax is None:
+		return
+	ax.set_xlim(0, w)
+	ax.set_ylim(h, 0)
 
 
 def _set_trace_ylim(ax, buffers: dict) -> None:
@@ -155,20 +185,28 @@ def _draw_line(ax, line, buf: IntensityBuffer, dt: float) -> None:
 	ax.set_xlim(float(x[0]) if y.size > 1 else -dt, 0.0)
 
 
+def _push_scalar(traces: dict, name: str, value: float) -> None:
+	if name not in traces["buffers"]:
+		return
+	traces["buffers"][name].push(float(value))
+	_draw_line(traces["ax"], traces["lines"][name], traces["buffers"][name], traces["dt"])
+
+
 def _update_traces(frame: np.ndarray, traces: dict) -> None:
+	# fov/p99 always move when ANY photostim hits the image, even if the
+	# XML disks are a different set of points than the ones just fired.
+	_push_scalar(traces, "fov", float(np.mean(frame)))
+	_push_scalar(traces, "p99", float(np.percentile(frame, 99.5)))
 	vals: list[float] = []
 	for pt in traces["points"]:
 		pid = str(pt["id"])
 		m = disk_mean(frame, pt["x"], pt["y"], traces["radius"])
 		if m is None:
 			continue
-		traces["buffers"][pid].push(m)
-		_draw_line(traces["ax"], traces["lines"][pid], traces["buffers"][pid], traces["dt"])
+		_push_scalar(traces, pid, m)
 		vals.append(m)
-	if not vals:
-		return
-	traces["buffers"]["pool"].push(float(np.mean(vals)))
-	_draw_line(traces["ax"], traces["lines"]["pool"], traces["buffers"]["pool"], traces["dt"])
+	if vals and "pool" in traces["buffers"]:
+		_push_scalar(traces, "pool", float(np.mean(vals)))
 	_set_trace_ylim(traces["ax"], traces["buffers"])
 
 
@@ -192,17 +230,20 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 		return
 	points = (traces or {}).get("points") or []
 	radius = int((traces or {}).get("radius") or 3)
-	im.set_data(_fov_rgb(avg, points, radius))
-	im.set_extent((0, avg.shape[1], avg.shape[0], 0))
+	im.set_data(_fov_rgb(avg, points, radius, latest=frame))
+	h, w = avg.shape
+	im.set_extent((0, w, h, 0))
+	_fit_fov_axes(im, h, w)
 	if traces:
 		_update_traces(frame, traces)
 	state["n"] += 1
 	dt = time.monotonic() - state["t0"]
 	fps = state["n"] / dt if dt > 0 else 0
-	h, w = avg.shape
 	n_pts = len(points)
+	# max=0 on a 512² title means grab never saw PMT data (wrong channel / not Live).
 	title.set_text(
-		f"{w}x{h}  avg {len(buf)}/{buf.n}  pts={n_pts}  {fps:.1f} fps  t/a/l/q"
+		f"{w}x{h}  avg {len(buf)}/{buf.n}  pts={n_pts}  "
+		f"max={float(frame.max()):.0f}  {fps:.1f} fps  t/a/l/q"
 	)
 
 
@@ -227,10 +268,18 @@ def _fill_trace_axis(ax, points: list, n: int, dt: float, radius: int) -> dict:
 
 	ax.set_xlabel("s")
 	ax.set_ylabel("mean (counts)")
-	ax.set_title("markpoint disk means (raw counts)", fontsize=10)
+	ax.set_title("FOV / markpoint means (raw counts)", fontsize=10)
 	ax.axvline(0.0, color="0.7", lw=0.6)
 	buffers: dict[str, IntensityBuffer] = {}
 	lines: dict = {}
+	# Whole-frame traces so photostim of newly created PV points still shows
+	# when --series is a different XML (Prairie has no GetMarkPoints).
+	buffers["fov"] = IntensityBuffer(n)
+	(fov_line,) = ax.plot([], [], lw=1.6, color="0.25", label="fov")
+	lines["fov"] = fov_line
+	buffers["p99"] = IntensityBuffer(n)
+	(p99_line,) = ax.plot([], [], lw=1.2, color="C1", label="p99")
+	lines["p99"] = p99_line
 	cmap = plt.get_cmap("tab10")
 	for i, pt in enumerate(points):
 		pid = str(pt["id"])
@@ -281,19 +330,17 @@ def run_viewer(
 	points = list(points or [])
 	buf = FrameBuffer(_avg_n(avg_s, interval_ms))
 	dt = interval_ms / 1000.0
-	n_cols = 2 if points else 1
-	fig, gs = _make_layout(n_cols, width_ratios=([1.05, 1.0] if points else None))
+	# Always two panels: FOV + traces (fov/p99 even when --series is omitted).
+	fig, gs = _make_layout(2, width_ratios=[1.05, 1.0])
 	ax_img = fig.add_subplot(gs[0, 0])
-	im = ax_img.imshow(np.zeros((32, 32, 3), dtype=np.uint8))
+	im = ax_img.imshow(np.zeros((512, 512, 3), dtype=np.uint8), origin="upper")
 	title = ax_img.set_title("waiting for frames  (t/a/l/q)")
 	ax_img.set_axis_off()
-	traces = None
-	if points:
-		# Next panel: fig.add_subplot(gs[0, 2]) after _make_layout(n_cols=3), not a new window.
-		ax_tr = fig.add_subplot(gs[0, 1])
-		traces = _fill_trace_axis(
-			ax_tr, points, _avg_n(window_s, interval_ms), dt, disk_radius
-		)
+	# Next panel: fig.add_subplot(gs[0, 2]) after _make_layout(n_cols=3), not a new window.
+	ax_tr = fig.add_subplot(gs[0, 1])
+	traces = _fill_trace_axis(
+		ax_tr, points, _avg_n(window_s, interval_ms), dt, disk_radius
+	)
 	_bind_viewer_keys(client, fig)
 	state = {"n": 0, "t0": time.monotonic()}
 

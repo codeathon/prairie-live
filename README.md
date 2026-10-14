@@ -74,11 +74,18 @@ Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 Rolling mean of the last `--avg-s` seconds (same `mean_stack` as
 `trial_images/f0.png`). Keys: `t` T-series, `a` abort, `l` live scan, `q` quit.
 
-With `--series` or `--config`, the **same window** adds a right panel with
-disk-mean intensity at each Mark Points coordinate (same `disk_mean` as mp-sync
-ΔF/F). Cyan rings on the FOV match `f0.png`. `--config experiment.json` reads
-`series` and `disk_radius`. Omit `--series` for FOV-only. Later panels go on
-this grid, not extra windows.
+The **same window** always has a right panel: whole-FOV mean (`fov`) and 99.5th
+percentile (`p99`). Photostim of points you just created in PrairieView shows
+up there (and as a red flash on the FOV) even without an XML of those points.
+PrairieView has no GetMarkPoints — colored disk traces and cyan rings come
+only from `--series` / `--config` (same `disk_mean` as mp-sync ΔF/F). Export
+the fat MarkPoints XML of the points you actually fire and pass that file, or
+the per-id lines will sit on the sample 8-point list. `--config experiment.json`
+reads `series` and `disk_radius`. Later panels go on this grid, not extra windows.
+
+Title `max=` is the latest raw PMT peak. `max=0` on a 512² frame means grab is
+empty (wrong `--channel`, or Live not actually filling the PrairieLink buffer).
+`grab 1x1 (not an FOV)` means pull this branch and restart **relay first**, then view.
 
 ```powershell
 python -m prairie_live view --relay 10.33.107.147:25100

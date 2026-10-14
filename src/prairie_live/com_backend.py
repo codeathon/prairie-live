@@ -91,7 +91,22 @@ def _payload_kind(raw, last_wh=None) -> str:
 	if not np.issubdtype(arr.dtype, np.number):
 		return "bad"
 	# 6.1 Alpha ReadImage often returns one number; that became a 1×1 FOV.
-	return "ok" if _plausible_n(n, last_wh) else "bad"
+	if not _plausible_n(n, last_wh):
+		return "bad"
+	# Constant 512² (all 0s / all 16s) is a dead buffer, not a live FOV —
+	# keep trying GetImage_2 instead of locking the viewer on a black frame.
+	if _is_constant_payload(arr):
+		return "empty"
+	return "ok"
+
+
+def _is_constant_payload(arr) -> bool:
+	"""True for a full-size buffer with no contrast (dead ReadImage)."""
+	# Tiny fixtures in tests are allowed to be constant; only FOV-sized
+	# constants are treated as "no frame yet".
+	if int(arr.size) < 32 * 32:
+		return False
+	return float(np.ptp(arr)) == 0.0
 
 
 def _plausible_n(n: int, last_wh) -> bool:
