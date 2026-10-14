@@ -121,5 +121,8 @@ class RelayClient:
 				break
 			if kind != "frame":
 				continue
+			img = payload["image"]
+			if min(img.shape[:2]) < 32:
+				continue
 			with self._lock:
-				self._latest = payload["image"]
+				self._latest = img

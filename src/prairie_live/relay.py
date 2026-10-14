@@ -353,7 +353,8 @@ def _serve_frames(conn: socket.socket, relay: Relay, fps: float) -> None:
 	try:
 		while not relay._stop.is_set():
 			frame = relay.latest_frame()
-			if frame is not None:
+			# 1×1 / 1×N is not an FOV — sending it locks the analysis title.
+			if frame is not None and min(frame.shape[:2]) >= 32:
 				conn.sendall(pack_frame(frame, extra=relay.channel))
 			time.sleep(period)
 	except (ConnectionError, OSError):
