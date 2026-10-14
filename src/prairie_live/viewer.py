@@ -179,6 +179,13 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 		# Keep the window up; COM aborts must not kill the animation.
 		title.set_text(err[:80])
 		return
+	h0, w0 = frame.shape[:2]
+	if min(h0, w0) < 8:
+		# 1×1 grab is not an FOV — don't fill the rolling mean with it.
+		title.set_text(
+			f"grab {w0}x{h0} (not an FOV)  wait for GetImage_2 / Live  t/a/l/q"
+		)
+		return
 	buf.push(frame)
 	avg = buf.mean()
 	if avg is None:

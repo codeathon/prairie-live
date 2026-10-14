@@ -237,6 +237,18 @@ def test_make_layout_one_figure_for_all_panels():
 	assert a0.figure is a1.figure
 
 
+def test_on_frame_skips_1x1_grab():
+	buf = FrameBuffer(4)
+	im = _FakeIm()
+	title = _FakeTitle()
+	state = {"n": 0, "t0": 0.0}
+	tiny = np.array([[16]], dtype=np.uint16)
+	_on_frame(_SeqClient([tiny]), buf, im, title, state, traces=None)
+	assert len(buf) == 0
+	assert "1x1" in title.text
+	assert im.data is None
+
+
 def test_on_frame_without_series_still_updates_fov():
 	frame = np.full((8, 8), 12.0, dtype=np.float32)
 	buf = FrameBuffer(4)

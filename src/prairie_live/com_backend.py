@@ -66,8 +66,8 @@ def _unwrap_com_image(raw):
 	return raw
 
 
-def _payload_kind(raw) -> str:
-	"""ok=numeric pixels, empty=no frame yet, bad=None cells / non-numeric VARIANT."""
+def _payload_kind(raw, last_wh=None) -> str:
+	"""ok=numeric pixels, empty=no frame yet, bad=None cells / scalar / non-FOV."""
 	raw = _unwrap_com_image(raw)
 	if raw is None:
 		return "empty"
@@ -75,7 +75,8 @@ def _payload_kind(raw) -> str:
 		arr = np.array(raw)
 	except Exception:
 		return "bad"
-	if arr.size == 0:
+	n = int(arr.size)
+	if n == 0:
 		return "empty"
 	if arr.dtype == object:
 		# Why: PV 6.1 ReadImage can yield VARIANT None cells; astype(uint16) then crashes.
@@ -86,10 +87,26 @@ def _payload_kind(raw) -> str:
 			np.asarray(list(flat), dtype=np.uint16)
 		except (TypeError, ValueError):
 			return "bad"
-		return "ok"
+		return "ok" if _plausible_n(n, last_wh) else "bad"
 	if not np.issubdtype(arr.dtype, np.number):
 		return "bad"
-	return "ok"
+	# 6.1 Alpha ReadImage often returns one number; that became a 1×1 FOV.
+	return "ok" if _plausible_n(n, last_wh) else "bad"
+
+
+def _plausible_n(n: int, last_wh) -> bool:
+	"""True if n can be a 2-D frame at last_wh (or a ≥32² square)."""
+	if last_wh is not None:
+		h, w = last_wh
+		expect = int(h) * int(w)
+		if n == expect:
+			return True
+		# Do not treat a scalar as a new FOV size (locks GetImage_2 to 1×1).
+		if expect >= 32 * 32 and n < 32 * 32:
+			return False
+		return n == expect
+	side = int(round(n ** 0.5))
+	return side * side == n and side >= 32
 
 
 def _call_read_image(fn, channel: int, last_wh):
@@ -101,18 +118,18 @@ def _call_read_image(fn, channel: int, last_wh):
 		return fn(channel, int(w), int(h))
 
 
-def _from_readimages(bundle, channel: int):
+def _from_readimages(bundle, channel: int, last_wh=None):
 	"""Pick one PMT channel from ReadImages (list, dict, or n×h×w)."""
 	if bundle is None:
 		return None
 	if isinstance(bundle, dict):
 		for key in (channel, str(channel), channel - 1):
-			if key in bundle and _payload_kind(bundle[key]) == "ok":
+			if key in bundle and _payload_kind(bundle[key], last_wh) == "ok":
 				return bundle[key]
 		return None
 	if isinstance(bundle, (list, tuple)):
 		for i in (channel - 1, channel):
-			if 0 <= i < len(bundle) and _payload_kind(bundle[i]) == "ok":
+			if 0 <= i < len(bundle) and _payload_kind(bundle[i], last_wh) == "ok":
 				return bundle[i]
 		return None
 	arr = np.asarray(bundle)
@@ -120,21 +137,21 @@ def _from_readimages(bundle, channel: int):
 		for i in (channel - 1, channel):
 			if 0 <= i < arr.shape[0] and arr[i].size > 0:
 				return arr[i]
-	return bundle if _payload_kind(arr) == "ok" else None
+	return bundle if _payload_kind(arr, last_wh) == "ok" else None
 
 
-def _try_new_grab(name: str, fn, failed: set[str]) -> object | None:
+def _try_new_grab(name: str, fn, failed: set[str], last_wh) -> object | None:
 	"""Run a 6.1 grab once. bad/error → cache-fail; empty → None (keep trying)."""
 	try:
 		raw = fn()
 	except Exception:
 		failed.add(name)
 		return None
-	kind = _payload_kind(raw)
+	kind = _payload_kind(raw, last_wh)
 	if kind == "ok":
 		return raw
 	if kind == "bad":
-		# Unusable VARIANT — fall through to GetImage_2 next.
+		# Unusable VARIANT / scalar — fall through to GetImage_2 next.
 		failed.add(name)
 	return None
 
@@ -145,7 +162,10 @@ def grab_raw(pl, channel: int, last_wh, failed: set[str]):
 		fn = getattr(pl, "ReadImage", None)
 		if callable(fn):
 			raw = _try_new_grab(
-				"ReadImage", lambda: _call_read_image(fn, channel, last_wh), failed
+				"ReadImage",
+				lambda: _call_read_image(fn, channel, last_wh),
+				failed,
+				last_wh,
 			)
 			if raw is not None:
 				return raw
@@ -155,13 +175,19 @@ def grab_raw(pl, channel: int, last_wh, failed: set[str]):
 		fn = getattr(pl, "ReadImages", None)
 		if callable(fn):
 			raw = _try_new_grab(
-				"ReadImages", lambda: _from_readimages(fn(), channel), failed
+				"ReadImages",
+				lambda: _from_readimages(fn(), channel, last_wh),
+				failed,
+				last_wh,
 			)
 			if raw is not None:
 				return raw
 		else:
 			failed.add("ReadImages")
 	h, w = last_wh if last_wh else (512, 512)
+	# Never ask GetImage_2 for 1×1 after a poisoned ReadImage scalar.
+	if int(h) * int(w) <= 1:
+		h, w = 512, 512
 	return pl.GetImage_2(channel, int(w), int(h))
 
 
@@ -344,7 +370,10 @@ class PrairieCom:
 			self._reconnect_if_dropped(e)
 			return None
 		if frame is not None:
-			self._last_wh = frame.shape
+			h, w = frame.shape
+			# Why: a 1×1 ReadImage scalar used to overwrite the 512² seed forever.
+			if h * w >= 32 * 32:
+				self._last_wh = frame.shape
 			self.last_error = ""
 		return frame
 
@@ -410,7 +439,12 @@ def _as_frame_auto(raw, last_wh) -> np.ndarray | None:
 		if w * h == n:
 			return arr.reshape(h, w)
 	side = int(round(n ** 0.5))
-	if side * side == n:
+	# sqrt(1)==1 looked like a valid FOV and froze grab at 1×1.
+	if side * side == n and side >= 32:
+		return arr.reshape(side, side)
+	if last_wh is not None:
+		return None
+	if side * side == n and side >= 2:
 		return arr.reshape(side, side)
 	return None
 
