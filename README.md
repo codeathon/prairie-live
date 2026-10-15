@@ -107,6 +107,25 @@ python -m prairie_live view --relay 10.33.107.147:25100 --config experiment.json
 python -m prairie_live view --mock --series samples/MarkPoints_8fov.xml
 ```
 
+## Analysis PC — mapping web UI
+
+Opens `http://127.0.0.1:8765/`. No `experiment.json`. On start it
+connects to `10.33.107.147:25100`, sends `-LiveScan` if PrairieView is
+up, and shows a live FOV tile. Upload a Fat XML to open one tile per
+power in a grid (filled as trials arrive). COM list from hardware
+(default COM3). Stim mode default `slm`. XML fills duration, spiral,
+inter-point delay, and estimated FOV µm.
+
+```powershell
+cd C:\Users\schollab\code\prairie-live
+$env:PYTHONPATH = "$PWD\src"
+python -m prairie_live gui
+```
+
+Groups have at least 3 points and cover every point once (8 → 4+4).
+Each group runs at every power. After the last trial, pick candidates
+and **Save XML**.
+
 ## Analysis PC — run mp-sync
 
 Edit `experiment.json` (series path, relay IP, COM port, powers, etc.), then:
@@ -130,6 +149,7 @@ gratings on for one run.
 | `trial_images/run_…/recommendation.txt` | Best group×power summary |
 | `trial_images/run_…/candidates.txt` | Ranked points (lowest stimulating power first) |
 | `trial_images/run_…/candidates_top.xml` | Top-third fat XML for the next `--series` |
+| `trial_images/run_…/next_series.xml` | User-picked candidates from the GUI Save XML button |
 | `trial_images/run_…/summary.txt` | One line per trial |
 
 ## `experiment.json` reference

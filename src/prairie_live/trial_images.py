@@ -199,8 +199,8 @@ def dff_rgb(f0: np.ndarray, f1: np.ndarray) -> np.ndarray:
 	return (np.clip(rgb, 0, 1) * 255.0).astype(np.uint8)
 
 
-def write_png_rgb(path: str | Path, rgb: np.ndarray) -> None:
-	"""Minimal RGB8 PNG writer (stdlib only)."""
+def png_bytes_rgb(rgb: np.ndarray) -> bytes:
+	"""Minimal RGB8 PNG (stdlib only)."""
 	if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
 		raise ValueError(f"expected HxWx3 uint8, got {rgb.shape} {rgb.dtype}")
 	h, w, _ = rgb.shape
@@ -215,13 +215,16 @@ def write_png_rgb(path: str | Path, rgb: np.ndarray) -> None:
 		)
 
 	ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)  # 8-bit RGB
-	png = (
+	return (
 		b"\x89PNG\r\n\x1a\n"
 		+ chunk(b"IHDR", ihdr)
-		+ chunk(b"IDAT", zlib.compress(raw, 9))
+		+ chunk(b"IDAT", zlib.compress(raw, 6))
 		+ chunk(b"IEND", b"")
 	)
-	Path(path).write_bytes(png)
+
+
+def write_png_rgb(path: str | Path, rgb: np.ndarray) -> None:
+	Path(path).write_bytes(png_bytes_rgb(rgb))
 
 
 def save_trial_images(
