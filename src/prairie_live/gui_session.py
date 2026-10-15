@@ -37,6 +37,20 @@ def planned_trial_count(
 	return int(iterations) * int(ng) * len(list(powers))
 
 
+def plan_group_power_trials(
+	groups: list[list[dict[str, Any]]],
+	powers: list[float],
+) -> list[dict[str, Any]]:
+	"""Cartesian product: every group at every power. Order = group, then power."""
+	out: list[dict[str, Any]] = []
+	pwr = [float(p) for p in powers]
+	for gi, gpts in enumerate(groups):
+		ids = [str(p["id"]) for p in gpts]
+		for power in pwr:
+			out.append({"group_index": gi, "point_ids": ids, "power": power})
+	return out
+
+
 def parse_powers_field(text: str) -> list[float]:
 	vals = powers_to_list(text)
 	if not vals:
@@ -76,6 +90,8 @@ def apply_gui_overrides(
 		else n_groups_for_pool(n_points, GROUP_SIZE)
 	)
 	opt["iterations"] = max(int(opt.get("iterations") or 1), 1)
+	# One trial per group×power so each group is scored at every level.
+	opt["slm_pack"] = False
 	return opt
 
 

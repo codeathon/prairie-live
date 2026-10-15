@@ -153,9 +153,10 @@ class App:
 				if wrap > 0
 				else "  ·  every point used"
 			)
+			pw = ",".join(f"{p:g}" for p in powers)
 			self.plan_var.set(
-				f"{len(pts)} points → {n_g} groups of {GROUP_SIZE} × {len(powers)} powers "
-				f"= {n_t} trials{extra}"
+				f"{len(pts)} points → {n_g} groups of {GROUP_SIZE} · "
+				f"each group at {pw} = {n_t} trials{extra}"
 			)
 		except Exception as exc:
 			self.plan_var.set(str(exc))
@@ -204,8 +205,8 @@ class App:
 		self.run_btn.configure(state=tk.DISABLED)
 		self.stop_btn.configure(state=tk.NORMAL)
 		self._append_log(
-			f"start  {len(pts)} pts  groups={opt['n_groups']}  powers={powers}  "
-			f"reps={opt['repetitions']}"
+			f"start  {len(pts)} pts  groups={opt['n_groups']}  "
+			f"each group at {powers}  reps={opt['repetitions']}"
 		)
 
 		def work() -> None:

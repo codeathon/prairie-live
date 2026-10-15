@@ -17,6 +17,7 @@ from prairie_live.gui_session import (
 	apply_gui_overrides,
 	n_groups_for_pool,
 	parse_powers_field,
+	plan_group_power_trials,
 	planned_trial_count,
 	trial_log_line,
 )
@@ -38,6 +39,12 @@ def test_eight_points_uses_every_point():
 	assert all(len(g) == 3 for g in groups)
 	used = {str(p["id"]) for g in groups for p in g}
 	assert used == {str(p["id"]) for p in pts}
+	plan = plan_group_power_trials(groups, powers)
+	assert len(plan) == 9
+	for gi in range(3):
+		assert [c["power"] for c in plan if c["group_index"] == gi] == powers
+	for pwr in powers:
+		assert {c["group_index"] for c in plan if c["power"] == pwr} == {0, 1, 2}
 
 
 def test_parse_powers_dedupes_preserve_order():
@@ -57,6 +64,7 @@ def test_gui_overrides_cover_pool():
 	)
 	assert opt["group_size"] == 3
 	assert opt["n_groups"] == 3
+	assert opt["slm_pack"] is False
 	assert opt["powers"] == [80.0, 140.0]
 	assert opt["repetitions"] == 2
 	assert opt["via_relay"] == "10.0.0.1:25100"
