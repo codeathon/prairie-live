@@ -1,4 +1,4 @@
-"""CLI: python -m prairie_live view|relay|mp-sync|tseries|abort|…"""
+"""CLI: python -m prairie_live view|relay|mp-sync|gui|tseries|abort|…"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ _COMMANDS = (
 	"view",
 	"relay",
 	"mp-sync",
+	"gui",
 	"show-log",
 	"tseries",
 	"abort",
@@ -43,6 +44,11 @@ def main(argv=None) -> None:
 		from prairie_live.sync_loop import main as sync_main
 
 		sync_main(rest)
+		return
+	if command == "gui":
+		from prairie_live.gui import main as gui_main
+
+		gui_main(rest)
 		return
 	if command == "show-log":
 		from prairie_live.trial_record import main as show_log_main
