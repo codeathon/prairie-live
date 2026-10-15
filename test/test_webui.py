@@ -175,13 +175,14 @@ def test_web_ui_serves_page_not_tk_form():
 		httpd.shutdown()
 
 
-def test_web_ui_parse_xml_opens_power_plan():
+def test_web_ui_parse_xml_opens_power_plan(tmp_path):
 	import base64
 	import json
 	from pathlib import Path
 
 	from prairie_live.web_app import STATE
 
+	STATE.xml_dir = tmp_path
 	httpd, base = _http_server()
 	try:
 		raw = Path("samples/MarkPoints_8fov.xml").read_bytes()
