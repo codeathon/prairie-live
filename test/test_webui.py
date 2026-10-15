@@ -119,3 +119,91 @@ def test_board_png_bytes():
 	)
 	out = render_board_png(st)
 	assert out.startswith(b"\x89PNG")
+
+
+def _http_server():
+	from http.server import ThreadingHTTPServer
+
+	from prairie_live.web_app import Handler
+
+	httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+	threading.Thread(target=httpd.serve_forever, daemon=True).start()
+	host, port = httpd.server_address
+	return httpd, f"http://{host}:{port}"
+
+
+def _get(url: str):
+	import urllib.request
+
+	with urllib.request.urlopen(url, timeout=5) as r:
+		return r.status, r.headers.get_content_type(), r.read()
+
+
+def _post(url: str, obj: dict):
+	import json
+	import urllib.request
+
+	req = urllib.request.Request(
+		url,
+		data=json.dumps(obj).encode("utf-8"),
+		headers={"Content-Type": "application/json"},
+		method="POST",
+	)
+	with urllib.request.urlopen(req, timeout=5) as r:
+		return r.status, json.loads(r.read().decode("utf-8"))
+
+
+def test_web_ui_serves_page_not_tk_form():
+	httpd, base = _http_server()
+	try:
+		status, ctype, body = _get(base + "/")
+		assert status == 200
+		assert "html" in ctype
+		text = body.decode("utf-8")
+		assert "prairie-live mapping" in text
+		assert "Live scan" in text
+		assert "Fat Mark Points XML" in text
+		assert "tkinter" not in text.lower()
+		assert 'src="/app.js"' in text
+		js_status, js_ctype, js = _get(base + "/app.js")
+		assert js_status == 200
+		assert b"ensurePowerTiles" in js
+		css_status, _, css = _get(base + "/style.css")
+		assert css_status == 200
+		assert b".fov-grid" in css
+	finally:
+		httpd.shutdown()
+
+
+def test_web_ui_parse_xml_opens_power_plan():
+	import base64
+	import json
+	from pathlib import Path
+
+	from prairie_live.web_app import STATE
+
+	httpd, base = _http_server()
+	try:
+		raw = Path("samples/MarkPoints_8fov.xml").read_bytes()
+		status, res = _post(
+			base + "/api/parse-xml",
+			{
+				"name": "MarkPoints_8fov.xml",
+				"content_b64": base64.b64encode(raw).decode("ascii"),
+				"powers": "75,140,200",
+			},
+		)
+		assert status == 200
+		assert res["ok"] is True
+		assert res["n_groups"] == 2
+		assert res["group_sizes"] == [4, 4]
+		assert "8 points" in res["plan"]
+		assert res["fields"]["n_points"] == 8
+		assert STATE.planned_powers == [75.0, 140.0, 200.0]
+		st_status, _, st_raw = _get(base + "/api/status")
+		assert st_status == 200
+		st = json.loads(st_raw.decode("utf-8"))
+		assert [b["power"] for b in st["boards"]] == [75.0, 140.0, 200.0]
+		assert all(b["ready"] is False for b in st["boards"])
+	finally:
+		httpd.shutdown()
