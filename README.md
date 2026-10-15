@@ -109,11 +109,12 @@ python -m prairie_live view --mock --series samples/MarkPoints_8fov.xml
 
 ## Analysis PC — mapping GUI
 
-Browse a Fat XML, type powers, press Run. Groups of 3 cover **every**
-point (the last group wraps if the count is not a multiple of 3). One FOV
-board opens per power (ΔF/F image, cyan = just fired, green circle =
-changed). After the last trial a split window lists ranked candidates —
-click the FOV or the table, then **Save XML**.
+Browse a Fat XML, type powers, press Run. Groups have **at least 3**
+points, cover every point once (no wrap / no duplicate). Remainder
+makes some groups 4+ (8 points → 4+4). Each group runs at every power.
+One FOV board opens per power (ΔF/F image, cyan = just fired, green
+circle = changed). After the last trial a split window lists ranked
+candidates — click the FOV or the table, then **Save XML**.
 
 ```powershell
 cd C:\Users\schollab\code\prairie-live

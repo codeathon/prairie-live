@@ -12,17 +12,37 @@ GROUP_SIZE = 3
 
 
 def n_groups_for_pool(n_points: int, group_size: int = GROUP_SIZE) -> int:
-	"""Enough groups of ``group_size`` that every point is used.
-
-	When ``n_points`` is not a multiple of 3, ``form_groups`` wraps so the
-	last group reuses earlier points. No point sits out.
-	"""
+	"""Most groups of at least ``group_size`` with no leftover and no wrap."""
 	if n_points < group_size:
 		raise ValueError(
 			f"need at least {group_size} points, got {n_points}"
 		)
-	gs = int(group_size)
-	return (int(n_points) + gs - 1) // gs
+	return max(1, int(n_points) // int(group_size))
+
+
+def group_sizes_for_pool(
+	n_points: int,
+	*,
+	min_size: int = GROUP_SIZE,
+	n_groups: int | None = None,
+) -> list[int]:
+	"""Even partition: every size >= min_size, sum == n_points, no leftovers.
+
+	8 → [4, 4], 7 → [4, 3], 9 → [3, 3, 3], 5 → [5].
+	"""
+	ng = n_groups if n_groups is not None else n_groups_for_pool(n_points, min_size)
+	ng = int(ng)
+	if ng < 1:
+		raise ValueError("n_groups must be >= 1")
+	if n_points < ng * min_size:
+		ng = n_groups_for_pool(n_points, min_size)
+	base, extra = divmod(int(n_points), ng)
+	sizes = [base + 1] * extra + [base] * (ng - extra)
+	if any(s < min_size for s in sizes):
+		raise ValueError(
+			f"cannot cover {n_points} points with {ng} groups of at least {min_size}"
+		)
+	return sizes
 
 
 def planned_trial_count(
@@ -92,6 +112,7 @@ def apply_gui_overrides(
 	opt["iterations"] = max(int(opt.get("iterations") or 1), 1)
 	# One trial per group×power so each group is scored at every level.
 	opt["slm_pack"] = False
+	opt["cover_all"] = True
 	return opt
 
 

@@ -15,8 +15,8 @@ from prairie_live.experiment_config import (
 	powers_to_cli_default,
 )
 from prairie_live.gui_session import (
-	GROUP_SIZE,
 	apply_gui_overrides,
+	group_sizes_for_pool,
 	n_groups_for_pool,
 	parse_powers_field,
 	planned_trial_count,
@@ -147,16 +147,12 @@ class App:
 			ng = int(ng_txt) if ng_txt else None
 			n_g = ng if ng is not None else n_groups_for_pool(len(pts))
 			n_t = planned_trial_count(len(pts), powers, n_groups=n_g)
-			wrap = n_g * GROUP_SIZE - len(pts)
-			extra = (
-				f"  ·  {wrap} wrap so every point is used"
-				if wrap > 0
-				else "  ·  every point used"
-			)
+			sizes = group_sizes_for_pool(len(pts), n_groups=n_g)
+			size_txt = "+".join(str(s) for s in sizes)
 			pw = ",".join(f"{p:g}" for p in powers)
 			self.plan_var.set(
-				f"{len(pts)} points → {n_g} groups of {GROUP_SIZE} · "
-				f"each group at {pw} = {n_t} trials{extra}"
+				f"{len(pts)} points → {len(sizes)} groups ({size_txt}) · "
+				f"each group at {pw} = {n_t} trials · every point once"
 			)
 		except Exception as exc:
 			self.plan_var.set(str(exc))

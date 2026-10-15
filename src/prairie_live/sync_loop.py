@@ -45,10 +45,14 @@ def form_groups(
 	scores: dict[str, float] | None = None,
 	rng: random.Random,
 	elite_frac: float = 0.4,
+	cover_all: bool = False,
 ) -> list[list[dict]]:
 	"""
 	Partition points into n_groups of group_size.
 
+	cover_all:
+	  Unique partition — every point once, each group >= group_size (extras
+	  make some groups 4+). No wrap, no duplicate runs.
 	Without scores: shuffle then chunk (with wrap if pool is small).
 	With scores: seed each group with elite responders, fill from the rest.
 	"""
@@ -63,6 +67,33 @@ def form_groups(
 		)
 
 	pool = list(points)
+	if cover_all:
+		from prairie_live.gui_session import group_sizes_for_pool
+
+		sizes = group_sizes_for_pool(
+			len(pool), min_size=group_size, n_groups=n_groups
+		)
+		if scores:
+			ranked = sorted(
+				pool,
+				key=lambda p: scores.get(str(p["id"]), 0.0),
+				reverse=True,
+			)
+			n_elite = max(1, int(len(ranked) * elite_frac))
+			elite = ranked[:n_elite]
+			rest = ranked[n_elite:]
+			rng.shuffle(rest)
+			order = elite + rest
+		else:
+			order = list(pool)
+			rng.shuffle(order)
+		groups = []
+		i = 0
+		for sz in sizes:
+			groups.append(order[i : i + sz])
+			i += sz
+		return groups
+
 	if scores:
 		ranked = sorted(
 			pool,
@@ -231,6 +262,7 @@ def run_sync_loop(
 	stim_dff_min: float = 0.0,
 	show_candidate_gui: bool = True,
 	should_stop: Callable[[], bool] | None = None,
+	cover_all: bool = False,
 ) -> list[dict]:
 	"""
 	Run mapping iterations. Returns all trial rows written this session.
@@ -299,6 +331,7 @@ def run_sync_loop(
 				scores=scores,
 				rng=rng,
 				elite_frac=elite_frac,
+				cover_all=cover_all,
 			)
 			print(
 				f"\n=== iteration {it + 1}/{n_iterations}  "
@@ -1748,6 +1781,7 @@ def execute_session(
 			show_candidate_gui=show,
 			on_trial=on_trial,
 			should_stop=should_stop,
+			cover_all=bool(opt.get("cover_all")),
 		)
 	finally:
 		log.close()
