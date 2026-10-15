@@ -94,7 +94,7 @@ class App:
 		ttk.Entry(frm, textvariable=self.thresh_var, width=12).grid(row=row, column=1, sticky=tk.W)
 
 		row = 5
-		ttk.Label(frm, text="N groups (blank = cover pool)").grid(row=row, column=0, sticky=tk.W)
+		ttk.Label(frm, text="N groups (blank = use all points)").grid(row=row, column=0, sticky=tk.W)
 		ttk.Entry(frm, textvariable=self.ngroups_var, width=12).grid(row=row, column=1, sticky=tk.W)
 
 		row = 6
@@ -147,8 +147,12 @@ class App:
 			ng = int(ng_txt) if ng_txt else None
 			n_g = ng if ng is not None else n_groups_for_pool(len(pts))
 			n_t = planned_trial_count(len(pts), powers, n_groups=n_g)
-			left = len(pts) - n_g * GROUP_SIZE
-			extra = f"  ·  {left} leftover unused" if left > 0 else ""
+			wrap = n_g * GROUP_SIZE - len(pts)
+			extra = (
+				f"  ·  {wrap} wrap so every point is used"
+				if wrap > 0
+				else "  ·  every point used"
+			)
 			self.plan_var.set(
 				f"{len(pts)} points → {n_g} groups of {GROUP_SIZE} × {len(powers)} powers "
 				f"= {n_t} trials{extra}"

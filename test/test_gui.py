@@ -25,19 +25,19 @@ from prairie_live.power_view import PowerBoards, board_state, mark_style, unique
 from prairie_live.sync_loop import form_groups
 
 
-def test_eight_points_two_groups_of_three():
+def test_eight_points_uses_every_point():
 	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_8fov.xml"))
 	assert len(pts) == 8
-	assert n_groups_for_pool(8) == 2
+	assert n_groups_for_pool(8) == 3
 	powers = [75.0, 140.0, 200.0]
-	assert planned_trial_count(8, powers) == 6
+	assert planned_trial_count(8, powers) == 9
 	groups = form_groups(
-		pts, n_groups=2, group_size=GROUP_SIZE, rng=random.Random(0)
+		pts, n_groups=3, group_size=GROUP_SIZE, rng=random.Random(0)
 	)
-	assert len(groups) == 2
+	assert len(groups) == 3
 	assert all(len(g) == 3 for g in groups)
 	used = {str(p["id"]) for g in groups for p in g}
-	assert len(used) == 6
+	assert used == {str(p["id"]) for p in pts}
 
 
 def test_parse_powers_dedupes_preserve_order():
@@ -56,7 +56,7 @@ def test_gui_overrides_cover_pool():
 		n_points=8,
 	)
 	assert opt["group_size"] == 3
-	assert opt["n_groups"] == 2
+	assert opt["n_groups"] == 3
 	assert opt["powers"] == [80.0, 140.0]
 	assert opt["repetitions"] == 2
 	assert opt["via_relay"] == "10.0.0.1:25100"

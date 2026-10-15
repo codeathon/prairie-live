@@ -12,12 +12,17 @@ GROUP_SIZE = 3
 
 
 def n_groups_for_pool(n_points: int, group_size: int = GROUP_SIZE) -> int:
-	"""Cover the pool once in disjoint groups; leftovers sit out."""
+	"""Enough groups of ``group_size`` that every point is used.
+
+	When ``n_points`` is not a multiple of 3, ``form_groups`` wraps so the
+	last group reuses earlier points. No point sits out.
+	"""
 	if n_points < group_size:
 		raise ValueError(
 			f"need at least {group_size} points, got {n_points}"
 		)
-	return max(1, n_points // int(group_size))
+	gs = int(group_size)
+	return (int(n_points) + gs - 1) // gs
 
 
 def planned_trial_count(
