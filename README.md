@@ -107,23 +107,24 @@ python -m prairie_live view --relay 10.33.107.147:25100 --config experiment.json
 python -m prairie_live view --mock --series samples/MarkPoints_8fov.xml
 ```
 
-## Analysis PC — mapping GUI
+## Analysis PC — mapping web UI
 
-Browse a Fat XML, type powers, press Run. Groups have **at least 3**
-points, cover every point once (no wrap / no duplicate). Remainder
-makes some groups 4+ (8 points → 4+4). Each group runs at every power.
-One FOV board opens per power (ΔF/F image, cyan = just fired, green
-circle = changed). After the last trial a split window lists ranked
-candidates — click the FOV or the table, then **Save XML**.
+Opens `http://127.0.0.1:8765/`. No `experiment.json`. On start it
+connects to `10.33.107.147:25100`, sends `-LiveScan` if PrairieView is
+up, and shows a live FOV tile. Upload a Fat XML to open one tile per
+power in a grid (filled as trials arrive). COM list from hardware
+(default COM3). Stim mode default `slm`. XML fills duration, spiral,
+inter-point delay, and estimated FOV µm.
 
 ```powershell
 cd C:\Users\schollab\code\prairie-live
 $env:PYTHONPATH = "$PWD\src"
-python -m prairie_live gui --config experiment.json
+python -m prairie_live gui
 ```
 
-Relay / COM / duration / spiral stay in `experiment.json`. The CLI path
-below still works.
+Groups have at least 3 points and cover every point once (8 → 4+4).
+Each group runs at every power. After the last trial, pick candidates
+and **Save XML**.
 
 ## Analysis PC — run mp-sync
 

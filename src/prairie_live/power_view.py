@@ -124,6 +124,28 @@ def mark_style(mark: dict[str, Any]) -> dict[str, Any]:
 	}
 
 
+def render_board_png(state: dict[str, Any]) -> bytes:
+	"""RGB PNG for a power tile (web grid)."""
+	from prairie_live.trial_images import draw_point_rings, png_bytes_rgb
+
+	bg = load_board_bg(state)
+	if bg.dtype != np.uint8:
+		if bg.max() <= 1.0:
+			bg = (np.clip(bg, 0, 1) * 255).astype(np.uint8)
+		else:
+			bg = to_u8(bg.astype(np.float64))
+	if bg.ndim == 2:
+		bg = np.stack([bg, bg, bg], axis=-1)
+	bg = np.ascontiguousarray(bg[..., :3])
+	pool = [m for m in state.get("marks") or [] if not m.get("fired") and not m.get("changed")]
+	fired = [m for m in state.get("marks") or [] if m.get("fired") and not m.get("changed")]
+	changed = [m for m in state.get("marks") or [] if m.get("changed")]
+	draw_point_rings(bg, pool, radius=4, color=(154, 154, 154))
+	draw_point_rings(bg, fired, radius=6, color=(0, 229, 255))
+	draw_point_rings(bg, changed, radius=8, color=(57, 255, 20))
+	return png_bytes_rgb(bg)
+
+
 def gui_allowed() -> bool:
 	if os.environ.get("PRAIRIE_LIVE_NO_GUI"):
 		return False

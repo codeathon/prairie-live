@@ -86,7 +86,7 @@ def parse_powers_field(text: str) -> list[float]:
 
 
 def apply_gui_overrides(
-	cfg: dict[str, Any],
+	cfg: dict[str, Any] | None = None,
 	*,
 	series: str,
 	powers: list[float],
@@ -95,9 +95,17 @@ def apply_gui_overrides(
 	stim_dff_min: float,
 	n_points: int,
 	n_groups: int | None = None,
+	via_relay: str | None = None,
+	serial: str | None = None,
+	stim_mode: str | None = None,
+	xml_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-	"""Copy experiment.json and overlay the launch-form fields."""
-	opt = dict(cfg)
+	"""Lab defaults (not experiment.json) plus the form / XML fields."""
+	from prairie_live.lab_defaults import STIM_MODES, lab_defaults
+
+	opt = lab_defaults()
+	if cfg:
+		opt.update({k: v for k, v in cfg.items() if v is not None})
 	opt["series"] = series
 	opt["powers"] = list(powers)
 	opt["seed"] = int(seed)
@@ -110,9 +118,34 @@ def apply_gui_overrides(
 		else n_groups_for_pool(n_points, GROUP_SIZE)
 	)
 	opt["iterations"] = max(int(opt.get("iterations") or 1), 1)
-	# One trial per group×power so each group is scored at every level.
 	opt["slm_pack"] = False
 	opt["cover_all"] = True
+	if via_relay:
+		opt["via_relay"] = via_relay
+	if serial:
+		opt["serial"] = serial
+		opt["trigger"] = "serial"
+	if stim_mode:
+		mode = str(stim_mode).lower()
+		if mode not in STIM_MODES:
+			raise ValueError(f"stim_mode must be one of {STIM_MODES}")
+		opt["stim_mode"] = mode
+	if xml_fields:
+		for key in (
+			"duration_ms",
+			"inter_point_delay_ms",
+			"initial_delay_ms",
+			"spiral_revolutions",
+			"spiral_size_um",
+			"fov_width_um",
+			"fov_height_um",
+			"pixel_size_um",
+			"laser",
+		):
+			if xml_fields.get(key) not in (None, ""):
+				opt[key] = xml_fields[key]
+		if xml_fields.get("spiral") is not None:
+			opt["spiral"] = bool(xml_fields["spiral"])
 	return opt
 
 
