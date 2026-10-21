@@ -12,8 +12,8 @@ from prairie_live.trial_images import FrameBuffer, disk_mean, draw_point_rings, 
 
 
 def orient_fov(frame: np.ndarray) -> np.ndarray:
-	"""PrairieLink FOV → PrairieView: 90° clockwise, then mirror left/right."""
-	return np.ascontiguousarray(np.fliplr(np.rot90(frame, -1)))
+	"""Frame exactly as PV wrote it (-gi buffer); no rotate or mirror."""
+	return np.ascontiguousarray(frame)
 
 
 def _avg_n(avg_s: float, interval_ms: int) -> int:
@@ -253,7 +253,6 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 			state,
 		)
 		return
-	# COM buffer is 90° CCW from PV, then also mirrored left/right.
 	frame = orient_fov(frame)
 	buf.push(frame)
 	avg = buf.mean()

@@ -160,13 +160,12 @@ class _HoldClient:
 		return self._frame
 
 
-def test_orient_fov_90cw_then_mirror_lr():
+def test_orient_fov_shows_pv_frame_unchanged():
 	img = np.zeros((4, 6), dtype=np.uint16)
 	img[-1, 0] = 9
 	out = orient_fov(img)
-	assert out.shape == (6, 4)
-	# 90° CW puts bottom-left at top-left; fliplr sends it to top-right.
-	assert int(out[0, -1]) == 9
+	assert out.shape == (4, 6)
+	assert int(out[-1, 0]) == 9
 
 
 def test_on_frame_shows_stack_mean_not_last_raw():
