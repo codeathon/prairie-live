@@ -61,6 +61,7 @@ class Relay:
 		*,
 		image_wh=(512, 512),
 		grab: bool = False,
+		grab_api: str = "com",
 	):
 		self.channel = channel
 		self.password = password
@@ -75,6 +76,10 @@ class Relay:
 		# Default off: GetImage_2 maps to script -gi with process/buffer addresses
 		# and PV then reports "Unexpected parameter <huge number>".
 		self._grab_enabled = bool(grab)
+		# "gi": our own -gi buffer on TCP 1236 instead of PrairieLink's GetImage.
+		self.grab_api = grab_api
+		self._gi = None
+		self._gi_wh = (int(h), int(w))
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
@@ -173,12 +178,46 @@ class Relay:
 		self.com.connect()
 		self.script_com = self.com
 		self._arm_live_grab()
+		if self.grab_api == "gi":
+			self._init_gi()
+			return
 		self._probe_and_pick_channel()
 		kind = getattr(self.com, "grab_api", None) or "GetImage_2"
 		print(f"grab ON ({kind}) COM-thread; use without --grab if PV shows -gi errors")
 		to = getattr(self.com, "timeout_api", None)
 		if to:
 			print(f"COM timeout: {to}")
+
+	def _init_gi(self) -> None:
+		from prairie_live.gi_grab import GiGrabber
+
+		self._gi = GiGrabber(
+			PrairieLink(
+				host=self.pv_host,
+				port=PV_SCRIPT_PORT,
+				password=self.password,
+				timeout=10.0,
+			)
+		)
+		self._gi_wh = self._gi.fov_wh(self._gi_wh)
+		h, w = self._gi_wh
+		print(f"grab ON (direct -gi, pid={self._gi.pid}) {int(w)}x{int(h)}")
+		try:
+			print(f"  ch{self.channel}: {self._gi.grab(self.channel, w, h).summary()}")
+		except Exception as e:
+			print(f"  ch{self.channel}: -gi probe failed: {e}")
+
+	def _gi_frame(self):
+		h, w = self._gi_wh
+		try:
+			frame = self._gi.grab(self.channel, w, h).frame
+		except Exception as e:
+			self._gi.last_error = f"-gi {type(e).__name__}: {e}"
+			time.sleep(0.2)
+			return None
+		if frame is None:
+			time.sleep(0.05)
+		return frame
 
 	def _grab_loop(self) -> None:
 		try:
@@ -198,6 +237,9 @@ class Relay:
 					continue
 				self._grab_one()
 		finally:
+			if self._gi is not None:
+				self._gi.close()
+				self._gi = None
 			try:
 				self.com.disconnect()
 			except Exception:
@@ -217,7 +259,7 @@ class Relay:
 			done.set()
 
 	def _grab_one(self) -> None:
-		frame = self.com.get_frame(self.channel)
+		frame = self._gi_frame() if self._gi is not None else self.com.get_frame(self.channel)
 		if frame is not None:
 			with self._lock:
 				self._latest = frame
@@ -238,7 +280,8 @@ class Relay:
 		now = time.monotonic()
 		if now - self._hb_t >= 2.0:
 			self._hb_t = now
-			err = getattr(self.com, "last_error", "") or ""
+			src = self._gi if self._gi is not None else self.com
+			err = getattr(src, "last_error", "") or ""
 			print(
 				grab_heartbeat_line(frame, err, self.channel, sent=self.sent_note()),
 				flush=True,
@@ -587,6 +630,13 @@ def main(argv=None) -> None:
 		action="store_true",
 		help=argparse.SUPPRESS,  # backward alias; grab is already off by default
 	)
+	p.add_argument(
+		"--grab-api",
+		choices=("com", "gi"),
+		default="com",
+		help="com: PrairieLink GetImage/ReadImage. gi: send -gi with our own "
+		"buffer (scope PC only; use when COM returns empty images)",
+	)
 	args = p.parse_args(argv)
 
 	do_grab = bool(args.grab) and not bool(args.no_grab)
@@ -596,6 +646,7 @@ def main(argv=None) -> None:
 		args.channel,
 		image_wh=(args.height, args.width),
 		grab=do_grab,
+		grab_api=args.grab_api,
 	)
 	relay.start()
 	try:

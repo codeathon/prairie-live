@@ -261,3 +261,22 @@ def test_prairie_com_rejects_empty_key_and_bad_axis():
 		assert False
 	except ValueError:
 		pass
+
+
+def test_grab_one_uses_direct_gi_when_selected():
+	import numpy as np
+
+	from prairie_live.gi_grab import GiResult
+
+	class FakeGi:
+		last_error = ""
+
+		def grab(self, ch, w, h):
+			return GiResult(np.full((h, w), 9, np.uint16), "ACK DONE", w * h, 0x1000000, True)
+
+	r = Relay("127.0.0.1", "0000", 1, grab=True, grab_api="gi")
+	r._gi = FakeGi()
+	r._gi_wh = (64, 128)
+	r._grab_one()
+	assert r.latest_frame().shape == (64, 128)
+	assert int(r.latest_frame().max()) == 9

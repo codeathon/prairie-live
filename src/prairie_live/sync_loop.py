@@ -45,10 +45,14 @@ def form_groups(
 	scores: dict[str, float] | None = None,
 	rng: random.Random,
 	elite_frac: float = 0.4,
+	cover_all: bool = False,
 ) -> list[list[dict]]:
 	"""
 	Partition points into n_groups of group_size.
 
+	cover_all:
+	  Unique partition — every point once, each group >= group_size (extras
+	  make some groups 4+). No wrap, no duplicate runs.
 	Without scores: shuffle then chunk (with wrap if pool is small).
 	With scores: seed each group with elite responders, fill from the rest.
 	"""
@@ -63,6 +67,33 @@ def form_groups(
 		)
 
 	pool = list(points)
+	if cover_all:
+		from prairie_live.gui_session import group_sizes_for_pool
+
+		sizes = group_sizes_for_pool(
+			len(pool), min_size=group_size, n_groups=n_groups
+		)
+		if scores:
+			ranked = sorted(
+				pool,
+				key=lambda p: scores.get(str(p["id"]), 0.0),
+				reverse=True,
+			)
+			n_elite = max(1, int(len(ranked) * elite_frac))
+			elite = ranked[:n_elite]
+			rest = ranked[n_elite:]
+			rng.shuffle(rest)
+			order = elite + rest
+		else:
+			order = list(pool)
+			rng.shuffle(order)
+		groups = []
+		i = 0
+		for sz in sizes:
+			groups.append(order[i : i + sz])
+			i += sz
+		return groups
+
 	if scores:
 		ranked = sorted(
 			pool,
@@ -230,6 +261,8 @@ def run_sync_loop(
 	on_trial: Callable[[dict], None] | None = None,
 	stim_dff_min: float = 0.0,
 	show_candidate_gui: bool = True,
+	should_stop: Callable[[], bool] | None = None,
+	cover_all: bool = False,
 ) -> list[dict]:
 	"""
 	Run mapping iterations. Returns all trial rows written this session.
@@ -283,8 +316,14 @@ def run_sync_loop(
 	if mode == "slm":
 		slm_params["trigger_selection"] = trig_sel
 
+	def _stop() -> bool:
+		return bool(should_stop and should_stop())
+
 	try:
 		for it in range(n_iterations):
+			if _stop():
+				print("session stopped")
+				break
 			groups_pts = form_groups(
 				points,
 				n_groups=n_groups,
@@ -292,6 +331,7 @@ def run_sync_loop(
 				scores=scores,
 				rng=rng,
 				elite_frac=elite_frac,
+				cover_all=cover_all,
 			)
 			print(
 				f"\n=== iteration {it + 1}/{n_iterations}  "
@@ -303,6 +343,9 @@ def run_sync_loop(
 
 			if mode == "slm":
 				for power in powers:
+					if _stop():
+						print("session stopped")
+						break
 					if slm_pack:
 						batch = _run_slm_packed_batch(
 							groups_pts=groups_pts,
@@ -340,6 +383,9 @@ def run_sync_loop(
 						trial_index += len(batch)
 					else:
 						for gi, gpts in enumerate(groups_pts):
+							if _stop():
+								print("session stopped")
+								break
 							row = _run_slm_single_trial(
 								gpts=gpts,
 								point_pool=points,
@@ -377,7 +423,13 @@ def run_sync_loop(
 							trial_index += 1
 			else:
 				for gi, gpts in enumerate(groups_pts):
+					if _stop():
+						print("session stopped")
+						break
 					for power in powers:
+						if _stop():
+							print("session stopped")
+							break
 						row = _run_series_trial(
 							gpts=gpts,
 							point_pool=points,
@@ -1493,6 +1545,48 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("slm_pack", True)
 	opt.setdefault("visual_enabled", False)
 
+	execute_session(opt)
+
+
+def execute_session(
+	opt: dict[str, Any],
+	*,
+	on_trial: Callable[[dict], None] | None = None,
+	show_candidate_gui: bool | None = None,
+	should_stop: Callable[[], bool] | None = None,
+) -> list[dict]:
+	"""Load Fat XML, connect (or dry-run), run the mapping loop.
+
+	Shared by ``mp-sync`` CLI and the desktop GUI.
+	"""
+	from prairie_live.experiment_config import apply_stim_to_meta, powers_to_list
+
+	opt.setdefault("log", "trials.jsonl")
+	opt.setdefault("host", "127.0.0.1")
+	opt.setdefault("port", DEFAULT_PORT)
+	opt.setdefault("password", "0000")
+	opt.setdefault("iterations", 1)
+	opt.setdefault("n_groups", 2)
+	opt.setdefault("group_size", 3)
+	opt.setdefault("seed", 0)
+	opt.setdefault("trigger", "none")
+	opt.setdefault("ttl_width", 0.01)
+	opt.setdefault("inter_trial", 0.5)
+	opt.setdefault("pad_ms", 100.0)
+	opt.setdefault("elite_frac", 0.4)
+	opt.setdefault("f0_s", 0.5)
+	opt.setdefault("f1_s", 1.0)
+	opt.setdefault("frame_poll", 0.05)
+	opt.setdefault("disk_radius", 3)
+	opt.setdefault("repetitions", 1)
+	opt.setdefault("stim_dff_min", 0.0)
+	opt.setdefault("stim_mode", "series")
+	opt.setdefault("slm_pack", True)
+	if "powers" in opt:
+		opt["powers"] = powers_to_list(opt["powers"])
+	else:
+		opt["powers"] = [0.0, 75.0]
+
 	series = opt.get("series")
 	if not series:
 		raise SystemExit("need --series PATH or series in experiment.json")
@@ -1610,7 +1704,7 @@ def main(argv: list[str] | None = None) -> None:
 			print(
 				f"OK: {len(points)} points with X/Y inside visible FOV (0–1)."
 			)
-		return
+		return []
 
 	via_relay = bool(opt.get("via_relay"))
 	# series needs a writable XML path or relay; slm only needs relay or TCP.
@@ -1649,7 +1743,12 @@ def main(argv: list[str] | None = None) -> None:
 				password=str(opt["password"]),
 			)
 
-		run_sync_loop(
+		show = (
+			show_candidate_gui
+			if show_candidate_gui is not None
+			else (not bool(opt.get("no_candidate_gui")))
+		)
+		return run_sync_loop(
 			points=points,
 			meta=meta,
 			pl=pl,
@@ -1679,7 +1778,10 @@ def main(argv: list[str] | None = None) -> None:
 			images_dir=opt.get("images_dir"),
 			visual_cfg=opt,
 			stim_dff_min=float(opt.get("stim_dff_min") or 0.0),
-			show_candidate_gui=not bool(opt.get("no_candidate_gui")),
+			show_candidate_gui=show,
+			on_trial=on_trial,
+			should_stop=should_stop,
+			cover_all=bool(opt.get("cover_all")),
 		)
 	finally:
 		log.close()
