@@ -137,12 +137,22 @@ function ensurePowerTiles(boards) {
 }
 
 function powerListFromBox() {
-  return ($("powers").value || "140")
+  return ($("powers").value || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
     .map((s) => Number(s))
     .filter((n) => !Number.isNaN(n));
+}
+
+function syncTypedPowers() {
+  const want = powerListFromBox().map((p) => String(p));
+  const keep = new Set(want);
+  for (const el of $("fov_grid").querySelectorAll("[data-power]")) {
+    if (!keep.has(el.dataset.power) && !el.querySelector("img").getAttribute("src")) el.remove();
+  }
+  ensurePowerTiles(want.map((p) => ({ power: p, title: `power ${p}`, ready: false })));
+  fitGrid();
 }
 
 async function onXmlFile(ev) {
@@ -166,7 +176,7 @@ async function onXmlFile(ev) {
   $("xml_path").textContent = res.path;
   $("plan").textContent = res.plan || "";
   showXmlFields(res.fields || {});
-  ensurePowerTiles(powerListFromBox().map((p) => ({ power: p, title: `power ${p}`, ready: false })));
+  syncTypedPowers();
 }
 
 function renderCandidates(ranked) {
@@ -207,7 +217,11 @@ async function tick() {
   if (st.has_candidates) renderCandidates(st.ranked);
   if (st.error) $("save_status").textContent = st.error;
   if (st.live) $("live_cap").textContent = st.live.detail || "";
-  if (st.boards && st.boards.length) ensurePowerTiles(st.boards);
+  if (st.boards && st.boards.length) {
+    // Before a run the Powers box decides which tiles exist.
+    const typed = new Set(powerListFromBox().map((p) => String(p)));
+    ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready || typed.has(String(b.power))));
+  }
 }
 
 async function boot() {
@@ -222,9 +236,7 @@ async function boot() {
   fillSelect($("trigger"), d.triggers, null, null, d.trigger);
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
-  $("powers").addEventListener("change", () => {
-    ensurePowerTiles(powerListFromBox().map((p) => ({ power: p, title: `power ${p}`, ready: false })));
-  });
+  $("powers").addEventListener("input", syncTypedPowers);
   $("xml_file").addEventListener("change", onXmlFile);
   $("run").addEventListener("click", async () => {
     const res = await jpost("/api/run", {

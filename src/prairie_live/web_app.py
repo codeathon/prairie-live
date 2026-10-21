@@ -105,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
 					"stim_modes": list(STIM_MODES),
 					"trigger": d["trigger"],
 					"triggers": list(TRIGGERS),
-					"powers": "140",
+					"powers": "",
 					"seed": d["seed"],
 					"repetitions": d["repetitions"],
 					"stim_dff_min": d["stim_dff_min"],
@@ -269,7 +269,7 @@ class Handler(BaseHTTPRequestHandler):
 			series = body.get("series") or STATE.series_path
 			if not series or not Path(series).is_file():
 				raise ValueError("choose a Fat Mark Points XML")
-			powers = parse_powers_field(str(body.get("powers") or "140"))
+			powers = parse_powers_field(str(body.get("powers") or ""))
 			pts = extract_unique_points(load_mark_points_file(series))
 			fields = summarize_fat_xml(series)
 			opt = apply_gui_overrides(
