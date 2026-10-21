@@ -249,3 +249,22 @@ CLI flag names use hyphens (`--via-relay`, `--n-groups`, …).
 | `visual_stim_size_deg` | float | Grating aperture diameter (degrees) |
 | `visual_texture` | string | PsychoPy texture, e.g. `sqr` |
 | `visual_random` | bool | Randomize orientation/contrast each trial |
+
+## Live cell triage (analysis PC)
+
+Relay must already be running. Auto-proposes blobs; you accept or reject.
+Ranking starts after `--min-labels` (default 8) mixed yes/no. Needs `scipy`
+and `scikit-learn` (in `requirements.txt`).
+
+```powershell
+python -m prairie_live triage --relay 10.33.107.221:25100 --out labels
+python -m prairie_live triage --mock --out labels
+```
+
+Keys: `y` accept, `n` reject, `.` skip, `d` redetect, `q` quit. After 8
+labels with both accept and reject, remaining blobs are ranked by P(accept).
+Coefficients print as `criteria: snr +1.8  ...` — those weights are the
+scientist's revealed criteria. `--min-um` / `--max-um` are soma size in
+microns (scaled by `GetState` `micronsPerPixel`). Session log:
+`labels/session.jsonl` and `labels/criteria.txt`.
+
