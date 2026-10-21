@@ -8,7 +8,7 @@
 <body>
   <header>
     <h1>prairie-live mapping</h1>
-    <p class="sub">Web UI — lab defaults, live FOV, per-power grid</p>
+    <span class="sub">live FOV · per-power grid</span>
   </header>
 
   <section class="stage">
@@ -21,21 +21,18 @@
     </div>
   </section>
 
+  <aside class="side">
   <section class="card">
     <h2>Rig</h2>
-    <label>Relay IP
-      <input id="via_relay" type="text" />
-    </label>
-    <div class="status-row">
+    <div class="row">
+      <label>Relay IP <input id="via_relay" type="text" /></label>
       <span id="light" class="light off" title="relay / PrairieView"></span>
-      <span id="relay_detail">checking…</span>
     </div>
-    <label>Serial
-      <select id="serial"></select>
-    </label>
-    <label>Stim mode
-      <select id="stim_mode"></select>
-    </label>
+    <p id="relay_detail" class="muted small">checking…</p>
+    <div class="row">
+      <label>Serial <select id="serial"></select></label>
+      <label>Stim mode <select id="stim_mode"></select></label>
+    </div>
   </section>
 
   <section class="card">
@@ -59,13 +56,13 @@
     </div>
   </section>
 
-  <section class="card">
+  <section class="card xml-card">
     <h2>From Fat XML</h2>
     <p id="fov_note" class="muted"></p>
     <dl id="xml_fields" class="fields"></dl>
   </section>
 
-  <section class="card">
+  <section class="card log-card">
     <h2>Trial log</h2>
     <pre id="log"></pre>
   </section>
@@ -73,12 +70,14 @@
   <section class="card" id="cand_box" hidden>
     <h2>Candidates</h2>
     <p class="muted">Click rows to toggle. Top third starts selected.</p>
+    <div class="table-wrap">
     <table id="cand_table">
       <thead>
         <tr><th></th><th>id</th><th>min power</th><th>ΔF/F</th><th>tercile</th></tr>
       </thead>
       <tbody></tbody>
     </table>
+    </div>
     <div class="row">
       <button id="sel_top" type="button">Select top third</button>
       <button id="sel_clear" type="button">Clear</button>
@@ -86,6 +85,7 @@
     </div>
     <p id="save_status" class="muted"></p>
   </section>
+  </aside>
 
   <script src="/app.js"></script>
 </body>

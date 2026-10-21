@@ -90,6 +90,26 @@ async function refreshLive() {
   } catch (_) {}
 }
 
+// Pick the column count that gives the largest square tile with no scrolling.
+function fitGrid() {
+  const grid = $("fov_grid");
+  const n = grid.children.length || 1;
+  const W = grid.clientWidth;
+  const H = grid.clientHeight;
+  const chrome = 48; // tile title + caption + padding
+  let best = 1;
+  let bestSide = 0;
+  for (let c = 1; c <= n; c++) {
+    const r = Math.ceil(n / c);
+    const side = Math.min(W / c, H / r - chrome);
+    if (side > bestSide) {
+      bestSide = side;
+      best = c;
+    }
+  }
+  grid.style.setProperty("--cols", String(best));
+}
+
 function ensurePowerTiles(boards) {
   const grid = $("fov_grid");
   const have = new Set();
@@ -102,6 +122,7 @@ function ensurePowerTiles(boards) {
       tile.dataset.power = key;
       tile.innerHTML = `<h3></h3><img alt="power ${key}" /><p class="muted"></p>`;
       grid.appendChild(tile);
+      fitGrid();
     }
     const tile = grid.querySelector(`[data-power="${key}"]`);
     tile.querySelector("h3").textContent = b.title || `power ${key}`;
@@ -229,6 +250,8 @@ async function boot() {
     const res = await jpost("/api/save-candidates", { ids: [...picked] });
     $("save_status").textContent = res.ok ? `saved ${res.path}` : res.error || "save failed";
   });
+  fitGrid();
+  window.addEventListener("resize", fitGrid);
   setInterval(refreshRelay, 4000);
   setInterval(refreshLive, 150);
   setInterval(tick, 800);
