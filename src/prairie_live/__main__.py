@@ -15,6 +15,7 @@ _COMMANDS = (
 	"abort",
 	"get-state",
 	"get-motor",
+	"grab-doctor",
 )
 
 
@@ -43,6 +44,11 @@ def main(argv=None) -> None:
 		from prairie_live.sync_loop import main as sync_main
 
 		sync_main(rest)
+		return
+	if command == "grab-doctor":
+		from prairie_live.grab_doctor import main as doctor_main
+
+		doctor_main(rest)
 		return
 	if command == "show-log":
 		from prairie_live.trial_record import main as show_log_main

@@ -69,6 +69,25 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 
 Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 
+### Heartbeat says `NO FRAME raw=None`
+
+PrairieLink's `GetImage`, `GetImage_2` and `ReadImage` all ask PrairieView to
+write pixels into this python.exe's memory (script `-gi` / `-rrd` with a
+process ID and buffer address). When that hand-off fails they return an empty
+array, while scripts and `GetState` keep working. Run the report on the scope
+PC with Live Scan on, and watch PrairieView for an error popup:
+
+```powershell
+python -m prairie_live grab-doctor --password UAKF --channel 1 --rrd
+```
+
+It writes `grab_doctor.txt` (send it to Bruker). If the `direct script -gi`
+lines show `wrote=` with a real `max=`, run the relay with our own buffer:
+
+```powershell
+python -m prairie_live relay --pv-host 127.0.0.1 --password UAKF --channel 1 --fps 12 --grab --grab-api gi
+```
+
 ## Analysis PC — live FOV
 
 **Live Scan alone should already stream the FOV.** Mark Points are not required
