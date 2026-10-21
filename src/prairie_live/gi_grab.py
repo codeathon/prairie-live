@@ -1,12 +1,10 @@
 """Direct script -gi grab: PV writes the image into a buffer we own.
 
-PrairieLink's GetImage / GetImage_2 (script -gi) and ReadImage (-rrd) all
-send PV this process ID plus a buffer address inside python.exe, and PV then
-writes pixels into that address. Scripts and GetState never do that, so they
-keep working when the memory hand-off fails. PV has rejected large addresses
-before ("Unexpected parameter <huge number>"), and PrairieLink picks its own
-buffer, so here the buffer is allocated below 2 GiB and the reply is kept.
-Only works with PV on this PC (it writes into our process memory).
+PrairieLink's GetImage / GetImage_2 (script -gi) and ReadImage (-rrd) send PV
+this process ID plus a buffer address inside python.exe, and PV writes pixels
+there. On the scope PC (PV 6.1.64.15, PrairieLink64 6.0.64.73 from the GAC)
+those COM calls return None in a few ms, while the same -gi sent here fills
+the buffer at both low and high addresses. Only works with PV on this PC.
 """
 
 from __future__ import annotations
