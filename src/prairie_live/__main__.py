@@ -1,4 +1,4 @@
-"""CLI: python -m prairie_live view|relay|mp-sync|gui|tseries|abort|…"""
+"""CLI: python -m prairie_live view|relay|mp-sync|gui|triage|tseries|abort|…"""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ _COMMANDS = (
 	"get-state",
 	"get-motor",
 	"grab-doctor",
+	"triage",
 )
 
 
@@ -55,6 +56,11 @@ def main(argv=None) -> None:
 		from prairie_live.grab_doctor import main as doctor_main
 
 		doctor_main(rest)
+		return
+	if command == "triage":
+		from prairie_live.triage import main as triage_main
+
+		triage_main(rest)
 		return
 	if command == "show-log":
 		from prairie_live.trial_record import main as show_log_main
