@@ -105,8 +105,26 @@ def test_load_mark_points_and_mark_points(tmp_path):
 	assert out["path"] == path
 	assert r.com.calls[0][0] == "load_mark_points_xml"
 	out = r.handle_command({"cmd": "mark_points"})
-	assert out == {"ok": True, "cmd": "mark_points"}
+	assert out == {"ok": True, "cmd": "mark_points", "via": "com"}
 	assert r.com.calls[1] == "mark_points"
+
+
+def test_mark_points_prefers_tcp_script(tmp_path):
+	r = _relay()
+	sent = []
+
+	def fake_tcp(*parts):
+		sent.append(parts)
+		return "ACK\nDONE"
+
+	r._script_command = fake_tcp
+	path = str(tmp_path / "trial.xml")
+	out = r.handle_command({"cmd": "load_mark_points", "xml": "<x/>", "path": path})
+	assert out["ok"] is True and out["path"] == path
+	out = r.handle_command({"cmd": "mark_points"})
+	assert out["ok"] is True and out["via"] == "tcp"
+	assert sent == [("-LoadMarkPoints", path), ("-MarkPoints",)]
+	assert r.com.calls == []
 
 
 def test_mark_all_points_dispatch():

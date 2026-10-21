@@ -353,8 +353,7 @@ class Relay:
 					payload.get("path"),
 				)
 			elif cmd == "mark_points":
-				self._run_script_com(sc.mark_points)
-				return {"ok": True, "cmd": "mark_points"}
+				return self._mark_points(sc)
 			elif cmd == "mark_all_points":
 				parts = payload.get("parts") or []
 				if not isinstance(parts, list) or not parts:
@@ -372,21 +371,12 @@ class Relay:
 	def _load_mark_points(self, xml: str, path: str | None) -> dict:
 		if not xml or not str(xml).strip():
 			raise ValueError("load_mark_points requires xml content")
-		sc = self._script()
-		# Unique path by default — avoids PV "replace existing file?" dialogs.
-		print(f"load_mark_points xml_bytes={len(xml)} path={path!r}")
-		try:
-			out = self._run_script_com(
-				lambda: sc.load_mark_points_xml(xml, path),
-				timeout=_COM_SCRIPT_TIMEOUT_S,
-			)
-			print(f"load_mark_points COM OK → {out.get('path')}")
-			return out
-		except Exception as com_err:
-			print(f"load_mark_points COM failed ({com_err}); trying TCP :1236 …")
 		from prairie_live.com_backend import _unique_mp_path
 
+		# TCP first: it waits for PV's DONE, while COM SendScriptCommands on the
+		# 6.0 PrairieLink against PV 6.1 can return without PV acting on it.
 		disk = _unique_mp_path(path)
+		print(f"load_mark_points xml_bytes={len(xml)} path={disk!r}")
 		parent = os.path.dirname(disk)
 		if parent:
 			os.makedirs(parent, exist_ok=True)
@@ -396,9 +386,34 @@ class Relay:
 			pass
 		with open(disk, "w", encoding="utf-8") as f:
 			f.write(xml)
-		raw = self._script_command("-LoadMarkPoints", disk)
-		print(f"load_mark_points TCP DONE path={disk} {raw[:200]!r}")
-		return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
+		try:
+			raw = self._script_command("-LoadMarkPoints", disk)
+			print(f"load_mark_points TCP DONE path={disk} {raw[:200]!r}")
+			return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
+		except Exception as tcp_err:
+			print(f"load_mark_points TCP failed ({tcp_err}); trying COM …")
+		sc = self._script()
+		out = self._run_script_com(
+			lambda: sc.load_mark_points_xml(xml, path),
+			timeout=_COM_SCRIPT_TIMEOUT_S,
+		)
+		print(f"load_mark_points COM OK → {out.get('path')}")
+		return out
+
+	def _mark_points(self, sc) -> dict:
+		self._n_fired = getattr(self, "_n_fired", 0) + 1
+		n = self._n_fired
+		t0 = time.monotonic()
+		try:
+			raw = self._script_command("-MarkPoints")
+			dt = (time.monotonic() - t0) * 1000.0
+			print(f"mark_points #{n} TCP DONE in {dt:.0f} ms {raw[:120]!r}")
+			return {"ok": True, "cmd": "mark_points", "via": "tcp", "pv": raw}
+		except Exception as tcp_err:
+			print(f"mark_points #{n} TCP failed ({tcp_err}); trying COM …")
+		self._run_script_com(sc.mark_points)
+		print(f"mark_points #{n} COM sent (no PV confirmation)")
+		return {"ok": True, "cmd": "mark_points", "via": "com"}
 
 	def _script_command(self, *parts: str) -> str:
 		"""Mark Points cmds via PrairieLink TCP when COM is unavailable."""
