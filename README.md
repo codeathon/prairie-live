@@ -1,7 +1,7 @@
 # prairie-live
 
 Mark Points closed-loop on a Bruker PrairieView rig: **relay** on the scope PC,
-**mp-sync** on the analysis PC. Substitute your scope IPv4 for `10.33.107.147`.
+**mp-sync** on the analysis PC. Substitute your scope IPv4 for `10.33.107.221`.
 PrairieView script password: Tools → Scripts → Edit Scripts (default `0000`).
 
 ```
@@ -69,6 +69,25 @@ python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --f
 
 Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 
+### Heartbeat says `NO FRAME raw=None`
+
+PrairieLink's `GetImage`, `GetImage_2` and `ReadImage` all ask PrairieView to
+write pixels into this python.exe's memory (script `-gi` / `-rrd` with a
+process ID and buffer address). When that hand-off fails they return an empty
+array, while scripts and `GetState` keep working. Run the report on the scope
+PC with Live Scan on, and watch PrairieView for an error popup:
+
+```powershell
+python -m prairie_live grab-doctor --password UAKF --channel 1 --rrd
+```
+
+It writes `grab_doctor.txt` (send it to Bruker). If the `direct script -gi`
+lines show `wrote=` with a real `max=`, run the relay with our own buffer:
+
+```powershell
+python -m prairie_live relay --pv-host 127.0.0.1 --password UAKF --channel 1 --fps 12 --grab --grab-api gi
+```
+
 ## Analysis PC — live FOV
 
 **Live Scan alone should already stream the FOV.** Mark Points are not required
@@ -101,10 +120,39 @@ empty (wrong `--channel`, or Live not actually filling the PrairieLink buffer).
 `grab 1x1 (not an FOV)` means pull this branch and restart **relay first**, then view.
 
 ```powershell
-python -m prairie_live view --relay 10.33.107.147:25100
-python -m prairie_live view --relay 10.33.107.147:25100 --avg-s 0.5
-python -m prairie_live view --relay 10.33.107.147:25100 --config experiment.json --avg-s 0.5 --window-s 8
+python -m prairie_live view --relay 10.33.107.221:25100
+python -m prairie_live view --relay 10.33.107.221:25100 --avg-s 0.5
+python -m prairie_live view --relay 10.33.107.221:25100 --config experiment.json --avg-s 0.5 --window-s 8
 python -m prairie_live view --mock --series samples/MarkPoints_8fov.xml
+```
+
+## Analysis PC — mapping web UI
+
+Opens `http://127.0.0.1:8765/`. No `experiment.json`. On start it
+connects to `10.33.107.221:25100`, sends `-LiveScan` if PrairieView is
+up, and shows a live FOV tile. Upload a Fat XML to open one tile per
+power in a grid (filled as trials arrive). COM list from hardware
+(default COM3). Stim mode default `slm`. XML fills duration, spiral,
+inter-point delay, and estimated FOV µm.
+
+```powershell
+cd C:\Users\schollab\code\prairie-live
+$env:PYTHONPATH = "$PWD\src"
+python -m prairie_live gui --relay 10.33.107.221:25100
+```
+
+Groups have at least 3 points and cover every point once (8 → 4+4).
+Each group runs at every power. After the last trial, pick candidates
+and **Save XML**.
+
+## Analysis PC — live ROI intensity
+
+In the `view` window, drag a box or click a disk on the FOV to add a gold
+`roi` trace (mean raw counts in that region) next to `fov` / `p99`. `r` clears
+it. `--roi-radius` sets the click-disk radius (default 8 px).
+
+```powershell
+python -m prairie_live view --relay 10.33.107.221:25100 --avg-s 0.5 --roi-radius 8
 ```
 
 ## Analysis PC — run mp-sync
@@ -128,6 +176,9 @@ gratings on for one run.
 | `trials.txt` | Human-readable trial blocks (open this first) |
 | `trial_images/run_…/` | Per-trial `f0.png`, `f1.png`, `dff.png` |
 | `trial_images/run_…/recommendation.txt` | Best group×power summary |
+| `trial_images/run_…/candidates.txt` | Ranked points (lowest stimulating power first) |
+| `trial_images/run_…/candidates_top.xml` | Top-third fat XML for the next `--series` |
+| `trial_images/run_…/next_series.xml` | User-picked candidates from the GUI Save XML button |
 | `trial_images/run_…/summary.txt` | One line per trial |
 
 ## `experiment.json` reference
@@ -139,7 +190,7 @@ CLI flag names use hyphens (`--via-relay`, `--n-groups`, …).
 |-----|------|-------------|
 | `series` | string | Mark Points input: `.xml` or `.gpl` path (FOV-normalized X/Y 0–1 for `stim_mode=slm`) |
 | `scope_xml` | string \| null | Local path on scope PC when not using relay push (usually `null`; use `via_relay` instead) |
-| `via_relay` | string | Relay address for Mark Points + frames, e.g. `10.33.107.147:25100` |
+| `via_relay` | string | Relay address for Mark Points + frames, e.g. `10.33.107.221:25100` |
 | `relay` | string \| null | Alternate relay host for frame scoring only (usually `null`; `via_relay` covers both) |
 | `log` | string | JSONL trial log path (default `trials.jsonl`) |
 | `host` | string | Direct PrairieLink host when not using relay (scope loopback `127.0.0.1`) |
@@ -149,6 +200,8 @@ CLI flag names use hyphens (`--via-relay`, `--n-groups`, …).
 | `n_groups` | int | Number of random point groups per iteration |
 | `group_size` | int | Target points per group (minimum 3 enforced) |
 | `powers` | list[float] | Uncaging laser powers — same scale as PV UI `UncagingLaserPower` (not 0–1) |
+| `repetitions` | int | Fixed Mark Points / SLM repetitions on every generated trial (≥1) |
+| `stim_dff_min` | float | Disk ΔF/F threshold to count a point as stimulated (f0/f1) |
 | `seed` | int | RNG seed for group formation (`0` = deterministic) |
 | `trigger` | string | TTL mode: `serial` (DTR on `serial` port), `wait` (PFI wait), or `none` |
 | `serial` | string | COM port for DTR photostim pulse, e.g. `COM3` |

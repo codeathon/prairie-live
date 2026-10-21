@@ -21,6 +21,8 @@ _CLI_KEYS = (
 	"n_groups",
 	"group_size",
 	"powers",
+	"repetitions",
+	"stim_dff_min",
 	"seed",
 	"trigger",
 	"serial",
@@ -129,6 +131,8 @@ def apply_stim_to_meta(meta: dict[str, Any], cfg: dict[str, Any]) -> dict[str, A
 		out["spiral_revolutions"] = str(cfg["spiral_revolutions"])
 	if cfg.get("duration_ms") is not None:
 		out["duration"] = float(cfg["duration_ms"])
+	if cfg.get("repetitions") is not None:
+		out["repetitions"] = max(int(cfg["repetitions"]), 1)
 	# UI shows ms; series XML commonly stores InitialDelay/InterPointDelay in seconds.
 	if cfg.get("initial_delay_ms") is not None:
 		out["initial_delay_ms"] = float(cfg["initial_delay_ms"])
@@ -193,6 +197,14 @@ def merge_cli_over_config(args_ns: Any, cfg: dict[str, Any]) -> dict[str, Any]:
 		out["powers"] = powers_to_list(out["powers"])
 	elif "powers" not in out:
 		out["powers"] = [0.0, 75.0]
+	if "repetitions" in out:
+		out["repetitions"] = max(int(out["repetitions"]), 1)
+	elif "repetitions" not in out:
+		out["repetitions"] = 1
+	if "stim_dff_min" in out:
+		out["stim_dff_min"] = float(out["stim_dff_min"])
+	elif "stim_dff_min" not in out:
+		out["stim_dff_min"] = 0.0
 	# Stim keys: CLI has no flags yet; config-only for now.
 	for k in _STIM_KEYS:
 		if k in cfg and k not in out:

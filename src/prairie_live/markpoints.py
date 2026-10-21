@@ -390,7 +390,7 @@ def groups_to_xml(groups: list[dict]) -> str:
 		galvo.set("Indices", str(g.get("indices") or _indices_from_points(active_pts)))
 
 		for pt in active_pts:
-			if pt["name"] == points_str and pt.get("x", 0) == 0 and pt.get("y", 0) == 0:
+			if pt.get("name") == points_str and pt.get("x", 0) == 0 and pt.get("y", 0) == 0:
 				if len(active_pts) == 1:
 					continue
 			pt_el = ET.SubElement(galvo, "Point")

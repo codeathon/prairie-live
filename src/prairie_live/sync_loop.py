@@ -45,10 +45,14 @@ def form_groups(
 	scores: dict[str, float] | None = None,
 	rng: random.Random,
 	elite_frac: float = 0.4,
+	cover_all: bool = False,
 ) -> list[list[dict]]:
 	"""
 	Partition points into n_groups of group_size.
 
+	cover_all:
+	  Unique partition — every point once, each group >= group_size (extras
+	  make some groups 4+). No wrap, no duplicate runs.
 	Without scores: shuffle then chunk (with wrap if pool is small).
 	With scores: seed each group with elite responders, fill from the rest.
 	"""
@@ -63,6 +67,33 @@ def form_groups(
 		)
 
 	pool = list(points)
+	if cover_all:
+		from prairie_live.gui_session import group_sizes_for_pool
+
+		sizes = group_sizes_for_pool(
+			len(pool), min_size=group_size, n_groups=n_groups
+		)
+		if scores:
+			ranked = sorted(
+				pool,
+				key=lambda p: scores.get(str(p["id"]), 0.0),
+				reverse=True,
+			)
+			n_elite = max(1, int(len(ranked) * elite_frac))
+			elite = ranked[:n_elite]
+			rest = ranked[n_elite:]
+			rng.shuffle(rest)
+			order = elite + rest
+		else:
+			order = list(pool)
+			rng.shuffle(order)
+		groups = []
+		i = 0
+		for sz in sizes:
+			groups.append(order[i : i + sz])
+			i += sz
+		return groups
+
 	if scores:
 		ranked = sorted(
 			pool,
@@ -97,9 +128,14 @@ def form_groups(
 
 
 def aggregate_point_scores(trials: list[dict]) -> dict[str, float]:
-	"""Mean on-target ΔF/F (or mock score) per stimulated point_id."""
+	"""Mean on-target ΔF/F per point (prefers per-id point_scores)."""
 	acc: dict[str, list[float]] = {}
 	for row in trials:
+		ps = row.get("point_scores")
+		if isinstance(ps, dict) and ps:
+			for pid, val in ps.items():
+				acc.setdefault(str(pid), []).append(float(val))
+			continue
 		score = row.get("score")
 		if score is None:
 			continue
@@ -108,20 +144,20 @@ def aggregate_point_scores(trials: list[dict]) -> dict[str, float]:
 	return {pid: float(np.mean(vals)) for pid, vals in acc.items()}
 
 
-def score_group_dff(
+def score_points_dff(
 	frames_f0: list[np.ndarray],
 	frames_f1: list[np.ndarray],
 	points: list[dict],
 	radius: int = 3,
-) -> float:
-	"""Mean ΔF/F across group points that fall on the imaging FOV."""
+) -> dict[str, float]:
+	"""Per-point disk ΔF/F from the existing f0/f1 grab (omit OOB / dead baseline)."""
 	if not frames_f0 or not frames_f1:
-		return 0.0
+		return {}
 	f0 = np.mean(np.stack(frames_f0, axis=0), axis=0)
 	f1 = np.mean(np.stack(frames_f1, axis=0), axis=0)
-	vals = []
+	out: dict[str, float] = {}
 	n_oob = 0
-	for pt in points:
+	for i, pt in enumerate(points):
 		b = disk_mean(f0, pt["x"], pt["y"], radius)
 		a = disk_mean(f1, pt["x"], pt["y"], radius)
 		if b is None or a is None:
@@ -129,13 +165,24 @@ def score_group_dff(
 			continue
 		if b <= 0:
 			continue
-		vals.append((a - b) / b)
+		out[str(pt.get("id", i))] = float((a - b) / b)
 	if n_oob:
 		print(
 			f"  score: skipped {n_oob}/{len(points)} points outside imaging FOV "
 			f"(X/Y not in ~0–1)"
 		)
-	return float(np.mean(vals)) if vals else 0.0
+	return out
+
+
+def score_group_dff(
+	frames_f0: list[np.ndarray],
+	frames_f1: list[np.ndarray],
+	points: list[dict],
+	radius: int = 3,
+) -> float:
+	"""Mean of per-point f0/f1 disk ΔF/F (same grab as score_points_dff)."""
+	vals = score_points_dff(frames_f0, frames_f1, points, radius=radius)
+	return float(np.mean(list(vals.values()))) if vals else 0.0
 
 
 class JsonlLog:
@@ -212,6 +259,10 @@ def run_sync_loop(
 	images_dir: str | None = None,
 	visual_cfg: Any | None = None,
 	on_trial: Callable[[dict], None] | None = None,
+	stim_dff_min: float = 0.0,
+	show_candidate_gui: bool = True,
+	should_stop: Callable[[], bool] | None = None,
+	cover_all: bool = False,
 ) -> list[dict]:
 	"""
 	Run mapping iterations. Returns all trial rows written this session.
@@ -265,8 +316,14 @@ def run_sync_loop(
 	if mode == "slm":
 		slm_params["trigger_selection"] = trig_sel
 
+	def _stop() -> bool:
+		return bool(should_stop and should_stop())
+
 	try:
 		for it in range(n_iterations):
+			if _stop():
+				print("session stopped")
+				break
 			groups_pts = form_groups(
 				points,
 				n_groups=n_groups,
@@ -274,6 +331,7 @@ def run_sync_loop(
 				scores=scores,
 				rng=rng,
 				elite_frac=elite_frac,
+				cover_all=cover_all,
 			)
 			print(
 				f"\n=== iteration {it + 1}/{n_iterations}  "
@@ -285,6 +343,9 @@ def run_sync_loop(
 
 			if mode == "slm":
 				for power in powers:
+					if _stop():
+						print("session stopped")
+						break
 					if slm_pack:
 						batch = _run_slm_packed_batch(
 							groups_pts=groups_pts,
@@ -322,6 +383,9 @@ def run_sync_loop(
 						trial_index += len(batch)
 					else:
 						for gi, gpts in enumerate(groups_pts):
+							if _stop():
+								print("session stopped")
+								break
 							row = _run_slm_single_trial(
 								gpts=gpts,
 								point_pool=points,
@@ -359,7 +423,13 @@ def run_sync_loop(
 							trial_index += 1
 			else:
 				for gi, gpts in enumerate(groups_pts):
+					if _stop():
+						print("session stopped")
+						break
 					for power in powers:
+						if _stop():
+							print("session stopped")
+							break
 						row = _run_series_trial(
 							gpts=gpts,
 							point_pool=points,
@@ -405,10 +475,49 @@ def run_sync_loop(
 	finally:
 		visual_stim.close()
 
+	from prairie_live.candidate_view import maybe_show_candidates
+	from prairie_live.candidates import write_session_candidates
 	from prairie_live.trial_record import write_session_recommendation
 
 	write_session_recommendation(all_trials, log=log, run_root=run_root)
+	out_dir = run_root if run_root is not None else Path(log.path).parent
+	ranked = write_session_candidates(
+		all_trials,
+		points,
+		meta=meta,
+		stim_dff_min=float(stim_dff_min),
+		log=log,
+		run_root=run_root,
+		out_dir=out_dir,
+	)
+	fov = _last_f0_from_trials(all_trials)
+	xml_out = Path(out_dir) / "next_series.xml"
+	maybe_show_candidates(
+		ranked,
+		meta=meta,
+		fov=fov,
+		out_xml=xml_out,
+		show=bool(show_candidate_gui) and not dry_run,
+	)
 	return all_trials
+
+
+def _last_f0_from_trials(trials: list[dict]) -> np.ndarray | None:
+	for row in reversed(trials):
+		paths = row.get("image_paths") or {}
+		p = paths.get("f0")
+		if not p:
+			continue
+		try:
+			from matplotlib.image import imread
+
+			arr = imread(p)
+			if arr.ndim == 3:
+				return arr[..., 0]
+			return arr
+		except Exception:
+			continue
+	return None
 
 
 def _want_frames(
@@ -555,17 +664,22 @@ def _finish_trial_frames(
 	run_root: Path | None,
 	it: int,
 ) -> None:
-	"""Score + optional PNG dump into <run>/tXXXX/."""
+	"""Score + optional PNG dump into <run>/tXXXX/ (f0/f1 disk ΔF/F)."""
+	row.setdefault("repetitions", 1)
 	if mock_scores:
-		row["score"] = (
-			abs(hash((tuple(row["point_ids"]), row["power"], it))) % 1000 / 1000.0
-		)
+		row["point_scores"] = {
+			str(p["id"]): abs(hash((str(p["id"]), row.get("power"), it))) % 1000 / 1000.0
+			for p in gpts
+		}
+		row["score"] = float(np.mean(list(row["point_scores"].values())))
 		row["score_kind"] = "mock"
 	elif relay is not None and f0_frames and f1_frames:
 		try:
-			row["score"] = score_group_dff(
+			row["point_scores"] = score_points_dff(
 				f0_frames, f1_frames, gpts, radius=disk_radius
 			)
+			vals = list(row["point_scores"].values())
+			row["score"] = float(np.mean(vals)) if vals else 0.0
 			row["score_kind"] = "relay_disk_dff"
 		except Exception as exc:
 			row["score"] = None
@@ -808,6 +922,7 @@ def _run_slm_packed_batch(
 			"score": None,
 			"score_kind": None,
 			"image_paths": None,
+			"repetitions": int(meta.get("repetitions", 1)),
 		}
 		log.write({**row, "phase": "armed"})
 
@@ -1011,6 +1126,7 @@ def _run_slm_single_trial(
 		"score": None,
 		"score_kind": None,
 		"image_paths": None,
+		"repetitions": int(meta.get("repetitions", 1)),
 	}
 	log.write({**row, "phase": "armed"})
 
@@ -1120,6 +1236,7 @@ def _run_series_trial(
 		"score": None,
 		"score_kind": None,
 		"image_paths": None,
+		"repetitions": int(meta.get("repetitions", 1)),
 	}
 	xml = groups_to_xml(series)
 	if scope_xml:
@@ -1299,6 +1416,13 @@ def main(argv: list[str] | None = None) -> None:
 	p.add_argument("--iterations", type=int, default=None)
 	p.add_argument("--n-groups", type=int, default=None)
 	p.add_argument("--group-size", type=int, default=None)
+	p.add_argument("--repetitions", type=int, default=None)
+	p.add_argument("--stim-dff-min", type=float, default=None)
+	p.add_argument(
+		"--no-candidate-gui",
+		action="store_true",
+		help="Write candidates.json/txt/XML only; do not open the FOV picker",
+	)
 	p.add_argument(
 		"--powers",
 		default=None,
@@ -1395,6 +1519,8 @@ def main(argv: list[str] | None = None) -> None:
 	args = p.parse_args(argv)
 
 	opt = merge_cli_over_config(args, cfg)
+	if getattr(args, "no_candidate_gui", False):
+		opt["no_candidate_gui"] = True
 	# Hard fallbacks when neither CLI nor config set a value.
 	opt.setdefault("log", "markpoints_trials.jsonl")
 	opt.setdefault("host", "127.0.0.1")
@@ -1413,9 +1539,53 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("f1_s", 1.0)
 	opt.setdefault("frame_poll", 0.05)
 	opt.setdefault("disk_radius", 3)
+	opt.setdefault("repetitions", 1)
+	opt.setdefault("stim_dff_min", 0.0)
 	opt.setdefault("stim_mode", "series")
 	opt.setdefault("slm_pack", True)
 	opt.setdefault("visual_enabled", False)
+
+	execute_session(opt)
+
+
+def execute_session(
+	opt: dict[str, Any],
+	*,
+	on_trial: Callable[[dict], None] | None = None,
+	show_candidate_gui: bool | None = None,
+	should_stop: Callable[[], bool] | None = None,
+) -> list[dict]:
+	"""Load Fat XML, connect (or dry-run), run the mapping loop.
+
+	Shared by ``mp-sync`` CLI and the desktop GUI.
+	"""
+	from prairie_live.experiment_config import apply_stim_to_meta, powers_to_list
+
+	opt.setdefault("log", "trials.jsonl")
+	opt.setdefault("host", "127.0.0.1")
+	opt.setdefault("port", DEFAULT_PORT)
+	opt.setdefault("password", "0000")
+	opt.setdefault("iterations", 1)
+	opt.setdefault("n_groups", 2)
+	opt.setdefault("group_size", 3)
+	opt.setdefault("seed", 0)
+	opt.setdefault("trigger", "none")
+	opt.setdefault("ttl_width", 0.01)
+	opt.setdefault("inter_trial", 0.5)
+	opt.setdefault("pad_ms", 100.0)
+	opt.setdefault("elite_frac", 0.4)
+	opt.setdefault("f0_s", 0.5)
+	opt.setdefault("f1_s", 1.0)
+	opt.setdefault("frame_poll", 0.05)
+	opt.setdefault("disk_radius", 3)
+	opt.setdefault("repetitions", 1)
+	opt.setdefault("stim_dff_min", 0.0)
+	opt.setdefault("stim_mode", "series")
+	opt.setdefault("slm_pack", True)
+	if "powers" in opt:
+		opt["powers"] = powers_to_list(opt["powers"])
+	else:
+		opt["powers"] = [0.0, 75.0]
 
 	series = opt.get("series")
 	if not series:
@@ -1428,6 +1598,8 @@ def main(argv: list[str] | None = None) -> None:
 	steps = load_mark_points_file(series)
 	points = extract_unique_points(steps)
 	meta = apply_stim_to_meta(template_meta(steps), opt)
+	if opt.get("repetitions") is not None:
+		meta["repetitions"] = max(int(opt["repetitions"]), 1)
 	powers = opt["powers"]
 	src_kind = "gpl" if str(series).lower().endswith(".gpl") else "xml"
 	# Point spiral size from experiment when cloning pool points.
@@ -1532,7 +1704,7 @@ def main(argv: list[str] | None = None) -> None:
 			print(
 				f"OK: {len(points)} points with X/Y inside visible FOV (0–1)."
 			)
-		return
+		return []
 
 	via_relay = bool(opt.get("via_relay"))
 	# series needs a writable XML path or relay; slm only needs relay or TCP.
@@ -1571,7 +1743,12 @@ def main(argv: list[str] | None = None) -> None:
 				password=str(opt["password"]),
 			)
 
-		run_sync_loop(
+		show = (
+			show_candidate_gui
+			if show_candidate_gui is not None
+			else (not bool(opt.get("no_candidate_gui")))
+		)
+		return run_sync_loop(
 			points=points,
 			meta=meta,
 			pl=pl,
@@ -1600,6 +1777,11 @@ def main(argv: list[str] | None = None) -> None:
 			slm_pack=bool(opt.get("slm_pack", True)),
 			images_dir=opt.get("images_dir"),
 			visual_cfg=opt,
+			stim_dff_min=float(opt.get("stim_dff_min") or 0.0),
+			show_candidate_gui=show,
+			on_trial=on_trial,
+			should_stop=should_stop,
+			cover_all=bool(opt.get("cover_all")),
 		)
 	finally:
 		log.close()
