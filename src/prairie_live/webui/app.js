@@ -176,9 +176,11 @@ function renderCandidates(ranked) {
   tb.innerHTML = "";
   if (!lastRanked.length) {
     box.hidden = true;
+    $("side").classList.remove("has-cands");
     return;
   }
   box.hidden = false;
+  $("side").classList.add("has-cands");
   if (!picked.size) {
     lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(String(r.id)));
   }
