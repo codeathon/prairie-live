@@ -90,7 +90,9 @@ def _orient_display(img: np.ndarray) -> np.ndarray:
 				out = to_u8(out)
 		return np.stack([out, out, out], axis=-1)
 	core = arr[..., :3]
-	return np.ascontiguousarray(np.fliplr(np.rot90(core, -1)))
+	return np.ascontiguousarray(
+		np.stack([orient_fov(core[..., c]) for c in range(3)], axis=-1)
+	)
 
 
 def mark_style(mark: dict[str, Any]) -> dict[str, Any]:

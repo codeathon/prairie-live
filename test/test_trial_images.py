@@ -366,3 +366,13 @@ def test_fit_fov_axes_noop_without_axes():
 	im = _FakeIm()
 	_fit_fov_axes(im, 8, 8)
 	assert im.axes is None
+
+
+def test_power_tile_rgb_matches_live_orientation():
+	from prairie_live.power_view import _orient_display
+
+	rgb = np.zeros((4, 6, 3), dtype=np.float32)
+	rgb[-1, 0] = 1.0
+	out = _orient_display(rgb)
+	assert out.shape == (4, 6, 3)
+	assert np.array_equal(out[..., 0], orient_fov(rgb[..., 0]))
