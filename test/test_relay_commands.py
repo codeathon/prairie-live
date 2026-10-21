@@ -298,3 +298,26 @@ def test_grab_one_uses_direct_gi_when_selected():
 	r._grab_one()
 	assert r.latest_frame().shape == (64, 128)
 	assert int(r.latest_frame().max()) == 9
+
+
+def test_script_command_reuses_gi_link_instead_of_new_login():
+	r = _relay()
+
+	class Link:
+		timeout = 10.0
+
+		def __init__(self):
+			self.sent = []
+
+		def send_command(self, *parts):
+			self.sent.append((parts, self.timeout))
+			return "ACK\nDONE"
+
+	class Gi:
+		link = Link()
+
+	r._gi = Gi()
+	out = r.handle_command({"cmd": "mark_points"})
+	assert out["via"] == "tcp"
+	assert Gi.link.sent == [(("-MarkPoints",), 60.0)]
+	assert Gi.link.timeout == 10.0

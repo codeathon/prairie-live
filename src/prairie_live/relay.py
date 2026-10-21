@@ -210,7 +210,8 @@ class Relay:
 	def _gi_frame(self):
 		h, w = self._gi_wh
 		try:
-			frame = self._gi.grab(self.channel, w, h).frame
+			with self._script_lock:
+				frame = self._gi.grab(self.channel, w, h).frame
 		except Exception as e:
 			self._gi.last_error = f"-gi {type(e).__name__}: {e}"
 			time.sleep(0.2)
@@ -416,20 +417,21 @@ class Relay:
 		return {"ok": True, "cmd": "mark_points", "via": "com"}
 
 	def _script_command(self, *parts: str) -> str:
-		"""Mark Points cmds via PrairieLink TCP when COM is unavailable."""
+		"""Script cmd on the -gi grab link; PV parses a second login as a command."""
+		if self._gi is None:
+			# A fresh socket would resend the password into PV's script parser
+			# ("Unexpected parameter <password>"); let the caller use COM.
+			raise RuntimeError("no shared PV script link (run with --grab-api gi)")
 		cmd = SOH.join(parts)
 		print(f"script TCP send: {cmd[:120]!r}")
+		link = self._gi.link
 		with self._script_lock:
-			pl = PrairieLink(
-				host=self.pv_host,
-				port=PV_SCRIPT_PORT,
-				password=self.password,
-				timeout=60.0,
-			)
+			old = link.timeout
+			link.timeout = 60.0
 			try:
-				return pl.send_command(*parts)
+				return link.send_command(*parts)
 			finally:
-				pl.close()
+				link.timeout = old
 
 
 def _peer(conn: socket.socket) -> str:
