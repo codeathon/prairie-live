@@ -1,4 +1,4 @@
-"""Continuous live display (rolling stack mean). Keys: t T-series, a abort, l, q."""
+"""Live FOV (rolling stack mean) + traces. Keys: t/a/l/q; drag box / click disk ROI, r reset."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 
+from prairie_live.roi_trace import DiskRoi, IntensityBuffer, RectRoi, roi_label, roi_mean
 from prairie_live.trial_images import FrameBuffer, disk_mean, draw_point_rings, to_u8
 
 
@@ -85,33 +86,6 @@ class MockScope:
 			"axis": axis.upper(),
 			"value": 0.0,
 		}
-
-
-class IntensityBuffer:
-	"""Newest-on-the-right rolling scalar samples (raw PMT counts)."""
-
-	def __init__(self, n: int):
-		if n < 1:
-			raise ValueError("n must be >= 1")
-		self.n = n
-		self._data = np.zeros(n, dtype=np.float32)
-		self._i = 0
-		self._filled = 0
-
-	def push(self, value: float) -> None:
-		self._data[self._i % self.n] = np.float32(value)
-		self._i += 1
-		if self._filled < self.n:
-			self._filled += 1
-
-	def __len__(self) -> int:
-		return self._filled
-
-	def as_array(self) -> np.ndarray:
-		if self._filled < self.n:
-			return self._data[: self._filled].copy()
-		start = self._i % self.n
-		return np.concatenate((self._data[start:], self._data[:start]))
 
 
 def _load_view_points(series: str | None, config: str | None, disk_radius: int | None):
@@ -212,6 +186,11 @@ def _update_traces(frame: np.ndarray, traces: dict) -> None:
 		vals.append(m)
 	if vals and "pool" in traces["buffers"]:
 		_push_scalar(traces, "pool", float(np.mean(vals)))
+	roi = traces.get("roi")
+	if roi is not None:
+		m = roi_mean(frame, roi)
+		if m is not None:
+			_push_scalar(traces, "roi", m)
 	_set_trace_ylim(traces["ax"], traces["buffers"])
 
 
@@ -293,11 +272,13 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 	fps = state["n"] / dt if dt > 0 else 0
 	n_pts = len(points)
 	tag = _live_tag(state, frame)
+	roi = (traces or {}).get("roi")
+	roi_txt = f"{roi_label(roi)}  " if roi is not None else ""
 	# max=0 on a 512² title means grab never saw PMT data (wrong channel / not Live).
 	# STALE means Live in PV is not filling the PrairieLink buffer — press l.
 	_apply_status(
 		title,
-		f"{w}x{h}  {tag}  avg {len(buf)}/{buf.n}  pts={n_pts}  "
+		f"{w}x{h}  {tag}  avg {len(buf)}/{buf.n}  pts={n_pts}  {roi_txt}"
 		f"max={float(frame.max()):.0f}  {fps:.1f} fps  t/a/l/q",
 		state,
 	)
@@ -345,6 +326,9 @@ def _fill_trace_axis(ax, points: list, n: int, dt: float, radius: int) -> dict:
 	buffers["pool"] = IntensityBuffer(n)
 	(pool_line,) = ax.plot([], [], lw=2.2, color="0.1", label="pool")
 	lines["pool"] = pool_line
+	buffers["roi"] = IntensityBuffer(n)
+	(roi_line,) = ax.plot([], [], lw=1.8, color="gold", label="roi")
+	lines["roi"] = roi_line
 	ax.legend(loc="upper left", fontsize=8, ncol=2)
 	return {
 		"points": points,
@@ -353,10 +337,81 @@ def _fill_trace_axis(ax, points: list, n: int, dt: float, radius: int) -> dict:
 		"lines": lines,
 		"ax": ax,
 		"dt": dt,
+		"roi": None,
 	}
 
 
-def _bind_viewer_keys(client, fig) -> None:
+def _sync_overlay(rect, circ, roi: RectRoi | DiskRoi | None) -> None:
+	"""Show the matching artist; hide the other when ROI kind switches."""
+	if isinstance(roi, RectRoi):
+		rect.set_xy((min(roi.x0, roi.x1), min(roi.y0, roi.y1)))
+		rect.set_width(abs(roi.x1 - roi.x0))
+		rect.set_height(abs(roi.y1 - roi.y0))
+		rect.set_visible(True)
+		circ.set_visible(False)
+		return
+	if isinstance(roi, DiskRoi):
+		circ.center = (roi.cx, roi.cy)
+		circ.radius = float(roi.radius)
+		circ.set_visible(True)
+		rect.set_visible(False)
+		return
+	rect.set_visible(False)
+	circ.set_visible(False)
+
+
+def _set_roi(traces: dict, roi: RectRoi | DiskRoi | None, rect=None, circ=None) -> None:
+	# New region → drop the old trace so the y-scale is not a mix of two ROIs.
+	traces["roi"] = roi
+	traces["buffers"]["roi"].clear()
+	traces["lines"]["roi"].set_data([], [])
+	if rect is not None and circ is not None:
+		_sync_overlay(rect, circ, roi)
+
+
+# Display-pixel span: below → click disk; at/above → RectangleSelector box.
+_CLICK_PX = 5
+
+
+def _bind_roi_input(fig, ax_img, set_roi, roi_radius: int):
+	"""Drag a rectangle or click a disk; keep the two gestures from overlapping."""
+	from matplotlib.widgets import RectangleSelector
+
+	press: dict = {"at": None}
+
+	def on_rect(eclick, erelease) -> None:
+		if eclick.xdata is None or erelease.xdata is None:
+			return
+		set_roi(RectRoi(eclick.xdata, eclick.ydata, erelease.xdata, erelease.ydata))
+
+	def on_press(event) -> None:
+		if event.inaxes is ax_img and event.xdata is not None:
+			press["at"] = (event.x, event.y)
+
+	def on_release(event) -> None:
+		at, press["at"] = press["at"], None
+		if at is None or event.inaxes is not ax_img or event.xdata is None:
+			return
+		if abs(event.x - at[0]) < _CLICK_PX and abs(event.y - at[1]) < _CLICK_PX:
+			set_roi(DiskRoi(event.xdata, event.ydata, roi_radius))
+
+	selector = RectangleSelector(
+		ax_img,
+		on_rect,
+		useblit=False,
+		button=[1],
+		minspanx=_CLICK_PX,
+		minspany=_CLICK_PX,
+		spancoords="pixels",
+		interactive=False,
+		props=dict(facecolor="none", edgecolor="yellow", linewidth=1.2),
+	)
+	fig.canvas.mpl_connect("button_press_event", on_press)
+	fig.canvas.mpl_connect("button_release_event", on_release)
+	return selector
+
+
+def _bind_viewer_keys(client, fig, on_reset=None) -> None:
 	import matplotlib.pyplot as plt
 
 	def on_key(event) -> None:
@@ -366,6 +421,8 @@ def _bind_viewer_keys(client, fig) -> None:
 			print(client.abort())
 		elif event.key == "l":
 			print(client.start_live())
+		elif event.key == "r" and on_reset is not None:
+			on_reset()
 		elif event.key in ("q", "escape"):
 			plt.close(fig)
 
@@ -379,6 +436,7 @@ def run_viewer(
 	points: list | None = None,
 	disk_radius: int = 3,
 	window_s: float = 8.0,
+	roi_radius: int = 8,
 ) -> None:
 	import matplotlib.pyplot as plt
 	from matplotlib.animation import FuncAnimation
@@ -394,7 +452,7 @@ def run_viewer(
 	ax_img.set_facecolor("#111111")
 	im = ax_img.imshow(np.zeros((512, 512, 3), dtype=np.uint8), origin="upper")
 	# Yellow on the image — axes title on a black FOV was easy to miss.
-	wait = "waiting for frames from relay  (t/a/l/q)"
+	wait = "waiting for frames from relay  (drag/click ROI, r reset, t/a/l/q)"
 	title = ax_img.set_title(wait, color="#ffee55", fontsize=12)
 	hud = ax_img.text(
 		0.02,
@@ -414,7 +472,19 @@ def run_viewer(
 	traces = _fill_trace_axis(
 		ax_tr, points, _avg_n(window_s, interval_ms), dt, disk_radius
 	)
-	_bind_viewer_keys(client, fig)
+	from matplotlib.patches import Circle, Rectangle
+
+	rect = Rectangle((0, 0), 0, 0, fill=False, edgecolor="gold", lw=1.4, visible=False)
+	circ = Circle((0, 0), 1, fill=False, edgecolor="gold", lw=1.4, visible=False)
+	ax_img.add_patch(rect)
+	ax_img.add_patch(circ)
+
+	def set_roi(roi) -> None:
+		_set_roi(traces, roi, rect, circ)
+		fig.canvas.draw_idle()
+
+	selector = _bind_roi_input(fig, ax_img, set_roi, roi_radius)
+	_bind_viewer_keys(client, fig, on_reset=lambda: set_roi(None))
 	state = {
 		"n": 0,
 		"t0": time.monotonic(),
@@ -436,6 +506,7 @@ def run_viewer(
 		fig, update, interval=interval_ms, blit=False, cache_frame_data=False
 	)
 	fig._prairie_anim = anim
+	fig._prairie_roi_selector = selector
 	plt.show()
 
 
@@ -461,6 +532,9 @@ def main(argv=None) -> None:
 		default=8.0,
 		help="trace window length (seconds)",
 	)
+	p.add_argument(
+		"--roi-radius", type=int, default=8, help="pixel radius for click-to-place disk ROI"
+	)
 	p.add_argument("--mock", action="store_true")
 	args = p.parse_args(argv)
 	print("prairie-live view HUD v4 — yellow overlay + window title show max=", flush=True)
@@ -481,6 +555,7 @@ def main(argv=None) -> None:
 			points=points,
 			disk_radius=radius,
 			window_s=args.window_s,
+			roi_radius=args.roi_radius,
 		)
 	finally:
 		client.disconnect()

@@ -145,6 +145,16 @@ Groups have at least 3 points and cover every point once (8 → 4+4).
 Each group runs at every power. After the last trial, pick candidates
 and **Save XML**.
 
+## Analysis PC — live ROI intensity
+
+In the `view` window, drag a box or click a disk on the FOV to add a gold
+`roi` trace (mean raw counts in that region) next to `fov` / `p99`. `r` clears
+it. `--roi-radius` sets the click-disk radius (default 8 px).
+
+```powershell
+python -m prairie_live view --relay 10.33.107.221:25100 --avg-s 0.5 --roi-radius 8
+```
+
 ## Analysis PC — run mp-sync
 
 Edit `experiment.json` (series path, relay IP, COM port, powers, etc.), then:
