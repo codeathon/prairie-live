@@ -325,3 +325,25 @@ def test_stale_readimage_switches_to_getimage2(monkeypatch):
 	assert pl.gi2 == [(1, 32, 32)]
 	assert third is not None
 	assert third.shape == (32, 32)
+
+
+def test_send_raises_when_pv_rejects_script():
+	import pytest
+
+	from prairie_live.com_backend import PrairieCom
+
+	class _PL:
+		def __init__(self, ok):
+			self.ok = ok
+
+		def SendScriptCommands(self, cmd):
+			return self.ok
+
+	com = PrairieCom("127.0.0.1")
+	com._pl = _PL(True)
+	com.send("-LiveScan")
+	com._pl = _PL(None)
+	com.send("-LiveScan")
+	com._pl = _PL(False)
+	with pytest.raises(RuntimeError, match="rejected"):
+		com.send("-MarkAllPoints 1 False 0.5 0.5 100 Monaco 160 None")

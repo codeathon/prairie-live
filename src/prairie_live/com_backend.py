@@ -405,7 +405,11 @@ class PrairieCom:
 
 	def send(self, cmd: str) -> None:
 		with self._io:
-			self._require().SendScriptCommands(cmd)
+			ok = self._require().SendScriptCommands(cmd)
+		# False = PV refused the script (bad token, wrong laser name, busy);
+		# None on builds that do not report, so only an explicit False fails.
+		if ok is False:
+			raise RuntimeError(f"PrairieView rejected script command: {cmd[:200]}")
 
 	def get_state(
 		self, key: str, index: str | None = None, subindex: str | None = None

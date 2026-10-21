@@ -98,10 +98,11 @@ def apply_gui_overrides(
 	via_relay: str | None = None,
 	serial: str | None = None,
 	stim_mode: str | None = None,
+	trigger: str | None = None,
 	xml_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
 	"""Lab defaults (not experiment.json) plus the form / XML fields."""
-	from prairie_live.lab_defaults import STIM_MODES, lab_defaults
+	from prairie_live.lab_defaults import STIM_MODES, TRIGGERS, lab_defaults
 
 	opt = lab_defaults()
 	if cfg:
@@ -125,6 +126,11 @@ def apply_gui_overrides(
 	if serial:
 		opt["serial"] = serial
 		opt["trigger"] = "serial"
+	if trigger:
+		trig = str(trigger).lower()
+		if trig not in TRIGGERS:
+			raise ValueError(f"trigger must be one of {TRIGGERS}")
+		opt["trigger"] = trig
 	if stim_mode:
 		mode = str(stim_mode).lower()
 		if mode not in STIM_MODES:

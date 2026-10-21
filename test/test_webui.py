@@ -208,3 +208,21 @@ def test_web_ui_parse_xml_opens_power_plan(tmp_path):
 		assert all(b["ready"] is False for b in st["boards"])
 	finally:
 		httpd.shutdown()
+
+
+def test_gui_trigger_none_overrides_serial():
+	from prairie_live.gui_session import apply_gui_overrides
+
+	opt = apply_gui_overrides(
+		series="x.gpl",
+		powers=[160.0],
+		seed=0,
+		repetitions=1,
+		stim_dff_min=0.0,
+		n_points=6,
+		serial="COM3",
+		stim_mode="series",
+		trigger="none",
+	)
+	assert opt["trigger"] == "none"
+	assert opt["stim_mode"] == "series"

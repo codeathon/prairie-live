@@ -219,6 +219,7 @@ async function boot() {
   $("stim_dff_min").value = d.stim_dff_min;
   fillSelect($("serial"), d.com_ports, "device", (p) => `${p.device} — ${p.description}`, d.serial);
   fillSelect($("stim_mode"), d.stim_modes, null, null, d.stim_mode);
+  fillSelect($("trigger"), d.triggers, null, null, d.trigger);
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
   $("powers").addEventListener("change", () => {
@@ -235,6 +236,7 @@ async function boot() {
       via_relay: $("via_relay").value,
       serial: $("serial").value,
       stim_mode: $("stim_mode").value,
+      trigger: $("trigger").value,
     });
     if (!res.ok) $("save_status").textContent = res.error || "run failed";
   });

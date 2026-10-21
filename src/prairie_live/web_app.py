@@ -19,7 +19,7 @@ from prairie_live.gui_session import (
 	planned_trial_count,
 	trial_log_line,
 )
-from prairie_live.lab_defaults import DEFAULT_RELAY, DEFAULT_SERIAL, STIM_MODES, lab_defaults
+from prairie_live.lab_defaults import DEFAULT_RELAY, DEFAULT_SERIAL, STIM_MODES, TRIGGERS, lab_defaults
 from prairie_live.live_feed import LiveFeed
 from prairie_live.markpoints import extract_unique_points, load_mark_points_file
 from prairie_live.power_view import board_state, render_board_png, unique_powers
@@ -101,6 +101,8 @@ class Handler(BaseHTTPRequestHandler):
 					"serial": d["serial"],
 					"stim_mode": d["stim_mode"],
 					"stim_modes": list(STIM_MODES),
+					"trigger": d["trigger"],
+					"triggers": list(TRIGGERS),
 					"powers": "140",
 					"seed": d["seed"],
 					"repetitions": d["repetitions"],
@@ -279,6 +281,7 @@ class Handler(BaseHTTPRequestHandler):
 				via_relay=body.get("via_relay") or DEFAULT_RELAY,
 				serial=body.get("serial") or DEFAULT_SERIAL,
 				stim_mode=body.get("stim_mode") or "slm",
+				trigger=body.get("trigger") or "serial",
 				xml_fields=fields,
 			)
 			n_t = planned_trial_count(len(pts), powers, n_groups=int(opt["n_groups"]))
@@ -296,7 +299,8 @@ class Handler(BaseHTTPRequestHandler):
 			STATE.append(
 				f"start  {len(pts)} pts  groups={opt['n_groups']}  "
 				f"each group at {powers}  relay={opt['via_relay']}  "
-				f"COM={opt['serial']}  mode={opt['stim_mode']}  trials={n_t}"
+				f"COM={opt['serial']}  mode={opt['stim_mode']}  "
+				f"trigger={opt['trigger']}  trials={n_t}"
 			)
 
 			def work() -> None:

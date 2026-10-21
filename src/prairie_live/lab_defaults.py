@@ -10,6 +10,8 @@ DEFAULT_RELAY = os.environ.get("PRAIRIE_LIVE_RELAY") or "10.33.107.221:25100"
 DEFAULT_SERIAL = "COM3"
 DEFAULT_STIM_MODE = "slm"
 STIM_MODES = ("slm", "series")
+# serial: PV waits on PFI1 for our DTR pulse. none: PV fires as soon as the command lands.
+TRIGGERS = ("serial", "none")
 
 
 def lab_defaults() -> dict[str, Any]:
