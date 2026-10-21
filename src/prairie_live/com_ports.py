@@ -26,9 +26,16 @@ def list_com_ports(*, default: str = DEFAULT_SERIAL) -> list[dict[str, str]]:
 			)
 	except Exception:
 		pass
-	if default and default.upper() not in seen:
-		ports.insert(
-			0,
-			{"device": default, "description": f"{default} (lab default)"},
-		)
+	# Only fall back to the lab default when pyserial sees nothing; listing a
+	# missing COM3 first made every GUI run pulse a port that does not exist.
+	if not ports and default:
+		ports.append({"device": default, "description": f"{default} (not detected)"})
 	return ports
+
+
+def pick_serial(ports: list[dict[str, str]], preferred: str = DEFAULT_SERIAL) -> str:
+	"""Preferred port if this PC has it, else the first real port."""
+	for p in ports:
+		if p["device"].upper() == str(preferred).upper():
+			return p["device"]
+	return ports[0]["device"] if ports else preferred

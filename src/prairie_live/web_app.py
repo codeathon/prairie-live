@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from prairie_live.com_ports import list_com_ports
+from prairie_live.com_ports import list_com_ports, pick_serial
 from prairie_live.gui_session import (
 	apply_gui_overrides,
 	group_sizes_for_pool,
@@ -94,6 +94,8 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		if u.path == "/api/defaults":
 			d = lab_defaults()
+			ports = list_com_ports()
+			d["serial"] = pick_serial(ports, d["serial"])
 			_json(
 				self,
 				{
@@ -107,7 +109,7 @@ class Handler(BaseHTTPRequestHandler):
 					"seed": d["seed"],
 					"repetitions": d["repetitions"],
 					"stim_dff_min": d["stim_dff_min"],
-					"com_ports": list_com_ports(),
+					"com_ports": ports,
 					"relay": probe_relay(DEFAULT_RELAY),
 				},
 			)

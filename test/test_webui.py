@@ -42,10 +42,18 @@ def test_apply_overrides_without_json():
 	assert opt["n_groups"] == 2
 
 
-def test_com_ports_always_offer_com3():
-	ports = list_com_ports()
-	devs = {p["device"].upper() for p in ports}
-	assert "COM3" in devs
+def test_com_ports_never_empty():
+	assert list_com_ports()
+
+
+def test_pick_serial_uses_a_port_this_pc_has():
+	from prairie_live.com_ports import pick_serial
+
+	only_com1 = [{"device": "COM1", "description": "Communications Port (COM1)"}]
+	assert pick_serial(only_com1, "COM3") == "COM1"
+	both = only_com1 + [{"device": "COM3", "description": "USB"}]
+	assert pick_serial(both, "COM3") == "COM3"
+	assert pick_serial([], "COM3") == "COM3"
 
 
 def test_xml_summary_from_sample():
