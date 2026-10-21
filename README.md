@@ -1,7 +1,7 @@
 # prairie-live
 
 Mark Points closed-loop on a Bruker PrairieView rig: **relay** on the scope PC,
-**mp-sync** on the analysis PC. Substitute your scope IPv4 for `10.33.107.147`.
+**mp-sync** on the analysis PC. Substitute your scope IPv4 for `10.33.107.221`.
 PrairieView script password: Tools → Scripts → Edit Scripts (default `0000`).
 
 ```
@@ -101,16 +101,16 @@ empty (wrong `--channel`, or Live not actually filling the PrairieLink buffer).
 `grab 1x1 (not an FOV)` means pull this branch and restart **relay first**, then view.
 
 ```powershell
-python -m prairie_live view --relay 10.33.107.147:25100
-python -m prairie_live view --relay 10.33.107.147:25100 --avg-s 0.5
-python -m prairie_live view --relay 10.33.107.147:25100 --config experiment.json --avg-s 0.5 --window-s 8
+python -m prairie_live view --relay 10.33.107.221:25100
+python -m prairie_live view --relay 10.33.107.221:25100 --avg-s 0.5
+python -m prairie_live view --relay 10.33.107.221:25100 --config experiment.json --avg-s 0.5 --window-s 8
 python -m prairie_live view --mock --series samples/MarkPoints_8fov.xml
 ```
 
 ## Analysis PC — mapping web UI
 
 Opens `http://127.0.0.1:8765/`. No `experiment.json`. On start it
-connects to `10.33.107.147:25100`, sends `-LiveScan` if PrairieView is
+connects to `10.33.107.221:25100`, sends `-LiveScan` if PrairieView is
 up, and shows a live FOV tile. Upload a Fat XML to open one tile per
 power in a grid (filled as trials arrive). COM list from hardware
 (default COM3). Stim mode default `slm`. XML fills duration, spiral,
@@ -119,7 +119,7 @@ inter-point delay, and estimated FOV µm.
 ```powershell
 cd C:\Users\schollab\code\prairie-live
 $env:PYTHONPATH = "$PWD\src"
-python -m prairie_live gui
+python -m prairie_live gui --relay 10.33.107.221:25100
 ```
 
 Groups have at least 3 points and cover every point once (8 → 4+4).
@@ -161,7 +161,7 @@ CLI flag names use hyphens (`--via-relay`, `--n-groups`, …).
 |-----|------|-------------|
 | `series` | string | Mark Points input: `.xml` or `.gpl` path (FOV-normalized X/Y 0–1 for `stim_mode=slm`) |
 | `scope_xml` | string \| null | Local path on scope PC when not using relay push (usually `null`; use `via_relay` instead) |
-| `via_relay` | string | Relay address for Mark Points + frames, e.g. `10.33.107.147:25100` |
+| `via_relay` | string | Relay address for Mark Points + frames, e.g. `10.33.107.221:25100` |
 | `relay` | string \| null | Alternate relay host for frame scoring only (usually `null`; `via_relay` covers both) |
 | `log` | string | JSONL trial log path (default `trials.jsonl`) |
 | `host` | string | Direct PrairieLink host when not using relay (scope loopback `127.0.0.1`) |

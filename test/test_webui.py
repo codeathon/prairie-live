@@ -16,7 +16,7 @@ from prairie_live.xml_summary import summarize_fat_xml
 
 def test_lab_defaults_no_experiment_json():
 	d = lab_defaults()
-	assert d["via_relay"] == "10.33.107.147:25100"
+	assert d["via_relay"] == "10.33.107.221:25100"
 	assert d["serial"] == "COM3"
 	assert d["stim_mode"] == "slm"
 	assert "slm" in STIM_MODES and "series" in STIM_MODES

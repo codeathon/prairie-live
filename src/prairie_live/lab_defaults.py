@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-DEFAULT_RELAY = "10.33.107.147:25100"
+# Scope DHCP address changes; `gui --relay` / PRAIRIE_LIVE_RELAY override it.
+DEFAULT_RELAY = os.environ.get("PRAIRIE_LIVE_RELAY") or "10.33.107.221:25100"
 DEFAULT_SERIAL = "COM3"
 DEFAULT_STIM_MODE = "slm"
 STIM_MODES = ("slm", "series")
