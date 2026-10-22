@@ -51,10 +51,35 @@ def test_eight_points_uses_every_point_once():
 	assert set(ids) == {str(p["id"]) for p in pts}
 	plan = plan_group_power_trials(groups, powers)
 	assert len(plan) == 6
-	for gi in range(2):
-		assert [c["power"] for c in plan if c["group_index"] == gi] == powers
+	# Full FOV per power, then next power.
+	assert [c["power"] for c in plan] == [75.0, 75.0, 140.0, 140.0, 200.0, 200.0]
+	assert [c["group_index"] for c in plan] == [0, 1, 0, 1, 0, 1]
 	for pwr in powers:
 		assert {c["group_index"] for c in plan if c["power"] == pwr} == {0, 1}
+	from prairie_live.gui_session import point_power_pairs
+
+	want = {(str(p["id"]), pwr) for p in pts for pwr in powers}
+	assert point_power_pairs(groups, powers) == want
+
+
+def test_fifteen_points_every_point_every_power():
+	pts = [{"id": str(i), "x": 0.1 * i, "y": 0.1} for i in range(1, 16)]
+	powers = [40.0, 80.0, 160.0]
+	assert n_groups_for_pool(15) == 5
+	assert planned_trial_count(15, powers) == 15
+	groups = form_groups(
+		pts,
+		n_groups=5,
+		group_size=GROUP_SIZE,
+		rng=random.Random(1),
+		cover_all=True,
+	)
+	assert [len(g) for g in groups] == [3, 3, 3, 3, 3]
+	from prairie_live.gui_session import point_power_pairs
+
+	want = {(str(p["id"]), pwr) for p in pts for pwr in powers}
+	assert point_power_pairs(groups, powers) == want
+	assert len(want) == 15 * 3
 
 
 def test_parse_powers_dedupes_preserve_order():

@@ -61,13 +61,26 @@ def plan_group_power_trials(
 	groups: list[list[dict[str, Any]]],
 	powers: list[float],
 ) -> list[dict[str, Any]]:
-	"""Cartesian product: every group at every power. Order = group, then power."""
+	"""Every group at every power. Order = power, then group (full FOV per power)."""
 	out: list[dict[str, Any]] = []
 	pwr = [float(p) for p in powers]
-	for gi, gpts in enumerate(groups):
-		ids = [str(p["id"]) for p in gpts]
-		for power in pwr:
+	for power in pwr:
+		for gi, gpts in enumerate(groups):
+			ids = [str(p["id"]) for p in gpts]
 			out.append({"group_index": gi, "point_ids": ids, "power": power})
+	return out
+
+
+def point_power_pairs(
+	groups: list[list[dict[str, Any]]],
+	powers: list[float],
+) -> set[tuple[str, float]]:
+	"""(point id, power) pairs the plan will fire — one of each when cover_all."""
+	out: set[tuple[str, float]] = set()
+	for step in plan_group_power_trials(groups, powers):
+		pwr = float(step["power"])
+		for pid in step["point_ids"]:
+			out.add((pid, pwr))
 	return out
 
 

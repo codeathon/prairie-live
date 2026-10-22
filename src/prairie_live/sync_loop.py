@@ -423,11 +423,12 @@ def run_sync_loop(
 							all_trials.append(row)
 							trial_index += 1
 			else:
-				for gi, gpts in enumerate(groups_pts):
+				# Full FOV at each power (same order as SLM): every point × every power.
+				for power in powers:
 					if _stop():
 						print("session stopped")
 						break
-					for power in powers:
+					for gi, gpts in enumerate(groups_pts):
 						if _stop():
 							print("session stopped")
 							break

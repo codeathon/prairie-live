@@ -310,7 +310,7 @@ class Handler(BaseHTTPRequestHandler):
 			STATE.live.set_addr(str(opt.get("via_relay") or DEFAULT_RELAY))
 			STATE.append(
 				f"start  {len(pts)} pts  groups={opt['n_groups']}  "
-				f"each group at {powers}  relay={opt['via_relay']}  "
+				f"every point at each of {powers}  relay={opt['via_relay']}  "
 				f"COM={opt['serial']}  mode={opt['stim_mode']}  "
 				f"trigger={opt['trigger']}  trials={n_t}"
 			)
