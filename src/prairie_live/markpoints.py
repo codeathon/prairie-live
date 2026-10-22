@@ -22,6 +22,10 @@ _SPIRAL_DEFAULTS = {
 _DEFAULT_LASER = "Monaco"
 _DEFAULT_SPIRAL_REVS = "8"
 _DEFAULT_USE_3D = "False"
+# PV's saved series stores UncagingLaserPower as a fraction of this UI value
+# (rig file: 0.4 at UI 160, 0.625 at UI 250).
+POWER_FULL_SCALE = 400.0
+_NO_TRIGGER_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def parse_mark_points(xml_string: str) -> list[dict]:
@@ -51,6 +55,7 @@ def parse_mark_points(xml_string: str) -> list[dict]:
 		"calc_funct_map": root.attrib.get("CalcFunctMap", "False"),
 		"iterations": root.attrib.get("Iterations", "1"),
 		"iteration_delay": root.attrib.get("IterationDelay", "0.00"),
+		"pv_saved_format": tag == "PVSavedMarkPointSeriesElements",
 	}
 
 	groups = _parse_mark_point_elements(root, series_meta)
@@ -153,6 +158,7 @@ def _gpl_as_step(pts: list[dict]) -> dict:
 	# PV runs a .gpl group one point after another at full power; all-at-once
 	# would split the beam across the group.
 	meta["all_points_at_once"] = "False"
+	meta["pv_saved_format"] = True
 	return {
 		"id": "1",
 		"name": "GPL",
@@ -287,6 +293,8 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 			"voltage_output_category": "None",
 			"voltage_rec_category": "None",
 			"parameter_set": "CurrentSettings",
+			"pv_saved_format": False,
+			"step_delay": "2",
 		}
 	s0 = steps[0]
 	keys = (
@@ -308,8 +316,28 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 		"voltage_output_category",
 		"voltage_rec_category",
 		"parameter_set",
+		"pv_saved_format",
+		"step_delay",
 	)
 	return {k: s0.get(k, template_meta([])[k]) for k in keys}
+
+
+def xml_power(power: float, meta: dict[str, Any] | None = None) -> float:
+	"""UI power (e.g. 160) → PV series UncagingLaserPower fraction (0.4)."""
+	scale = float((meta or {}).get("power_full_scale") or POWER_FULL_SCALE)
+	frac = float(power) / scale
+	if not 0.0 <= frac <= 1.0:
+		raise ValueError(
+			f"power {power:g} is outside 0–{scale:g} (PV full scale); "
+			"enter powers as shown in PV's Mark Points window"
+		)
+	return round(frac, 6)
+
+
+def ui_power(raw: Any) -> float:
+	"""PV series UncagingLaserPower fraction → UI power (0.4 → 160)."""
+	val = float(raw or 0)
+	return round(val * POWER_FULL_SCALE, 6) if val <= 1.0 else val
 
 
 def build_group_step(
@@ -338,6 +366,9 @@ def build_group_step(
 		"name": name,
 		"is_active": True,
 		"laser_pwr": power,
+		"xml_power": xml_power(power, meta),
+		"pv_saved_format": bool(meta.get("pv_saved_format", False)),
+		"step_delay": meta.get("step_delay", "2"),
 		"duration": float(meta.get("duration", 10.0)),
 		"repetitions": int(meta.get("repetitions", 1)),
 		"points": pts,
@@ -368,6 +399,8 @@ def groups_to_xml(groups: list[dict]) -> str:
 	PVMarkPointSeriesElements with nested <Point X Y Z ...>.
 	Inactive steps are omitted.
 	"""
+	if groups and groups[0].get("pv_saved_format"):
+		return groups_to_saved_xml(groups)
 	root = ET.Element("PVMarkPointSeriesElements")
 	meta = groups[0] if groups else {}
 	root.set("Use3D", str(meta.get("use_3d", _DEFAULT_USE_3D)))
@@ -386,7 +419,7 @@ def groups_to_xml(groups: list[dict]) -> str:
 		el = ET.SubElement(root, "PVMarkPointElement")
 		el.set("Repetitions", str(g["repetitions"]))
 		el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
-		el.set("UncagingLaserPower", str(g["laser_pwr"]))
+		el.set("UncagingLaserPower", str(g.get("xml_power", g["laser_pwr"])))
 		el.set("TriggerFrequency", str(g.get("trigger_frequency", "None")))
 		el.set("TriggerSelection", str(g.get("trigger_selection", "None")))
 		el.set("TriggerCount", str(g.get("trigger_count", "1")))
@@ -424,6 +457,57 @@ def groups_to_xml(groups: list[dict]) -> str:
 				pt_el.set("SpiralSize", str(pt["spiral_size_fov"]))
 			elif pt.get("spiral_revolutions") not in (None, ""):
 				pass
+	return ET.tostring(root, encoding="unicode", xml_declaration=False)
+
+
+def groups_to_saved_xml(groups: list[dict]) -> str:
+	"""
+	Write PV's own saved-series layout (PVSavedMarkPointSeriesElements).
+
+	Each point is its own PVMarkPointElement with X/Y inline, so a group fires
+	one point after another at full power — what PV does for a saved group.
+	Only the first step waits for a trigger.
+	"""
+	meta = groups[0] if groups else {}
+	root = ET.Element("PVSavedMarkPointSeriesElements")
+	root.set("Iterations", str(meta.get("iterations", "1")))
+	root.set("IterationDelay", str(meta.get("iteration_delay", "0.00")))
+	root.set("CalcFunctMap", str(meta.get("calc_funct_map", "False")))
+	first = True
+	for g in groups:
+		if not g.get("is_active", True):
+			continue
+		for pt in g["points"]:
+			if not pt.get("is_active", True):
+				continue
+			el = ET.SubElement(root, "PVMarkPointElement")
+			el.set("Repetitions", str(g["repetitions"]))
+			el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
+			el.set("UncagingLaserPower", str(g.get("xml_power", g["laser_pwr"])))
+			el.set("TriggerFrequency", str(g.get("trigger_frequency", "None")))
+			trig = str(g.get("trigger_selection", "None")) if first else "None"
+			if trig != "None":
+				el.set("TriggerSelection", trig)
+			el.set("TriggerIdentifier", _NO_TRIGGER_ID)
+			el.set("TriggerCount", str(g.get("trigger_count", "1")))
+			el.set("AsyncSyncFrequency", str(g.get("async_sync_frequency", "None")))
+			el.set("VoltageOutputCategoryName", str(g.get("voltage_output_category", "None")))
+			el.set("VoltageRecCategoryName", str(g.get("voltage_rec_category", "None")))
+			galvo = ET.SubElement(el, "PVGalvoPointElement")
+			delay = g.get("initial_delay", "0") if first else g.get("step_delay", "2")
+			galvo.set("InitialDelay", str(delay))
+			galvo.set("InterPointDelay", str(g.get("inter_point_delay", "10")))
+			galvo.set("Duration", str(g["duration"] or pt.get("duration")))
+			galvo.set("SpiralRevolutions", str(g.get("spiral_revolutions", "0")))
+			galvo.set("Points", str(pt.get("name") or f"Point {pt['id']}"))
+			galvo.set("Indices", str(pt["id"]))
+			galvo.set("X", str(pt.get("x", 0)))
+			galvo.set("Y", str(pt.get("y", 0)))
+			galvo.set("IsSpiral", str(pt.get("is_spiral", "True")))
+			size = pt.get("spiral_size_fov") or pt.get("spiral_width")
+			if size not in (None, ""):
+				galvo.set("SpiralSize", str(size))
+			first = False
 	return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 
@@ -482,7 +566,7 @@ def estimate_series_ms(groups: list[dict]) -> float:
 def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict]:
 	groups = []
 	for i, el in enumerate(_findall_local(root, "PVMarkPointElement")):
-		pwr = float(el.attrib.get("UncagingLaserPower", 0))
+		pwr = ui_power(el.attrib.get("UncagingLaserPower", 0))
 		reps = int(float(el.attrib.get("Repetitions", 1)))
 		galvo = _findall_local(el, "PVGalvoPointElement")
 		dur = float(el.attrib.get("Duration", 0))
@@ -547,6 +631,27 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 					"spiral_height": pt_el.attrib.get("SpiralHeight", ""),
 					"spiral_size_um": pt_el.attrib.get("SpiralSizeInMicrons", ""),
 				})
+		elif galvo and "X" in galvo[0].attrib and "Y" in galvo[0].attrib:
+			# PV's saved series: one point per PVGalvoPointElement, X/Y inline
+			# in galvo units, spiral as SpiralSize in the same units.
+			g0 = galvo[0]
+			idx = (indices or str(i + 1)).split(",")[0].strip()
+			size = g0.attrib.get("SpiralSize")
+			group["points"].append({
+				"id": idx,
+				"name": points_attr.strip() or f"Point {idx}",
+				"is_active": True,
+				"x": float(g0.attrib["X"]),
+				"y": float(g0.attrib["Y"]),
+				"z": float(g0.attrib.get("Z", 0)),
+				"duration": dur,
+				"power": pwr,
+				"is_spiral": g0.attrib.get("IsSpiral", "False"),
+				"spiral_width": g0.attrib.get("SpiralWidth", size or ""),
+				"spiral_height": g0.attrib.get("SpiralHeight", size or ""),
+				"spiral_size_fov": size,
+				"spiral_size_um": g0.attrib.get("SpiralSizeInMicrons", ""),
+			})
 		else:
 			names = _split_points_attr(points_attr) or [f"Step {i}"]
 			for j, pname in enumerate(names):
@@ -561,6 +666,10 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 					"power": pwr,
 				})
 		groups.append(group)
+	if len(groups) > 1:
+		# Delay before each later step (rig file: 22.1 ms first, then 2 ms).
+		for g in groups:
+			g["step_delay"] = groups[1]["initial_delay"]
 	return groups
 
 

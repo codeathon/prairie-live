@@ -49,6 +49,7 @@ function showXmlFields(fields) {
     ["FOV width (µm)", fmt(fields.fov_width_um)],
     ["FOV height (µm)", fmt(fields.fov_height_um)],
     ["pixel size (µm)", fmt(fields.pixel_size_um)],
+    ["repetitions", fields.repetitions],
     ["laser", fields.laser || "—"],
   ];
   for (const [k, v] of rows) {
@@ -176,6 +177,7 @@ async function onXmlFile(ev) {
   $("xml_path").textContent = res.path;
   $("plan").textContent = res.plan || "";
   showXmlFields(res.fields || {});
+  if (res.fields && res.fields.repetitions) $("repetitions").value = res.fields.repetitions;
   syncTypedPowers();
 }
 

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PVSavedMarkPointSeriesElements Iterations="1" IterationDelay="0.00" CalcFunctMap="False">
+  <PVMarkPointElement Repetitions="3" UncagingLaser="Monaco" UncagingLaserPower="0.4" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="14" Duration="36" SpiralRevolutions="8" Points="Point 1" Indices="1" X="-3.25489489483074" Y="-3.66925337390467" IsSpiral="True" SpiralSize="0.184901809118501" />
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="3" UncagingLaser="Monaco" UncagingLaserPower="0.4" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="2" InterPointDelay="14" Duration="36" SpiralRevolutions="8" Points="Point 2" Indices="2" X="-2.32804040216537" Y="-3.603828350893" IsSpiral="True" SpiralSize="0.184901809118501" />
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="3" UncagingLaser="Monaco" UncagingLaserPower="0.4" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="2" InterPointDelay="14" Duration="36" SpiralRevolutions="8" Points="Point 3" Indices="3" X="-1.41209008000195" Y="-3.66925337390467" IsSpiral="True" SpiralSize="0.184901809118501" />
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="3" UncagingLaser="Monaco" UncagingLaserPower="0.4" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="2" InterPointDelay="14" Duration="36" SpiralRevolutions="8" Points="Point 4" Indices="4" X="-0.659702315367704" Y="-3.66925337390467" IsSpiral="True" SpiralSize="0.184901809118501" />
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="3" UncagingLaser="Monaco" UncagingLaserPower="0.625" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="14" Duration="36" SpiralRevolutions="8" Points="Point 55" Indices="55" X="1.56465759894167" Y="0.198501337179167" IsSpiral="True" SpiralSize="0.184901809118501" />
+  </PVMarkPointElement>
+</PVSavedMarkPointSeriesElements>

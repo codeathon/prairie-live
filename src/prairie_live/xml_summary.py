@@ -68,6 +68,7 @@ def summarize_fat_xml(path: str) -> dict[str, Any]:
 		"fov_height_um": fov_h,
 		"pixel_size_um": pixel,
 		"laser": meta.get("uncaging_laser"),
+		"repetitions": int(meta.get("repetitions") or 1),
 		"source": "xml",
 		"fov_note": (
 			"FOV µm estimated from SpiralSizeInMicrons / SpiralWidth "

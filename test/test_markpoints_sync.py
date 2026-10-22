@@ -341,7 +341,7 @@ def test_gpl_slm_dry_run(tmp_path: Path):
 	assert packed[0]["slm_parts"][0] == "-MarkAllPoints"
 	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
 	assert scope.is_file()
-	assert "PVMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
+	assert "PVSavedMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
 
 
 def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
@@ -572,12 +572,46 @@ def test_gpl_group_fires_like_pv(tmp_path: Path):
 	)
 	execute_session(opt, show_candidate_gui=False)
 	root = ET.fromstring(scope.read_text(encoding="utf-8"))
-	assert root.get("AllPointsAtOnce") == "False"
-	assert root.get("Use3D") == "False"
-	galvo = root.find(".//PVGalvoPointElement")
+	assert root.tag == "PVSavedMarkPointSeriesElements"
+	steps = root.findall("PVMarkPointElement")
+	assert len(steps) == 3
+	assert {s.get("UncagingLaserPower") for s in steps} == {"0.4"}
+	galvo = steps[0].find("PVGalvoPointElement")
 	assert float(galvo.get("Duration")) == 100.0
 	assert galvo.get("SpiralRevolutions") == "5"
 	assert galvo.get("InterPointDelay") == "10"
-	pt = galvo.find("Point")
-	assert pt.get("SpiralWidth") == "0.1849"
-	assert pt.get("SpiralSizeInMicrons") is None
+	assert galvo.get("SpiralSize") == "0.1849"
+	assert galvo.get("X") is not None and galvo.find("Point") is None
+
+
+def test_pv_saved_series_reads_and_writes_like_pv(tmp_path: Path):
+	"""PV's own saved series: inline X/Y, power as a fraction of 400."""
+	import xml.etree.ElementTree as ET
+
+	import pytest
+
+	from prairie_live.markpoints import load_mark_points_file, xml_power
+
+	steps = load_mark_points_file("samples/MarkPoints_rig_saved.xml")
+	pts = extract_unique_points(steps)
+	assert len(pts) == 5
+	assert pts[0]["x"] == pytest.approx(-3.25489489483074)
+	assert steps[0]["laser_pwr"] == pytest.approx(160.0)
+	assert steps[-1]["laser_pwr"] == pytest.approx(250.0)
+	meta = template_meta(steps)
+	assert meta["pv_saved_format"] is True
+	assert meta["repetitions"] == 3 and meta["duration"] == 36.0
+	assert xml_power(160, meta) == 0.4
+	with pytest.raises(ValueError):
+		xml_power(500, meta)
+
+	step = build_group_step(pts[:3], name="g", power=160.0, meta=meta)
+	root = ET.fromstring(groups_to_xml([step]))
+	assert root.tag == "PVSavedMarkPointSeriesElements"
+	els = root.findall("PVMarkPointElement")
+	assert [e.get("UncagingLaserPower") for e in els] == ["0.4"] * 3
+	delays = [e.find("PVGalvoPointElement").get("InitialDelay") for e in els]
+	assert delays == ["22.1", "2", "2"]
+	g = els[0].find("PVGalvoPointElement")
+	assert (g.get("Duration"), g.get("SpiralRevolutions"), g.get("InterPointDelay")) == ("36.0", "8", "14")
+	assert els[0].get("Repetitions") == "3"
