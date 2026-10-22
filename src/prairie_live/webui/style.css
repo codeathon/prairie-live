@@ -71,8 +71,8 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   height: 100%;
 }
 .fov-wrap svg { pointer-events: none; overflow: visible; }
-.fov-wrap circle { fill: none; stroke: #ffd400; }
-.fov-wrap text { fill: #ffd400; paint-order: stroke; stroke: #000; }
+.fov-wrap circle { fill: none; stroke: #00ffff; }
+.fov-wrap text { fill: #00ffff; paint-order: stroke; stroke: #000; }
 
 /* Two sub-columns: Rig + Session | Fat XML; log (+ candidates) share the rest. */
 .side {
