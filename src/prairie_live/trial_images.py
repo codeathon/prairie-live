@@ -241,26 +241,25 @@ def save_trial_images(
 	"""
 	Write <run_root>/tXXXX_pYYY/{f0,f1,dff}.png.
 
+	Only this trial's fired points are ringed — not the whole Mark Points pool.
+	Power tiles load these PNGs as their background; baking the pool made every
+	point look marked. ``all_points`` is accepted for call-site compat and ignored.
+
 	Returns absolute paths keyed by kind for JSONL; also includes trial_dir.
 	"""
+	del all_points  # power tiles / QC: current trial only
 	trial_dir = Path(run_root) / trial_dir_name(trial_index, power)
 	trial_dir.mkdir(parents=True, exist_ok=True)
 	f0 = mean_stack(frames_f0)
 	f1 = mean_stack(frames_f1)
 
-	f0_rgb = gray_to_marked_rgb(
-		f0, fired_points, all_points=all_points, radius=radius
-	)
-	f1_rgb = gray_to_marked_rgb(
-		f1, fired_points, all_points=all_points, radius=radius
-	)
-	dff_out = draw_point_pool(
+	f0_rgb = gray_to_marked_rgb(f0, fired_points, radius=radius)
+	f1_rgb = gray_to_marked_rgb(f1, fired_points, radius=radius)
+	dff_out = draw_point_rings(
 		dff_rgb(f0, f1),
-		all_points or fired_points,
 		fired_points,
 		radius=radius,
-		pool_color=_POOL_COLOR,
-		fired_color=_FIRED_COLOR_DFF,
+		color=_FIRED_COLOR_DFF,
 	)
 
 	paths: dict[str, str] = {"trial_dir": str(trial_dir.resolve())}

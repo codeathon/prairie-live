@@ -123,6 +123,7 @@ def test_board_highlights_changed_only_over_threshold():
 	by_id = {m["id"]: m for m in st["marks"]}
 	# Only this trial's fired points are overlaid (not the whole Mark Points pool).
 	assert set(by_id) == {"1", "2", "3"}
+	assert "4" not in by_id
 	assert by_id["1"]["fired"] and by_id["1"]["changed"]
 	assert by_id["2"]["fired"] and not by_id["2"]["changed"]
 	assert by_id["3"]["changed"]

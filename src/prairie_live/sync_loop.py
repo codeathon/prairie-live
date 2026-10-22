@@ -692,7 +692,7 @@ def _finish_trial_frames(
 ) -> None:
 	"""Score + optional PNG dump into <run>/tXXXX/ (f0/f1 disk ΔF/F)."""
 	row.setdefault("repetitions", 1)
-	score_pts, pool_pts = _image_points(gpts, point_pool, relay)
+	score_pts, _pool_pts = _image_points(gpts, point_pool, relay)
 	if mock_scores:
 		row["point_scores"] = {
 			str(p["id"]): abs(hash((str(p["id"]), row.get("power"), it))) % 1000 / 1000.0
@@ -725,7 +725,6 @@ def _finish_trial_frames(
 				frames_f0=f0_frames,
 				frames_f1=f1_frames,
 				fired_points=score_pts,
-				all_points=pool_pts,
 				power=float(row["power"]) if row.get("power") is not None else None,
 				radius=disk_radius,
 			)
