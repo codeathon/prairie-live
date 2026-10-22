@@ -42,10 +42,18 @@ def test_apply_overrides_without_json():
 	assert opt["n_groups"] == 2
 
 
-def test_com_ports_always_offer_com3():
-	ports = list_com_ports()
-	devs = {p["device"].upper() for p in ports}
-	assert "COM3" in devs
+def test_com_ports_never_empty():
+	assert list_com_ports()
+
+
+def test_pick_serial_uses_a_port_this_pc_has():
+	from prairie_live.com_ports import pick_serial
+
+	only_com1 = [{"device": "COM1", "description": "Communications Port (COM1)"}]
+	assert pick_serial(only_com1, "COM3") == "COM1"
+	both = only_com1 + [{"device": "COM3", "description": "USB"}]
+	assert pick_serial(both, "COM3") == "COM3"
+	assert pick_serial([], "COM3") == "COM3"
 
 
 def test_xml_summary_from_sample():
@@ -162,15 +170,21 @@ def test_web_ui_serves_page_not_tk_form():
 		text = body.decode("utf-8")
 		assert "prairie-live mapping" in text
 		assert "Live scan" in text
+		assert "tile-head" in text
+		assert "fov-wrap" in text
+		assert "tile-caps" in text
 		assert "Fat Mark Points XML" in text
 		assert "tkinter" not in text.lower()
 		assert 'src="/app.js"' in text
 		js_status, js_ctype, js = _get(base + "/app.js")
 		assert js_status == 200
 		assert b"ensurePowerTiles" in js
+		assert b'tile-head' in js
+		assert b"fov-wrap" in js
 		css_status, _, css = _get(base + "/style.css")
 		assert css_status == 200
 		assert b".fov-grid" in css
+		assert b".tile-caps" in css
 	finally:
 		httpd.shutdown()
 
@@ -208,3 +222,21 @@ def test_web_ui_parse_xml_opens_power_plan(tmp_path):
 		assert all(b["ready"] is False for b in st["boards"])
 	finally:
 		httpd.shutdown()
+
+
+def test_gui_trigger_none_overrides_serial():
+	from prairie_live.gui_session import apply_gui_overrides
+
+	opt = apply_gui_overrides(
+		series="x.gpl",
+		powers=[160.0],
+		seed=0,
+		repetitions=1,
+		stim_dff_min=0.0,
+		n_points=6,
+		serial="COM3",
+		stim_mode="series",
+		trigger="none",
+	)
+	assert opt["trigger"] == "none"
+	assert opt["stim_mode"] == "series"

@@ -20,6 +20,9 @@ class LiveFeed:
 		self.ok = False
 		self.detail = "connecting…"
 		self.live_started = False
+		self.geometry: dict | None = None
+		self.geometry_error = ""
+		self.frame_wh: tuple[int, int] | None = None
 		self._stop = threading.Event()
 		self._lock = threading.Lock()
 		self._thread: threading.Thread | None = None
@@ -51,6 +54,33 @@ class LiveFeed:
 				"live_started": self.live_started,
 				"addr": self.addr,
 			}
+
+	def scan_geometry(self) -> tuple[dict | None, tuple[int, int] | None]:
+		with self._lock:
+			return self.geometry, self.frame_wh
+
+	def scan_geometry_error(self) -> str:
+		with self._lock:
+			return self.geometry_error
+
+	def _poll_geometry(self, client) -> float | None:
+		"""Seconds until the next poll; None stops polling on this connection."""
+		from prairie_live.scan_geometry import fetch_scan_geometry
+
+		err = ""
+		try:
+			geom = fetch_scan_geometry(client)
+		except Exception as exc:
+			geom, err = None, f"{type(exc).__name__}: {exc}"[:200]
+		if err and "dropped the connection" in err:
+			# The read itself may be what PV rejects; don't keep knocking the session out.
+			err = f"{err} — scan range polling stopped; restart the GUI to retry"
+		with self._lock:
+			self.geometry = geom
+			self.geometry_error = err
+		if not err:
+			return 2.0
+		return None if "polling stopped" in err else 30.0
 
 	def png_bytes(self) -> bytes | None:
 		with self._lock:
@@ -93,7 +123,12 @@ class LiveFeed:
 				with self._lock:
 					self.live_started = True
 					self.detail = "LiveScan on"
+			# Zoom/pan change the scan range, so the Mark Points overlay re-reads it.
+			next_geom: float | None = 0.0
 			while not self._stop.is_set():
+				if next_geom is not None and time.monotonic() >= next_geom:
+					wait = self._poll_geometry(client)
+					next_geom = None if wait is None else time.monotonic() + wait
 				with self._lock:
 					if self.addr != addr:
 						break
@@ -109,6 +144,7 @@ class LiveFeed:
 				png = png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
 				with self._lock:
 					self.png = png
+					self.frame_wh = (int(oriented.shape[1]), int(oriented.shape[0]))
 					self.ok = True
 					if started:
 						self.detail = "live FOV"

@@ -71,6 +71,38 @@ def test_save_trial_images_layout(tmp_path: Path):
 	assert Path(paths["f0"]).name == "f0.png"
 
 
+def test_save_trial_images_marks_only_fired_not_pool(tmp_path: Path):
+	"""Power tiles load these PNGs — pool-only points must not get rings."""
+	from prairie_live.trial_images import gray_to_marked_rgb, write_png_rgb
+
+	root = run_dir(tmp_path, run_id="run_fired_only")
+	f0 = [np.full((32, 32), 10.0, dtype=np.float32)]
+	f1 = [np.full((32, 32), 10.0, dtype=np.float32)]
+	fired = [{"id": "1", "x": 0.5, "y": 0.5}]
+	pool = fired + [{"id": "2", "x": 0.25, "y": 0.25}]
+	paths = save_trial_images(
+		root,
+		trial_index=1,
+		frames_f0=f0,
+		frames_f1=f1,
+		fired_points=fired,
+		all_points=pool,
+		power=100,
+		radius=2,
+	)
+	got = Path(paths["f0"]).read_bytes()
+	write_png_rgb(tmp_path / "expect.png", gray_to_marked_rgb(f0[0], fired, radius=2))
+	assert got == (tmp_path / "expect.png").read_bytes()
+	pooled = draw_point_pool(
+		np.stack([to_u8(f0[0])] * 3, axis=-1).copy(),
+		pool,
+		fired,
+		radius=2,
+	)
+	write_png_rgb(tmp_path / "pooled.png", pooled)
+	assert got != (tmp_path / "pooled.png").read_bytes()
+
+
 def test_draw_point_pool_highlights_fired(tmp_path: Path):
 	rgb = np.zeros((32, 32, 3), dtype=np.uint8)
 	pool = [
@@ -160,13 +192,12 @@ class _HoldClient:
 		return self._frame
 
 
-def test_orient_fov_90cw_then_mirror_lr():
+def test_orient_fov_shows_pv_frame_unchanged():
 	img = np.zeros((4, 6), dtype=np.uint16)
 	img[-1, 0] = 9
 	out = orient_fov(img)
-	assert out.shape == (6, 4)
-	# 90° CW puts bottom-left at top-left; fliplr sends it to top-right.
-	assert int(out[0, -1]) == 9
+	assert out.shape == (4, 6)
+	assert int(out[-1, 0]) == 9
 
 
 def test_on_frame_shows_stack_mean_not_last_raw():
@@ -367,3 +398,13 @@ def test_fit_fov_axes_noop_without_axes():
 	im = _FakeIm()
 	_fit_fov_axes(im, 8, 8)
 	assert im.axes is None
+
+
+def test_power_tile_rgb_matches_live_orientation():
+	from prairie_live.power_view import _orient_display
+
+	rgb = np.zeros((4, 6, 3), dtype=np.float32)
+	rgb[-1, 0] = 1.0
+	out = _orient_display(rgb)
+	assert out.shape == (4, 6, 3)
+	assert np.array_equal(out[..., 0], orient_fov(rgb[..., 0]))

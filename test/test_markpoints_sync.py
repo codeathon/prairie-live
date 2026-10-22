@@ -214,7 +214,7 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 	assert json.loads(lines[-1])["phase"] == "candidates"
 	assert json.loads(lines[-2])["phase"] == "recommendation"
 	done = [json.loads(ln) for ln in lines if json.loads(ln).get("phase") == "done"]
-	assert done[0]["trial_index"] == 0
+	assert done[0]["trial_index"] == 1
 	assert done[0]["score_kind"] == "mock"
 	assert done[0].get("point_scores")
 	assert estimate_series_ms(
@@ -341,7 +341,7 @@ def test_gpl_slm_dry_run(tmp_path: Path):
 	assert packed[0]["slm_parts"][0] == "-MarkAllPoints"
 	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
 	assert scope.is_file()
-	assert "PVMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
+	assert "PVSavedMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
 
 
 def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
@@ -526,3 +526,92 @@ def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
 		if json.loads(ln).get("phase") == "slm_packed"
 	]
 	assert packed == []
+
+
+RIG_GPL = """<?xml version="1.0" encoding="utf-8"?>
+<PVGalvoPointList>
+  <PVGalvoPoint X="-3.25" Y="-3.67" Name="Point 1" Index="0" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.1849" SpiralRevolutions="5" Z="3595.85" />
+  <PVGalvoPoint X="-2.33" Y="-3.60" Name="Point 2" Index="1" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.1849" SpiralRevolutions="5" Z="3595.85" />
+  <PVGalvoPoint X="-1.41" Y="-3.67" Name="Point 3" Index="2" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.1849" SpiralRevolutions="5" Z="3595.85" />
+</PVGalvoPointList>
+"""
+
+
+def test_gpl_group_fires_like_pv(tmp_path: Path):
+	"""A .gpl group must keep its dwell/spiral and fire one point at a time."""
+	import xml.etree.ElementTree as ET
+
+	from prairie_live.gui_session import apply_gui_overrides
+	from prairie_live.sync_loop import execute_session
+	from prairie_live.xml_summary import summarize_fat_xml
+
+	gpl = tmp_path / "rig.gpl"
+	gpl.write_text(RIG_GPL, encoding="utf-8")
+	opt = apply_gui_overrides(
+		series=str(gpl),
+		powers=[160.0],
+		seed=0,
+		repetitions=1,
+		stim_dff_min=0.0,
+		n_points=3,
+		stim_mode="series",
+		trigger="none",
+		xml_fields=summarize_fat_xml(str(gpl)),
+	)
+	scope = tmp_path / "trial.xml"
+	opt.update(
+		dry_run=True,
+		scope_xml=str(scope),
+		via_relay=None,
+		mock_scores=True,
+		f0_s=0,
+		f1_s=0,
+		inter_trial=0,
+		log=str(tmp_path / "t.jsonl"),
+		images_dir=str(tmp_path / "img"),
+	)
+	execute_session(opt, show_candidate_gui=False)
+	root = ET.fromstring(scope.read_text(encoding="utf-8"))
+	assert root.tag == "PVSavedMarkPointSeriesElements"
+	steps = root.findall("PVMarkPointElement")
+	assert len(steps) == 3
+	assert {s.get("UncagingLaserPower") for s in steps} == {"0.4"}
+	galvo = steps[0].find("PVGalvoPointElement")
+	assert float(galvo.get("Duration")) == 100.0
+	assert galvo.get("SpiralRevolutions") == "5"
+	assert galvo.get("InterPointDelay") == "10"
+	assert galvo.get("SpiralSize") == "0.1849"
+	assert galvo.get("X") is not None and galvo.find("Point") is None
+
+
+def test_pv_saved_series_reads_and_writes_like_pv(tmp_path: Path):
+	"""PV's own saved series: inline X/Y, power as a fraction of 400."""
+	import xml.etree.ElementTree as ET
+
+	import pytest
+
+	from prairie_live.markpoints import load_mark_points_file, xml_power
+
+	steps = load_mark_points_file("samples/MarkPoints_rig_saved.xml")
+	pts = extract_unique_points(steps)
+	assert len(pts) == 5
+	assert pts[0]["x"] == pytest.approx(-3.25489489483074)
+	assert steps[0]["laser_pwr"] == pytest.approx(160.0)
+	assert steps[-1]["laser_pwr"] == pytest.approx(250.0)
+	meta = template_meta(steps)
+	assert meta["pv_saved_format"] is True
+	assert meta["repetitions"] == 3 and meta["duration"] == 36.0
+	assert xml_power(160, meta) == 0.4
+	with pytest.raises(ValueError):
+		xml_power(500, meta)
+
+	step = build_group_step(pts[:3], name="g", power=160.0, meta=meta)
+	root = ET.fromstring(groups_to_xml([step]))
+	assert root.tag == "PVSavedMarkPointSeriesElements"
+	els = root.findall("PVMarkPointElement")
+	assert [e.get("UncagingLaserPower") for e in els] == ["0.4"] * 3
+	delays = [e.find("PVGalvoPointElement").get("InitialDelay") for e in els]
+	assert delays == ["22.1", "2", "2"]
+	g = els[0].find("PVGalvoPointElement")
+	assert (g.get("Duration"), g.get("SpiralRevolutions"), g.get("InterPointDelay")) == ("36.0", "8", "14")
+	assert els[0].get("Repetitions") == "3"

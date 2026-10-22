@@ -49,6 +49,7 @@ function showXmlFields(fields) {
     ["FOV width (µm)", fmt(fields.fov_width_um)],
     ["FOV height (µm)", fmt(fields.fov_height_um)],
     ["pixel size (µm)", fmt(fields.pixel_size_um)],
+    ["repetitions", fields.repetitions],
     ["laser", fields.laser || "—"],
   ];
   for (const [k, v] of rows) {
@@ -78,6 +79,53 @@ async function refreshRelay() {
   }
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+let marksOn = true;
+let marksNote = "";
+
+function applyMarksVisibility() {
+  $("live_marks").classList.toggle("hidden", !marksOn);
+  // Keep the note's height when hiding marks so the FOV does not jump.
+  const note = $("marks_note");
+  note.textContent = marksNote;
+  note.classList.toggle("dimmed", !marksOn);
+  const btn = $("marks_toggle");
+  btn.setAttribute("aria-pressed", marksOn ? "true" : "false");
+  btn.title = marksOn ? "Hide Mark Points overlay" : "Show Mark Points overlay";
+}
+
+async function refreshPoints() {
+  let res;
+  try {
+    res = await jget("/api/points");
+  } catch (_) {
+    return;
+  }
+  const svg = $("live_marks");
+  const [w, h] = res.frame_wh || [1, 1];
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.replaceChildren();
+  const unit = Math.min(w, h);
+  for (const p of res.points || []) {
+    const cx = p.fx * w;
+    const cy = p.fy * h;
+    const c = document.createElementNS(SVG_NS, "circle");
+    c.setAttribute("cx", cx);
+    c.setAttribute("cy", cy);
+    c.setAttribute("r", Math.max((p.r || 0) * w, unit * 0.012));
+    c.setAttribute("stroke-width", unit * 0.004);
+    const t = document.createElementNS(SVG_NS, "text");
+    t.setAttribute("x", cx + unit * 0.016);
+    t.setAttribute("y", cy - unit * 0.012);
+    t.setAttribute("font-size", unit * 0.03);
+    t.setAttribute("stroke-width", unit * 0.006);
+    t.textContent = p.id;
+    svg.append(c, t);
+  }
+  marksNote = res.note || "";
+  applyMarksVisibility();
+}
+
 async function refreshLive() {
   try {
     const r = await fetch("/api/live.png?t=" + Date.now());
@@ -90,6 +138,26 @@ async function refreshLive() {
   } catch (_) {}
 }
 
+// Pick the column count that gives the largest square tile with no scrolling.
+function fitGrid() {
+  const grid = $("fov_grid");
+  const n = grid.children.length || 1;
+  const W = grid.clientWidth;
+  const H = grid.clientHeight;
+  const chrome = 56; // tile title + live caption band + padding
+  let best = 1;
+  let bestSide = 0;
+  for (let c = 1; c <= n; c++) {
+    const r = Math.ceil(n / c);
+    const side = Math.min(W / c, H / r - chrome);
+    if (side > bestSide) {
+      bestSide = side;
+      best = c;
+    }
+  }
+  grid.style.setProperty("--cols", String(best));
+}
+
 function ensurePowerTiles(boards) {
   const grid = $("fov_grid");
   const have = new Set();
@@ -100,28 +168,45 @@ function ensurePowerTiles(boards) {
       const tile = document.createElement("div");
       tile.className = "tile";
       tile.dataset.power = key;
-      tile.innerHTML = `<h3></h3><img alt="power ${key}" /><p class="muted"></p>`;
+      // Match Live scan structure (head / fov-wrap / caps) so FOVs align horizontally.
+      tile.innerHTML =
+        `<div class="tile-head"><h3></h3></div>` +
+        `<div class="fov-wrap"><img alt="power ${key}" /></div>` +
+        `<div class="tile-caps"><p class="muted"></p></div>`;
       grid.appendChild(tile);
+      fitGrid();
     }
     const tile = grid.querySelector(`[data-power="${key}"]`);
-    tile.querySelector("h3").textContent = b.title || `power ${key}`;
+    tile.querySelector("h3").textContent = `power ${key}`;
+    const cap = tile.querySelector(".tile-caps p");
     if (b.ready) {
       const img = tile.querySelector("img");
       img.src = `/api/board.png?power=${encodeURIComponent(key)}&t=${Date.now()}`;
-      tile.querySelector("p").textContent = "updated";
+      const rest = String(b.title || "").replace(/^power\s+\S+\s*·?\s*/, "");
+      cap.textContent = rest || "updated";
     } else {
-      tile.querySelector("p").textContent = "waiting for first trial…";
+      cap.textContent = "waiting for first trial…";
     }
   }
 }
 
 function powerListFromBox() {
-  return ($("powers").value || "140")
+  return ($("powers").value || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
     .map((s) => Number(s))
     .filter((n) => !Number.isNaN(n));
+}
+
+function syncTypedPowers() {
+  const want = powerListFromBox().map((p) => String(p));
+  const keep = new Set(want);
+  for (const el of $("fov_grid").querySelectorAll("[data-power]")) {
+    if (!keep.has(el.dataset.power) && !el.querySelector("img").getAttribute("src")) el.remove();
+  }
+  ensurePowerTiles(want.map((p) => ({ power: p, title: `power ${p}`, ready: false })));
+  fitGrid();
 }
 
 async function onXmlFile(ev) {
@@ -145,7 +230,13 @@ async function onXmlFile(ev) {
   $("xml_path").textContent = res.path;
   $("plan").textContent = res.plan || "";
   showXmlFields(res.fields || {});
-  ensurePowerTiles(powerListFromBox().map((p) => ({ power: p, title: `power ${p}`, ready: false })));
+  refreshPoints();
+  if (res.fields && res.fields.repetitions) $("repetitions").value = res.fields.repetitions;
+  syncTypedPowers();
+}
+
+function rowKey(r) {
+  return String(r.key || `${r.id}@${r.power ?? r.min_power ?? ""}`);
 }
 
 function renderCandidates(ranked) {
@@ -155,20 +246,23 @@ function renderCandidates(ranked) {
   tb.innerHTML = "";
   if (!lastRanked.length) {
     box.hidden = true;
+    $("side").classList.remove("has-cands");
     return;
   }
   box.hidden = false;
+  $("side").classList.add("has-cands");
   if (!picked.size) {
-    lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(String(r.id)));
+    lastRanked.filter((r) => r.stimulated).forEach((r) => picked.add(rowKey(r)));
   }
   for (const r of lastRanked) {
     const tr = document.createElement("tr");
-    const id = String(r.id);
-    if (picked.has(id)) tr.classList.add("picked");
-    tr.innerHTML = `<td>${picked.has(id) ? "●" : "○"}</td><td>${id}</td><td>${r.min_power ?? "—"}</td><td>${r.dff == null ? "—" : Number(r.dff).toFixed(3)}</td><td>${r.tercile}</td>`;
+    const key = rowKey(r);
+    const pwr = r.power ?? r.min_power;
+    if (picked.has(key)) tr.classList.add("picked");
+    tr.innerHTML = `<td>${picked.has(key) ? "●" : "○"}</td><td>${r.id}</td><td>${pwr ?? "—"}</td><td>${r.dff == null ? "—" : Number(r.dff).toFixed(3)}</td><td>${r.tercile}</td>`;
     tr.addEventListener("click", () => {
-      if (picked.has(id)) picked.delete(id);
-      else picked.add(id);
+      if (picked.has(key)) picked.delete(key);
+      else picked.add(key);
       renderCandidates(lastRanked);
     });
     tb.appendChild(tr);
@@ -184,7 +278,11 @@ async function tick() {
   if (st.has_candidates) renderCandidates(st.ranked);
   if (st.error) $("save_status").textContent = st.error;
   if (st.live) $("live_cap").textContent = st.live.detail || "";
-  if (st.boards && st.boards.length) ensurePowerTiles(st.boards);
+  if (st.boards && st.boards.length) {
+    // Before a run the Powers box decides which tiles exist.
+    const typed = new Set(powerListFromBox().map((p) => String(p)));
+    ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready || typed.has(String(b.power))));
+  }
 }
 
 async function boot() {
@@ -196,12 +294,16 @@ async function boot() {
   $("stim_dff_min").value = d.stim_dff_min;
   fillSelect($("serial"), d.com_ports, "device", (p) => `${p.device} — ${p.description}`, d.serial);
   fillSelect($("stim_mode"), d.stim_modes, null, null, d.stim_mode);
+  fillSelect($("trigger"), d.triggers, null, null, d.trigger);
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
-  $("powers").addEventListener("change", () => {
-    ensurePowerTiles(powerListFromBox().map((p) => ({ power: p, title: `power ${p}`, ready: false })));
-  });
+  $("powers").addEventListener("input", syncTypedPowers);
   $("xml_file").addEventListener("change", onXmlFile);
+  $("marks_toggle").addEventListener("click", () => {
+    marksOn = !marksOn;
+    applyMarksVisibility();
+  });
+  applyMarksVisibility();
   $("run").addEventListener("click", async () => {
     const res = await jpost("/api/run", {
       series: $("xml_path").textContent,
@@ -212,13 +314,14 @@ async function boot() {
       via_relay: $("via_relay").value,
       serial: $("serial").value,
       stim_mode: $("stim_mode").value,
+      trigger: $("trigger").value,
     });
     if (!res.ok) $("save_status").textContent = res.error || "run failed";
   });
   $("stop").addEventListener("click", () => jpost("/api/stop", {}));
   $("sel_top").addEventListener("click", () => {
     picked.clear();
-    lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(String(r.id)));
+    lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(rowKey(r)));
     renderCandidates(lastRanked);
   });
   $("sel_clear").addEventListener("click", () => {
@@ -226,11 +329,14 @@ async function boot() {
     renderCandidates(lastRanked);
   });
   $("save_xml").addEventListener("click", async () => {
-    const res = await jpost("/api/save-candidates", { ids: [...picked] });
+    const res = await jpost("/api/save-candidates", { ids: [...picked], keys: [...picked] });
     $("save_status").textContent = res.ok ? `saved ${res.path}` : res.error || "save failed";
   });
+  fitGrid();
+  window.addEventListener("resize", fitGrid);
   setInterval(refreshRelay, 4000);
   setInterval(refreshLive, 150);
+  setInterval(refreshPoints, 2000);
   setInterval(tick, 800);
 }
 

@@ -51,10 +51,35 @@ def test_eight_points_uses_every_point_once():
 	assert set(ids) == {str(p["id"]) for p in pts}
 	plan = plan_group_power_trials(groups, powers)
 	assert len(plan) == 6
-	for gi in range(2):
-		assert [c["power"] for c in plan if c["group_index"] == gi] == powers
+	# Full FOV per power, then next power.
+	assert [c["power"] for c in plan] == [75.0, 75.0, 140.0, 140.0, 200.0, 200.0]
+	assert [c["group_index"] for c in plan] == [0, 1, 0, 1, 0, 1]
 	for pwr in powers:
 		assert {c["group_index"] for c in plan if c["power"] == pwr} == {0, 1}
+	from prairie_live.gui_session import point_power_pairs
+
+	want = {(str(p["id"]), pwr) for p in pts for pwr in powers}
+	assert point_power_pairs(groups, powers) == want
+
+
+def test_fifteen_points_every_point_every_power():
+	pts = [{"id": str(i), "x": 0.1 * i, "y": 0.1} for i in range(1, 16)]
+	powers = [40.0, 80.0, 160.0]
+	assert n_groups_for_pool(15) == 5
+	assert planned_trial_count(15, powers) == 15
+	groups = form_groups(
+		pts,
+		n_groups=5,
+		group_size=GROUP_SIZE,
+		rng=random.Random(1),
+		cover_all=True,
+	)
+	assert [len(g) for g in groups] == [3, 3, 3, 3, 3]
+	from prairie_live.gui_session import point_power_pairs
+
+	want = {(str(p["id"]), pwr) for p in pts for pwr in powers}
+	assert point_power_pairs(groups, powers) == want
+	assert len(want) == 15 * 3
 
 
 def test_parse_powers_dedupes_preserve_order():
@@ -89,22 +114,24 @@ def test_board_highlights_changed_only_over_threshold():
 		{"id": "4", "x": 0.4, "y": 0.4},
 	]
 	row = {
-		"trial_index": 0,
+		"trial_index": 1,
 		"power": 140,
 		"point_ids": ["1", "2", "3"],
 		"point_scores": {"1": 0.20, "2": 0.01, "3": 0.40},
 	}
 	st = board_state(row, pts, stim_dff_min=0.1, n_trials=6)
 	by_id = {m["id"]: m for m in st["marks"]}
+	# Only this trial's fired points are overlaid (not the whole Mark Points pool).
+	assert set(by_id) == {"1", "2", "3"}
+	assert "4" not in by_id
 	assert by_id["1"]["fired"] and by_id["1"]["changed"]
 	assert by_id["2"]["fired"] and not by_id["2"]["changed"]
 	assert by_id["3"]["changed"]
-	assert not by_id["4"]["fired"] and not by_id["4"]["changed"]
 	assert mark_style(by_id["1"])["kind"] == "changed"
 	assert mark_style(by_id["2"])["kind"] == "fired"
-	assert mark_style(by_id["4"])["kind"] == "pool"
 	assert "140" in st["title"]
 	assert "1,2,3" in st["title"]
+	assert "trial 1/6" in st["title"]
 
 
 def test_power_boards_update_matching_window_only():
@@ -113,7 +140,7 @@ def test_power_boards_update_matching_window_only():
 	assert unique_powers([75, 140, 75]) == [75.0, 140.0]
 	boards.update(
 		{
-			"trial_index": 0,
+			"trial_index": 1,
 			"power": 75,
 			"point_ids": ["1"],
 			"point_scores": {"1": 0.3},
@@ -123,7 +150,7 @@ def test_power_boards_update_matching_window_only():
 	assert 140.0 not in boards.states
 	boards.update(
 		{
-			"trial_index": 1,
+			"trial_index": 2,
 			"power": 140,
 			"point_ids": ["2"],
 			"point_scores": {"2": 0.1},
@@ -142,21 +169,24 @@ def test_candidate_table_and_save(tmp_path):
 	trials = [
 		{"point_scores": {"a": 0.4, "b": 0.2}, "power": 80},
 		{"point_scores": {"c": -0.01}, "power": 80},
+		{"point_scores": {"a": -0.3, "b": -0.2, "c": -0.1}, "power": 100},
 	]
 	ranked = rank_candidate_points(trials, pts, stim_dff_min=0.0)
 	picked = default_picked_ids(ranked)
-	assert picked  # top tercile of stimulated
+	# Every point×power burn (80 and 100), not min-power collapse.
+	assert picked == {"a@80", "b@80", "c@80", "a@100", "b@100", "c@100"}
 	cells = table_cells(ranked)
 	assert cells[0]["id"] == ranked[0]["id"]
-	assert "min_power" in cells[0]
-	picked = toggle_picked(picked, ranked[-1]["id"])
+	assert "key" in cells[0]
+	assert "power" in cells[0]
+	picked = toggle_picked(picked, ranked[-1]["key"])
 	sel = selected_rows(ranked, picked)
-	assert {r["id"] for r in sel} == picked
+	assert {r["key"] for r in sel} == picked
 	path = write_candidates_xml(sel, {"duration": 10.0}, tmp_path / "next_series.xml")
 	text = path.read_text(encoding="utf-8")
 	assert "PVMarkPointSeriesElements" in text
-	for r in sel:
-		assert f'Index="{r["id"]}"' in text
+	for pid in {r["id"] for r in sel}:
+		assert f'Index="{pid}"' in text
 	assert "next_series.xml" in save_status(len(sel), path)
 
 

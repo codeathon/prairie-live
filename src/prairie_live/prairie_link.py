@@ -1,8 +1,8 @@
 """PrairieLink TCP script client (SOH framing, port 1236).
 
 Password first, then commands with SOH between tokens and CRLF terminator.
-Responses are ACK … [data] … DONE. Use this for -LoadMarkPoints / -MarkPoints;
-live images still need COM or the relay.
+Responses are ACK … [data] … DONE. Frames come from -gi on the same session
+(gi_grab), which needs PV on this PC; other PCs use the relay.
 """
 
 from __future__ import annotations
@@ -63,7 +63,9 @@ class PrairieLink:
 					break
 				continue
 			if not chunk:
-				break
+				raise ConnectionResetError(
+					f"PrairieView closed the script connection; got {buf[:200]!r}"
+				)
 			buf += chunk
 			if b"DONE" in buf:
 				break

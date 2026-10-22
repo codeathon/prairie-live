@@ -7,7 +7,6 @@ import pytest
 from prairie_live.mark_all_points import (
 	build_mark_all_points_parts,
 	pack_mark_all_points,
-	parts_to_com_command,
 	spiral_size_fov_frac,
 	stim_params_from_meta,
 )
@@ -42,9 +41,6 @@ def test_build_2d_spiral_trigger():
 	assert parts[9] == "0.75"
 	assert parts[10:13] == ["True", "0.1", "8"]
 	assert parts[13] == "PFI1"
-	cmd = parts_to_com_command(parts)
-	assert cmd.startswith("-MarkAllPoints 2 False")
-	assert "Monaco" in cmd
 
 
 def test_pack_two_sets_delay_between():

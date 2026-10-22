@@ -128,18 +128,18 @@ def apply_stim_to_meta(meta: dict[str, Any], cfg: dict[str, Any]) -> dict[str, A
 			"True" if bool(cfg["all_points_at_once"]) else "False"
 		)
 	if cfg.get("spiral_revolutions") is not None:
-		out["spiral_revolutions"] = str(cfg["spiral_revolutions"])
+		out["spiral_revolutions"] = f'{float(cfg["spiral_revolutions"]):g}'
 	if cfg.get("duration_ms") is not None:
 		out["duration"] = float(cfg["duration_ms"])
 	if cfg.get("repetitions") is not None:
 		out["repetitions"] = max(int(cfg["repetitions"]), 1)
-	# UI shows ms; series XML commonly stores InitialDelay/InterPointDelay in seconds.
+	# PV writes InitialDelay/InterPointDelay in ms (22.1 / 10), same as its UI.
 	if cfg.get("initial_delay_ms") is not None:
 		out["initial_delay_ms"] = float(cfg["initial_delay_ms"])
-		out["initial_delay"] = str(float(cfg["initial_delay_ms"]) / 1000.0)
+		out["initial_delay"] = f'{float(cfg["initial_delay_ms"]):g}'
 	if cfg.get("inter_point_delay_ms") is not None:
 		out["inter_point_delay_ms"] = float(cfg["inter_point_delay_ms"])
-		out["inter_point_delay"] = str(float(cfg["inter_point_delay_ms"]) / 1000.0)
+		out["inter_point_delay"] = f'{float(cfg["inter_point_delay_ms"]):g}'
 	if cfg.get("trigger_selection") is not None:
 		out["trigger_selection"] = str(cfg["trigger_selection"])
 	# Spiral on/off + size µm are applied when building -slm args / point attrs.

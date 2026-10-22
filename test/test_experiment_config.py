@@ -113,8 +113,8 @@ def test_apply_stim_to_meta():
 	assert out["is_spiral"] == "True"
 	assert out["duration"] == 16.92
 	assert out["repetitions"] == 4
-	assert float(out["initial_delay"]) == pytest.approx(0.0221)
-	assert float(out["inter_point_delay"]) == pytest.approx(0.01)
+	assert float(out["initial_delay"]) == pytest.approx(22.1)
+	assert float(out["inter_point_delay"]) == pytest.approx(10.0)
 	assert out["trigger_selection"] == "PFI1"
 	assert out["stim_mode"] == "slm"
 

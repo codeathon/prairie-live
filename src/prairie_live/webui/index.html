@@ -8,49 +8,56 @@
 <body>
   <header>
     <h1>prairie-live mapping</h1>
-    <p class="sub">Web UI — lab defaults, live FOV, per-power grid</p>
+    <span class="sub">live FOV · per-power grid</span>
   </header>
 
   <section class="stage">
     <div id="fov_grid" class="fov-grid">
       <div class="tile" id="tile_live">
-        <h3>Live scan</h3>
-        <img id="live_img" alt="live FOV" />
-        <p id="live_cap" class="muted">connecting to relay…</p>
+        <div class="tile-head">
+          <h3>Live scan</h3>
+          <button type="button" id="marks_toggle" class="fov-toggle" aria-pressed="true" title="Hide Mark Points overlay">MP</button>
+        </div>
+        <div class="fov-wrap">
+          <img id="live_img" alt="live FOV" />
+          <svg id="live_marks" preserveAspectRatio="xMidYMid meet" viewBox="0 0 1 1"></svg>
+        </div>
+        <div class="tile-caps">
+          <p id="live_cap" class="muted">connecting to relay…</p>
+          <p id="marks_note" class="muted"></p>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="card">
+  <aside class="side" id="side">
+  <section class="card rig-card">
     <h2>Rig</h2>
-    <label>Relay IP
-      <input id="via_relay" type="text" />
-    </label>
-    <div class="status-row">
+    <div class="row">
+      <label>Relay IP <input id="via_relay" type="text" /></label>
       <span id="light" class="light off" title="relay / PrairieView"></span>
-      <span id="relay_detail">checking…</span>
     </div>
-    <label>Serial
-      <select id="serial"></select>
-    </label>
-    <label>Stim mode
-      <select id="stim_mode"></select>
-    </label>
+    <p id="relay_detail" class="muted small">checking…</p>
+    <div class="row">
+      <label>Serial <select id="serial"></select></label>
+      <label>Stim mode <select id="stim_mode"></select></label>
+      <label title="serial: PV waits for the COM DTR pulse on PFI1. none: PV fires immediately.">Trigger <select id="trigger"></select></label>
+    </div>
   </section>
 
-  <section class="card">
+  <section class="card session-card">
     <h2>Session</h2>
     <label>Fat Mark Points XML
       <input id="xml_file" type="file" accept=".xml,.gpl" />
     </label>
     <p id="xml_path" class="muted"></p>
     <label>Powers
-      <input id="powers" type="text" />
+      <input id="powers" type="text" placeholder="e.g. 160 or 75,140,200" />
     </label>
     <div class="row">
       <label>Seed <input id="seed" type="number" /></label>
       <label>Repetitions <input id="repetitions" type="number" /></label>
-      <label>Stim ΔF/F min <input id="stim_dff_min" type="number" step="0.01" /></label>
+      <label title="Count a point as changed when |ΔF/F| is above this (burns often go negative).">|ΔF/F| min <input id="stim_dff_min" type="number" step="0.01" /></label>
     </div>
     <p id="plan" class="plan"></p>
     <div class="row">
@@ -59,26 +66,28 @@
     </div>
   </section>
 
-  <section class="card">
+  <section class="card xml-card">
     <h2>From Fat XML</h2>
     <p id="fov_note" class="muted"></p>
     <dl id="xml_fields" class="fields"></dl>
   </section>
 
-  <section class="card">
+  <section class="card log-card">
     <h2>Trial log</h2>
     <pre id="log"></pre>
   </section>
 
   <section class="card" id="cand_box" hidden>
     <h2>Candidates</h2>
-    <p class="muted">Click rows to toggle. Top third starts selected.</p>
+    <p class="muted">One row per point×power burn. Click to toggle. Every imaged |ΔF/F| change starts selected.</p>
+    <div class="table-wrap">
     <table id="cand_table">
       <thead>
-        <tr><th></th><th>id</th><th>min power</th><th>ΔF/F</th><th>tercile</th></tr>
+        <tr><th></th><th>id</th><th>power</th><th>ΔF/F</th><th>tercile</th></tr>
       </thead>
       <tbody></tbody>
     </table>
+    </div>
     <div class="row">
       <button id="sel_top" type="button">Select top third</button>
       <button id="sel_clear" type="button">Clear</button>
@@ -86,6 +95,7 @@
     </div>
     <p id="save_status" class="muted"></p>
   </section>
+  </aside>
 
   <script src="/app.js"></script>
 </body>

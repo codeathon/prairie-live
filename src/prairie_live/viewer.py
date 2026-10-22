@@ -12,8 +12,8 @@ from prairie_live.trial_images import FrameBuffer, disk_mean, draw_point_rings, 
 
 
 def orient_fov(frame: np.ndarray) -> np.ndarray:
-	"""PrairieLink FOV → PrairieView: 90° clockwise, then mirror left/right."""
-	return np.ascontiguousarray(np.fliplr(np.rot90(frame, -1)))
+	"""Frame exactly as PV wrote it (-gi buffer); no rotate or mirror."""
+	return np.ascontiguousarray(frame)
 
 
 def _avg_n(avg_s: float, interval_ms: int) -> int:
@@ -31,9 +31,9 @@ def _make_backend(args):
 		return client
 	if args.mock:
 		return MockScope(args.channel)
-	from prairie_live.com_backend import PrairieCom
+	from prairie_live.pv_script import PvScript
 
-	client = PrairieCom(args.host, args.password)
+	client = PvScript(args.host, args.password)
 	client.connect()
 	return client
 
@@ -253,7 +253,6 @@ def _on_frame(client, buf: FrameBuffer, im, title, state, traces=None) -> None:
 			state,
 		)
 		return
-	# COM buffer is 90° CCW from PV, then also mirrored left/right.
 	frame = orient_fov(frame)
 	buf.push(frame)
 	avg = buf.mean()
@@ -514,7 +513,7 @@ def main(argv=None) -> None:
 	p = argparse.ArgumentParser(description="PrairieView live viewer")
 	p.add_argument("--host", default="127.0.0.1", help="PrairieView IP")
 	p.add_argument("--password", default="0000")
-	p.add_argument("--relay", help="optional host[:port] if this PC has no PrairieLink")
+	p.add_argument("--relay", help="host[:port] of the scope-PC relay (otherwise PV script port on --host)")
 	p.add_argument("--channel", type=int, default=1)
 	p.add_argument("--interval-ms", type=int, default=50)
 	p.add_argument(

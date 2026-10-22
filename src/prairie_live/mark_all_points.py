@@ -146,17 +146,6 @@ def pack_mark_all_points(
 	return parts
 
 
-def parts_to_com_command(parts: list[str]) -> str:
-	"""COM SendScriptCommands uses spaces (quote any token that needs it)."""
-	out = []
-	for p in parts:
-		if any(c.isspace() for c in p):
-			out.append(f'"{p}"')
-		else:
-			out.append(p)
-	return " ".join(out)
-
-
 def stim_params_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
 	"""Pull -slm fields from Mark Points meta / experiment overlay."""
 	use_3d = str(meta.get("use_3d", "False")).lower() in ("true", "1", "yes")

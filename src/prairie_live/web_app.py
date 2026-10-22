@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from prairie_live.com_ports import list_com_ports
+from prairie_live.com_ports import list_com_ports, pick_serial
 from prairie_live.gui_session import (
 	apply_gui_overrides,
 	group_sizes_for_pool,
@@ -19,7 +19,7 @@ from prairie_live.gui_session import (
 	planned_trial_count,
 	trial_log_line,
 )
-from prairie_live.lab_defaults import DEFAULT_RELAY, DEFAULT_SERIAL, STIM_MODES, lab_defaults
+from prairie_live.lab_defaults import DEFAULT_RELAY, DEFAULT_SERIAL, STIM_MODES, TRIGGERS, lab_defaults
 from prairie_live.live_feed import LiveFeed
 from prairie_live.markpoints import extract_unique_points, load_mark_points_file
 from prairie_live.power_view import board_state, render_board_png, unique_powers
@@ -72,6 +72,7 @@ def _file(handler: BaseHTTPRequestHandler, path: Path, ctype: str) -> None:
 	data = path.read_bytes()
 	handler.send_response(200)
 	handler.send_header("Content-Type", ctype)
+	handler.send_header("Cache-Control", "no-store")
 	handler.send_header("Content-Length", str(len(data)))
 	handler.end_headers()
 	handler.wfile.write(data)
@@ -94,6 +95,8 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		if u.path == "/api/defaults":
 			d = lab_defaults()
+			ports = list_com_ports()
+			d["serial"] = pick_serial(ports, d["serial"])
 			_json(
 				self,
 				{
@@ -101,11 +104,13 @@ class Handler(BaseHTTPRequestHandler):
 					"serial": d["serial"],
 					"stim_mode": d["stim_mode"],
 					"stim_modes": list(STIM_MODES),
-					"powers": "140",
+					"trigger": d["trigger"],
+					"triggers": list(TRIGGERS),
+					"powers": "",
 					"seed": d["seed"],
 					"repetitions": d["repetitions"],
 					"stim_dff_min": d["stim_dff_min"],
-					"com_ports": list_com_ports(),
+					"com_ports": ports,
 					"relay": probe_relay(DEFAULT_RELAY),
 				},
 			)
@@ -150,6 +155,16 @@ class Handler(BaseHTTPRequestHandler):
 			self.end_headers()
 			self.wfile.write(png)
 			return
+		if u.path == "/api/points":
+			from prairie_live.scan_geometry import overlay_points
+
+			geom, wh = STATE.live.scan_geometry()
+			out = overlay_points(
+				list(STATE.points or []), geom, STATE.live.scan_geometry_error()
+			)
+			out["frame_wh"] = list(wh) if wh else None
+			_json(self, out)
+			return
 		if u.path == "/api/status":
 			self._drain()
 			with STATE.lock:
@@ -175,6 +190,8 @@ class Handler(BaseHTTPRequestHandler):
 						"ranked": [
 							{
 								"id": r["id"],
+								"key": r.get("key") or r["id"],
+								"power": r.get("power", r.get("min_power")),
 								"min_power": r.get("min_power"),
 								"dff": r.get("dff"),
 								"tercile": r.get("tercile"),
@@ -265,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
 			series = body.get("series") or STATE.series_path
 			if not series or not Path(series).is_file():
 				raise ValueError("choose a Fat Mark Points XML")
-			powers = parse_powers_field(str(body.get("powers") or "140"))
+			powers = parse_powers_field(str(body.get("powers") or ""))
 			pts = extract_unique_points(load_mark_points_file(series))
 			fields = summarize_fat_xml(series)
 			opt = apply_gui_overrides(
@@ -279,6 +296,7 @@ class Handler(BaseHTTPRequestHandler):
 				via_relay=body.get("via_relay") or DEFAULT_RELAY,
 				serial=body.get("serial") or DEFAULT_SERIAL,
 				stim_mode=body.get("stim_mode") or "slm",
+				trigger=body.get("trigger") or "serial",
 				xml_fields=fields,
 			)
 			n_t = planned_trial_count(len(pts), powers, n_groups=int(opt["n_groups"]))
@@ -295,8 +313,9 @@ class Handler(BaseHTTPRequestHandler):
 			STATE.live.set_addr(str(opt.get("via_relay") or DEFAULT_RELAY))
 			STATE.append(
 				f"start  {len(pts)} pts  groups={opt['n_groups']}  "
-				f"each group at {powers}  relay={opt['via_relay']}  "
-				f"COM={opt['serial']}  mode={opt['stim_mode']}  trials={n_t}"
+				f"every point at each of {powers}  relay={opt['via_relay']}  "
+				f"COM={opt['serial']}  mode={opt['stim_mode']}  "
+				f"trigger={opt['trigger']}  trials={n_t}"
 			)
 
 			def work() -> None:
@@ -326,8 +345,13 @@ class Handler(BaseHTTPRequestHandler):
 
 		try:
 			body = json.loads(raw.decode("utf-8") or "{}")
-			ids = {str(i) for i in (body.get("ids") or [])}
-			sel = [r for r in STATE.ranked if str(r["id"]) in ids]
+			# Prefer row keys (id@power); bare ids still match for older clients.
+			want = {str(i) for i in (body.get("ids") or body.get("keys") or [])}
+			sel = [
+				r
+				for r in STATE.ranked
+				if str(r.get("key") or r["id"]) in want or str(r["id"]) in want
+			]
 			if not sel:
 				raise ValueError("no points selected")
 			out = Path(STATE.opt.get("images_dir") or "trial_images")
@@ -352,9 +376,12 @@ class Handler(BaseHTTPRequestHandler):
 				kind, payload = STATE.q.get_nowait()
 				if kind == "trial":
 					STATE.append(trial_log_line(payload))
+					from prairie_live.scan_geometry import points_for_image
+
+					geom, _ = STATE.live.scan_geometry()
 					st = board_state(
 						payload,
-						STATE.points,
+						points_for_image(list(STATE.points or []), geom),
 						stim_dff_min=float(STATE.opt.get("stim_dff_min") or 0.0),
 						n_trials=STATE.n_trials,
 					)

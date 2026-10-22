@@ -1,5 +1,5 @@
 """Length-prefixed binary frames so a Mac viewer can pull images off the
-Windows scope PC. PrairieLink COM cannot run on macOS; the relay translates."""
+Windows scope PC; -gi only works next to PV, so the relay forwards frames."""
 
 from __future__ import annotations
 
