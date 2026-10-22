@@ -233,6 +233,21 @@ def _format_xml_parse_error(path: str, text: str, err: ET.ParseError) -> str:
 	return "\n".join(parts)
 
 
+def _is_placeholder(step: dict, pt: dict) -> bool:
+	"""Group-name row with no coordinates (e.g. PV "Custom Order" index lists)."""
+	gname = step.get("raw_points") or step.get("name") or ""
+	return (
+		pt.get("name") == gname
+		and float(pt.get("x", 0)) == 0.0
+		and float(pt.get("y", 0)) == 0.0
+		and len(step.get("points", [])) == 1
+	)
+
+
+def _has_coords(step: dict) -> bool:
+	return any(not _is_placeholder(step, pt) for pt in step.get("points", []))
+
+
 def extract_unique_points(steps: list[dict]) -> list[dict]:
 	"""
 	Flatten unique FOV points from series steps (points-only pool).
@@ -243,15 +258,8 @@ def extract_unique_points(steps: list[dict]) -> list[dict]:
 	seen: set[str] = set()
 	out: list[dict] = []
 	for step in steps:
-		gname = step.get("raw_points") or step.get("name") or ""
 		for pt in step.get("points", []):
-			# Skip slim placeholder rows (group name, no coords).
-			if (
-				pt.get("name") == gname
-				and float(pt.get("x", 0)) == 0.0
-				and float(pt.get("y", 0)) == 0.0
-				and len(step.get("points", [])) == 1
-			):
+			if _is_placeholder(step, pt):
 				continue
 			pid = str(pt.get("id", len(out) + 1))
 			if pid in seen:
@@ -272,7 +280,11 @@ def extract_unique_points(steps: list[dict]) -> list[dict]:
 
 
 def template_meta(steps: list[dict]) -> dict[str, Any]:
-	"""Series + step timing defaults taken from the first source step."""
+	"""Series + step timing from the first step that has real coordinates.
+
+	A leftover index-only entry ahead of the points (PV "Custom Order") would
+	otherwise set duration / repetitions for every trial.
+	"""
 	if not steps:
 		return {
 			"use_3d": _DEFAULT_USE_3D,
@@ -296,7 +308,7 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 			"pv_saved_format": False,
 			"step_delay": "2",
 		}
-	s0 = steps[0]
+	s0 = next((s for s in steps if _has_coords(s)), steps[0])
 	keys = (
 		"use_3d",
 		"all_points_at_once",
@@ -666,10 +678,11 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 					"power": pwr,
 				})
 		groups.append(group)
-	if len(groups) > 1:
+	real = [g for g in groups if _has_coords(g)]
+	if len(real) > 1:
 		# Delay before each later step (rig file: 22.1 ms first, then 2 ms).
 		for g in groups:
-			g["step_delay"] = groups[1]["initial_delay"]
+			g["step_delay"] = real[1]["initial_delay"]
 	return groups
 
 
