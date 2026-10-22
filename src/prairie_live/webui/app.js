@@ -242,7 +242,7 @@ function renderCandidates(ranked) {
   box.hidden = false;
   $("side").classList.add("has-cands");
   if (!picked.size) {
-    lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(String(r.id)));
+    lastRanked.filter((r) => r.stimulated).forEach((r) => picked.add(String(r.id)));
   }
   for (const r of lastRanked) {
     const tr = document.createElement("tr");

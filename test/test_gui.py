@@ -121,13 +121,13 @@ def test_board_highlights_changed_only_over_threshold():
 	}
 	st = board_state(row, pts, stim_dff_min=0.1, n_trials=6)
 	by_id = {m["id"]: m for m in st["marks"]}
+	# Only this trial's fired points are overlaid (not the whole Mark Points pool).
+	assert set(by_id) == {"1", "2", "3"}
 	assert by_id["1"]["fired"] and by_id["1"]["changed"]
 	assert by_id["2"]["fired"] and not by_id["2"]["changed"]
 	assert by_id["3"]["changed"]
-	assert not by_id["4"]["fired"] and not by_id["4"]["changed"]
 	assert mark_style(by_id["1"])["kind"] == "changed"
 	assert mark_style(by_id["2"])["kind"] == "fired"
-	assert mark_style(by_id["4"])["kind"] == "pool"
 	assert "140" in st["title"]
 	assert "1,2,3" in st["title"]
 	assert "trial 1/6" in st["title"]
@@ -171,7 +171,8 @@ def test_candidate_table_and_save(tmp_path):
 	]
 	ranked = rank_candidate_points(trials, pts, stim_dff_min=0.0)
 	picked = default_picked_ids(ranked)
-	assert picked  # top tercile of stimulated
+	# All imaged changes (including darkening burns), not only the top tercile.
+	assert picked == {"a", "b", "c"}
 	cells = table_cells(ranked)
 	assert cells[0]["id"] == ranked[0]["id"]
 	assert "min_power" in cells[0]

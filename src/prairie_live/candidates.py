@@ -16,13 +16,20 @@ TERCILE_RGB = {
 }
 
 
+def is_image_change(dff: float | None, stim_dff_min: float = 0.0) -> bool:
+	"""True when |ΔF/F| clears the threshold (burns often darken → negative ΔF/F)."""
+	if dff is None:
+		return False
+	return abs(float(dff)) > float(stim_dff_min)
+
+
 def rank_candidate_points(
 	trials: list[dict[str, Any]],
 	points: list[dict[str, Any]],
 	*,
 	stim_dff_min: float = 0.0,
 ) -> list[dict[str, Any]]:
-	"""Lowest stimulating power first, then highest ΔF/F; unstimulated last."""
+	"""Any imaged change counts. Lowest such power first, then largest |ΔF/F|."""
 	by_id = {str(p["id"]): dict(p) for p in points}
 	hits: dict[str, list[tuple[float, float]]] = {pid: [] for pid in by_id}
 	for row in trials:
@@ -33,21 +40,23 @@ def rank_candidate_points(
 		for pid, dff in ps.items():
 			hits.setdefault(str(pid), []).append((power, float(dff)))
 	ranked: list[dict[str, Any]] = []
+	thresh = float(stim_dff_min)
 	for pid, pt in by_id.items():
 		pairs = hits.get(pid) or []
-		stim = [(p, d) for p, d in pairs if d >= stim_dff_min]
+		stim = [(p, d) for p, d in pairs if is_image_change(d, thresh)]
 		if stim:
 			min_p = min(p for p, _ in stim)
-			dff = max(d for p, d in stim if p == min_p)
+			at = [d for p, d in stim if p == min_p]
+			dff = max(at, key=lambda d: abs(d))
 			ranked.append(_cand_row(pt, True, min_p, dff))
 		else:
-			best = max((d for _, d in pairs), default=None)
-			ranked.append(_cand_row(pt, False, None, best))
+			best = max(pairs, key=lambda pd: abs(pd[1]), default=None)
+			ranked.append(_cand_row(pt, False, None, None if best is None else best[1]))
 	ranked.sort(
 		key=lambda r: (
 			0 if r["stimulated"] else 1,
 			float(r["min_power"]) if r["stimulated"] else 1e9,
-			-(float(r["dff"]) if r["dff"] is not None else -1e9),
+			-(abs(float(r["dff"])) if r["dff"] is not None else -1e9),
 		)
 	)
 	_assign_terciles(ranked)
@@ -83,13 +92,13 @@ def _assign_terciles(ranked: list[dict[str, Any]]) -> None:
 
 def format_candidates_txt(ranked: list[dict[str, Any]]) -> str:
 	lines = [
-		"CANDIDATES — lowest power that stimulated, then max ΔF/F",
+		"CANDIDATES — any |ΔF/F| change; lowest such power, then largest |ΔF/F|",
 		"id  tercile  min_power  dff",
 	]
 	for r in ranked:
 		pwr = "-" if r["min_power"] is None else str(r["min_power"])
 		dff = "-" if r["dff"] is None else f"{float(r['dff']):.4f}"
-		tag = "stim" if r["stimulated"] else "no stim"
+		tag = "change" if r["stimulated"] else "no change"
 		lines.append(f"{r['id']}  {r['tercile']}  {pwr}  {dff}  {tag}")
 	return "\n".join(lines) + "\n"
 

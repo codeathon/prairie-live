@@ -14,22 +14,33 @@ def test_rank_prefers_low_power_then_high_dff():
 		{"id": "a", "x": 0.2, "y": 0.2},
 		{"id": "b", "x": 0.5, "y": 0.5},
 		{"id": "c", "x": 0.8, "y": 0.8},
+		{"id": "d", "x": 0.3, "y": 0.3},
 	]
 	trials = [
 		{"point_scores": {"a": 0.10, "b": 0.40}, "power": 140},
 		{"point_scores": {"a": 0.12}, "power": 80},
-		{"point_scores": {"c": -0.01}, "power": 80},
+		# Burns often darken — negative ΔF/F still counts as a change.
+		{"point_scores": {"c": -0.25}, "power": 100},
+		{"point_scores": {"d": 0.0}, "power": 100},
 	]
 	ranked = rank_candidate_points(trials, pts, stim_dff_min=0.0)
 	ids = [r["id"] for r in ranked]
 	assert ids[0] == "a"
 	assert ranked[0]["min_power"] == 80
 	assert ranked[0]["dff"] == 0.12
-	assert ranked[1]["id"] == "b"
-	assert ranked[-1]["id"] == "c"
-	assert ranked[-1]["stimulated"] is False
-	assert ranked[-1]["tercile"] == "none"
+	assert {r["id"] for r in ranked if r["stimulated"]} == {"a", "b", "c"}
+	assert next(r for r in ranked if r["id"] == "c")["dff"] == -0.25
+	assert next(r for r in ranked if r["id"] == "d")["stimulated"] is False
 	assert ranked[0]["tercile"] in TERCILE_RGB
+
+
+def test_burn_darkening_is_a_candidate():
+	pts = [{"id": "7", "x": 0.1, "y": 0.1}]
+	trials = [{"point_scores": {"7": -0.4}, "power": 100}]
+	ranked = rank_candidate_points(trials, pts, stim_dff_min=0.0)
+	assert ranked[0]["stimulated"] is True
+	assert ranked[0]["min_power"] == 100
+	assert ranked[0]["tercile"] == "top"
 
 
 def test_same_power_higher_dff_wins():

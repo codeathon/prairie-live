@@ -45,8 +45,8 @@ def maybe_show_candidates(
 
 
 def default_picked_ids(ranked: list[dict]) -> set[str]:
-	"""Top tercile starts selected."""
-	return {str(r["id"]) for r in ranked if r.get("tercile") == "top"}
+	"""Every point with an imaged change starts selected."""
+	return {str(r["id"]) for r in ranked if r.get("stimulated")}
 
 
 def toggle_picked(picked: set[str], pid: str) -> set[str]:

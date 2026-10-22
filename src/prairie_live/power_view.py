@@ -31,13 +31,21 @@ def board_state(
 	stim_dff_min: float = 0.0,
 	n_trials: int | None = None,
 ) -> dict[str, Any]:
-	"""Overlay state for the window matching this trial's power."""
+	"""Overlay state for the window matching this trial's power.
+
+	Only the points fired in this trial are marked (not the whole Mark Points pool).
+	"""
+	from prairie_live.candidates import is_image_change
+
 	fired = [str(i) for i in (row.get("point_ids") or [])]
 	fired_set = set(fired)
 	scores = row.get("point_scores") if isinstance(row.get("point_scores"), dict) else {}
+	by_id = {str(pt["id"]): pt for pt in points}
 	marks: list[dict[str, Any]] = []
-	for pt in points:
-		pid = str(pt["id"])
+	for pid in fired:
+		pt = by_id.get(pid)
+		if pt is None:
+			continue
 		raw = scores.get(pid)
 		dff = float(raw) if raw is not None else None
 		marks.append(
@@ -45,8 +53,8 @@ def board_state(
 				"id": pid,
 				"x": float(pt["x"]),
 				"y": float(pt["y"]),
-				"fired": pid in fired_set,
-				"changed": dff is not None and dff >= float(stim_dff_min),
+				"fired": True,
+				"changed": is_image_change(dff, stim_dff_min),
 				"dff": dff,
 			}
 		)
@@ -139,10 +147,8 @@ def render_board_png(state: dict[str, Any]) -> bytes:
 	if bg.ndim == 2:
 		bg = np.stack([bg, bg, bg], axis=-1)
 	bg = np.ascontiguousarray(bg[..., :3])
-	pool = [m for m in state.get("marks") or [] if not m.get("fired") and not m.get("changed")]
 	fired = [m for m in state.get("marks") or [] if m.get("fired") and not m.get("changed")]
 	changed = [m for m in state.get("marks") or [] if m.get("changed")]
-	draw_point_rings(bg, pool, radius=4, color=(154, 154, 154))
 	draw_point_rings(bg, fired, radius=6, color=(0, 229, 255))
 	draw_point_rings(bg, changed, radius=8, color=(57, 255, 20))
 	return png_bytes_rgb(bg)
