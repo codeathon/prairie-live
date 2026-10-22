@@ -71,8 +71,30 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   height: 100%;
 }
 .fov-wrap svg { pointer-events: none; overflow: visible; }
+.fov-wrap svg.hidden { display: none; }
 .fov-wrap circle { fill: none; stroke: #00ffff; }
 .fov-wrap text { fill: #00ffff; paint-order: stroke; stroke: #000; }
+/* Corner control on the live scan; keeps the FOV readable when marks are dense. */
+.fov-toggle {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  margin: 0;
+  padding: 2px 7px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  border-radius: 4px;
+  background: rgba(18, 20, 26, 0.72);
+  color: #00ffff;
+  border: 1px solid rgba(0, 255, 255, 0.55);
+  cursor: pointer;
+}
+.fov-toggle[aria-pressed="false"] {
+  color: var(--muted);
+  border-color: #3a4150;
+}
 
 /* Two sub-columns: Rig + Session | Fat XML; log (+ candidates) share the rest. */
 .side {

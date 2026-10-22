@@ -80,6 +80,16 @@ async function refreshRelay() {
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
+let marksOn = true;
+let marksNote = "";
+
+function applyMarksVisibility() {
+  $("live_marks").classList.toggle("hidden", !marksOn);
+  $("marks_note").textContent = marksOn ? marksNote : "";
+  const btn = $("marks_toggle");
+  btn.setAttribute("aria-pressed", marksOn ? "true" : "false");
+  btn.title = marksOn ? "Hide Mark Points overlay" : "Show Mark Points overlay";
+}
 
 async function refreshPoints() {
   let res;
@@ -109,7 +119,8 @@ async function refreshPoints() {
     t.textContent = p.id;
     svg.append(c, t);
   }
-  $("marks_note").textContent = res.note || "";
+  marksNote = res.note || "";
+  applyMarksVisibility();
 }
 
 async function refreshLive() {
@@ -274,6 +285,11 @@ async function boot() {
   $("via_relay").addEventListener("change", refreshRelay);
   $("powers").addEventListener("input", syncTypedPowers);
   $("xml_file").addEventListener("change", onXmlFile);
+  $("marks_toggle").addEventListener("click", () => {
+    marksOn = !marksOn;
+    applyMarksVisibility();
+  });
+  applyMarksVisibility();
   $("run").addEventListener("click", async () => {
     const res = await jpost("/api/run", {
       series: $("xml_path").textContent,
