@@ -51,33 +51,32 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   border-radius: 10px;
   padding: 6px 8px;
 }
-.tile h3 { margin: 0 0 4px; font-size: 0.9rem; }
+/* Same header + FOV + caption chrome on every tile so images line up in a row. */
 .tile-head {
+  flex: 0 0 28px;
+  min-height: 28px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 4px;
 }
-.tile-head h3 { margin: 0; }
-/* FOV shrinks to whatever the cell allows; contain keeps it square. */
-.tile img {
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 100%;
-  object-fit: contain;
-  display: block;
+.tile-head h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
-.tile p { margin: 4px 0 0; font-size: 0.85em; }
-.tile p:empty { display: none; }
-/* Fixed caption band under Live scan so status/notes cannot resize the FOV. */
-#tile_live .live-caps {
+.tile-caps {
   flex: 0 0 2.8em;
   min-height: 2.8em;
   margin-top: 4px;
   overflow: hidden;
 }
-#tile_live .live-caps p { margin: 0; font-size: 0.85em; line-height: 1.35; }
+.tile-caps p { margin: 0; font-size: 0.85em; line-height: 1.35; }
+.tile-caps p:empty { visibility: hidden; }
 #marks_note.dimmed { visibility: hidden; }
 /* Overlay shares the image box; meet == object-fit: contain, so marks line up. */
 .fov-wrap { position: relative; flex: 1 1 auto; min-height: 0; }
@@ -86,6 +85,8 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   inset: 0;
   width: 100%;
   height: 100%;
+  object-fit: contain;
+  display: block;
 }
 .fov-wrap svg { pointer-events: none; overflow: visible; }
 .fov-wrap svg.hidden { display: none; }

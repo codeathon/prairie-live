@@ -168,18 +168,24 @@ function ensurePowerTiles(boards) {
       const tile = document.createElement("div");
       tile.className = "tile";
       tile.dataset.power = key;
-      tile.innerHTML = `<h3></h3><img alt="power ${key}" /><p class="muted"></p>`;
+      // Match Live scan structure (head / fov-wrap / caps) so FOVs align horizontally.
+      tile.innerHTML =
+        `<div class="tile-head"><h3></h3></div>` +
+        `<div class="fov-wrap"><img alt="power ${key}" /></div>` +
+        `<div class="tile-caps"><p class="muted"></p></div>`;
       grid.appendChild(tile);
       fitGrid();
     }
     const tile = grid.querySelector(`[data-power="${key}"]`);
-    tile.querySelector("h3").textContent = b.title || `power ${key}`;
+    tile.querySelector("h3").textContent = `power ${key}`;
+    const cap = tile.querySelector(".tile-caps p");
     if (b.ready) {
       const img = tile.querySelector("img");
       img.src = `/api/board.png?power=${encodeURIComponent(key)}&t=${Date.now()}`;
-      tile.querySelector("p").textContent = "updated";
+      const rest = String(b.title || "").replace(/^power\s+\S+\s*·?\s*/, "");
+      cap.textContent = rest || "updated";
     } else {
-      tile.querySelector("p").textContent = "waiting for first trial…";
+      cap.textContent = "waiting for first trial…";
     }
   }
 }

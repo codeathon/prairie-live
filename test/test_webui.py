@@ -170,15 +170,21 @@ def test_web_ui_serves_page_not_tk_form():
 		text = body.decode("utf-8")
 		assert "prairie-live mapping" in text
 		assert "Live scan" in text
+		assert "tile-head" in text
+		assert "fov-wrap" in text
+		assert "tile-caps" in text
 		assert "Fat Mark Points XML" in text
 		assert "tkinter" not in text.lower()
 		assert 'src="/app.js"' in text
 		js_status, js_ctype, js = _get(base + "/app.js")
 		assert js_status == 200
 		assert b"ensurePowerTiles" in js
+		assert b'tile-head' in js
+		assert b"fov-wrap" in js
 		css_status, _, css = _get(base + "/style.css")
 		assert css_status == 200
 		assert b".fov-grid" in css
+		assert b".tile-caps" in css
 	finally:
 		httpd.shutdown()
 
