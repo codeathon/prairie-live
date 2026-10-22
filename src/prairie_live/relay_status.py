@@ -18,10 +18,8 @@ def parse_relay_addr(addr: str) -> tuple[str, int]:
 
 def probe_relay(addr: str, *, timeout: float = 1.5) -> dict:
 	"""
-	Green when the control port answers ping (relay up and PV script COM live).
-
-	ping on the relay calls _script() first, so a failed ping with a live
-	TCP socket usually means PrairieView / PrairieLink is down.
+	Green when the control port answers ping (relay up and its PV script
+	session connected); a failed ping on a live socket means PV is down.
 	"""
 	try:
 		host, port = parse_relay_addr(addr)
@@ -53,7 +51,7 @@ def probe_relay(addr: str, *, timeout: float = 1.5) -> dict:
 			return {
 				"up": True,
 				"pv": True,
-				"detail": "relay up · PrairieView COM live",
+				"detail": "relay up · PrairieView connected",
 				"addr": f"{host}:{port}",
 			}
 		err = reply.get("error") or "ping failed"

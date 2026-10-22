@@ -1,141 +1,135 @@
-import threading
-
 import numpy as np
+import pytest
 
-from prairie_live.com_backend import PrairieCom
+from prairie_live.gi_grab import GiResult
+from prairie_live.pv_script import PvScript
 from prairie_live.relay import Relay, grab_heartbeat_line
 
 
-class FakeCom:
-	"""Stand-in for PrairieCom so relay dispatch can be tested without COM."""
+class FakeLink:
+	"""PV script port stand-in: records every command on the one session."""
 
-	def __init__(self):
-		self.calls = []
+	def __init__(self, replies=None):
+		self.timeout = 10.0
+		self.sent: list[tuple] = []
+		self.replies = replies or {}
 
-	def start_tseries(self):
-		self.calls.append("tseries")
+	def send_command(self, *parts):
+		self.sent.append((parts, self.timeout))
+		return "ACK\nDONE"
 
-	def abort(self):
-		self.calls.append("abort")
+	def query(self, *parts):
+		self.sent.append((parts, self.timeout))
+		return self.replies.get(parts, "")
 
-	def start_live(self):
-		self.calls.append("live")
-
-	def get_state(self, key, index=None, subindex=None):
-		self.calls.append(("get_state", key, index, subindex))
-		return {
-			"ok": True,
-			"cmd": "get_state",
-			"key": key,
-			"value": f"{key}/{index}/{subindex}",
-		}
-
-	def get_motor_position(self, axis, device=None):
-		self.calls.append(("get_motor_position", axis, device))
-		if axis.upper() not in ("X", "Y", "Z"):
-			raise ValueError(f"bad axis {axis!r}")
-		return {
-			"ok": True,
-			"cmd": "get_motor_position",
-			"axis": axis.upper(),
-			"value": 12.5,
-		}
-
-	def load_mark_points_xml(self, xml, path=None):
-		self.calls.append(("load_mark_points_xml", xml[:20], path))
-		if not xml.strip():
-			raise ValueError("empty xml")
-		return {"ok": True, "cmd": "load_mark_points", "path": path or "tmp.xml"}
-
-	def mark_points(self):
-		self.calls.append("mark_points")
-		return {"ok": True, "cmd": "mark_points"}
-
-	def mark_all_points(self, parts, *, wait_ms=0.0):
-		self.calls.append(("mark_all_points", list(parts), wait_ms))
-		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts)}
+	def close(self):
+		pass
 
 
-def _relay():
+def _relay(replies=None):
 	r = Relay("127.0.0.1", "0000", 1)
-	fake = FakeCom()
-	r.com = fake
-	r.script_com = fake
+	r.pv.link = FakeLink(replies)
 	return r
 
 
-def test_ping_does_not_touch_com():
+def _cmds(r):
+	return [parts for parts, _ in r.pv.link.sent]
+
+
+def test_ping_sends_nothing_to_pv():
 	r = _relay()
 	assert r.handle_command({"cmd": "ping"}) == {"ok": True, "cmd": "ping"}
-	assert r.com.calls == []
+	assert _cmds(r) == []
 
 
-def test_get_state_passes_key_and_index():
+def test_ping_fails_when_pv_session_down():
+	r = Relay("127.0.0.1", "0000", 1)
+	out = r.handle_command({"cmd": "ping"})
+	assert out["ok"] is False and "PrairieView" in out["error"]
+
+
+def test_live_tseries_abort_are_script_commands():
 	r = _relay()
+	for cmd in ("live", "tseries", "abort"):
+		assert r.handle_command({"cmd": cmd})["ok"] is True
+	assert _cmds(r) == [("-LiveScan",), ("-TSeries",), ("-Abort",)]
+
+
+def test_get_state_uses_gts():
+	r = _relay({("-gts", "currentScanAmplitude", "XAxis"): "7.6"})
 	out = r.handle_command(
-		{"cmd": "get_state", "key": "micronsPerPixel", "index": "XAxis"}
+		{"cmd": "get_state", "key": "currentScanAmplitude", "index": "XAxis"}
 	)
-	assert out["ok"] is True
-	assert out["value"] == "micronsPerPixel/XAxis/None"
-	assert r.com.calls == [("get_state", "micronsPerPixel", "XAxis", None)]
+	assert out["ok"] is True and out["value"] == "7.6" and out["index"] == "XAxis"
+	assert _cmds(r) == [("-gts", "currentScanAmplitude", "XAxis")]
 
 
-def test_get_motor_position_returns_float():
-	r = _relay()
-	out = r.handle_command({"cmd": "get_motor_position", "axis": "X"})
-	assert out["ok"] is True
-	assert out["axis"] == "X"
-	assert out["value"] == 12.5
+def test_get_state_needs_key():
+	out = _relay().handle_command({"cmd": "get_state", "key": ""})
+	assert out["ok"] is False and "key" in out["error"]
+
+
+def test_get_motor_position_parses_number():
+	r = _relay({("-GetMotorPosition", "Z"): "3595.85"})
+	out = r.handle_command({"cmd": "get_motor_position", "axis": "z"})
+	assert out == {"ok": True, "cmd": "get_motor_position", "axis": "Z", "value": 3595.85}
 
 
 def test_get_motor_position_bad_axis_is_error():
+	out = _relay().handle_command({"cmd": "get_motor_position", "axis": "Q"})
+	assert out["ok"] is False and "axis" in out["error"]
+
+
+def test_load_and_fire_mark_points_on_one_session(tmp_path):
 	r = _relay()
-	out = r.handle_command({"cmd": "get_motor_position", "axis": "Q"})
-	assert out["ok"] is False
-	assert "axis" in out["error"]
-
-
-def test_load_mark_points_and_mark_points(tmp_path):
-	r = _relay()
-	xml = "<PVMarkPointSeriesElements/>"
-	path = str(tmp_path / "trial.xml")
-	out = r.handle_command({"cmd": "load_mark_points", "xml": xml, "path": path})
-	assert out["ok"] is True
-	assert out["cmd"] == "load_mark_points"
-	assert out["path"] == path
-	assert r.com.calls[0][0] == "load_mark_points_xml"
-	out = r.handle_command({"cmd": "mark_points"})
-	assert out == {"ok": True, "cmd": "mark_points", "via": "com"}
-	assert r.com.calls[1] == "mark_points"
-
-
-def test_mark_points_prefers_tcp_script(tmp_path):
-	r = _relay()
-	sent = []
-
-	def fake_tcp(*parts):
-		sent.append(parts)
-		return "ACK\nDONE"
-
-	r._script_command = fake_tcp
 	path = str(tmp_path / "trial.xml")
 	out = r.handle_command({"cmd": "load_mark_points", "xml": "<x/>", "path": path})
 	assert out["ok"] is True and out["path"] == path
-	out = r.handle_command({"cmd": "mark_points"})
-	assert out["ok"] is True and out["via"] == "tcp"
-	assert sent == [("-LoadMarkPoints", path), ("-MarkPoints",)]
-	assert r.com.calls == []
+	assert (tmp_path / "trial.xml").read_text() == "<x/>"
+	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
+	assert r.pv.link.sent == [(("-LoadMarkPoints", path), 60.0), (("-MarkPoints",), 60.0)]
+	assert r.pv.link.timeout == 10.0
 
 
-def test_mark_all_points_dispatch():
+def test_load_mark_points_rejects_empty_xml():
+	out = _relay().handle_command({"cmd": "load_mark_points", "xml": " "})
+	assert out["ok"] is False
+
+
+def test_mark_all_points_waits_whole_ms_then_fires():
 	r = _relay()
 	parts = ["-MarkAllPoints", "1", "False", "0.1", "0.2", "10", "Monaco", "0.75", "PFI1"]
-	out = r.handle_command(
-		{"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1}
-	)
+	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1})
 	assert out["ok"] is True
-	assert out["cmd"] == "mark_all_points"
-	assert r.com.calls[0] == ("mark_all_points", parts, 22.1)
+	assert _cmds(r) == [("-Wait", "22"), tuple(parts)]
+
+
+def test_grab_one_stores_gi_frame():
+	class FakeGi:
+		last_error = ""
+		pid = 1
+
+		def grab(self, ch, w, h):
+			return GiResult(np.full((h, w), 9, np.uint16), "ACK DONE", w * h, 0x1000000, True)
+
+	r = _relay()
+	r.pv.gi = FakeGi()
+	r.pv.wh = (64, 128)
+	r._grab_one()
+	assert r.latest_frame().shape == (64, 128)
+	assert int(r.latest_frame().max()) == 9
+
+
+def test_pv_script_requires_connection():
+	with pytest.raises(RuntimeError):
+		PvScript().send("-LiveScan")
+
+
+def test_unknown_command_is_rejected():
+	r = _relay()
+	out = r.handle_command({"cmd": "shutdown"})
+	assert out["ok"] is False
+	assert "unknown" in out["error"]
 
 
 def test_relay_client_take_frame_skips_tiny():
@@ -203,142 +197,3 @@ def test_bind_second_listen_fails():
 		a.close()
 
 
-def test_probe_and_pick_channel_switches():
-	r = _relay()
-	r.channel = 1
-	r.com.probe_live_grab = lambda preferred: {
-		"wh": (32, 64),
-		"channel": 3,
-		"scores": {1: 0.0, 2: 0.0, 3: 12.0, 4: 0.0},
-		"rows": ["ch3 64x32 max=12 ptp=12"],
-	}
-	r._probe_and_pick_channel()
-	assert r.channel == 3
-
-
-def test_drain_com_jobs_runs_fn():
-	r = _relay()
-	box: list = []
-	err: list = []
-	done = threading.Event()
-	r._com_jobs.put((lambda: 7, box, err, done))
-	r._drain_com_jobs()
-	assert box == [7]
-	assert done.is_set()
-	assert err == []
-
-
-def test_arm_live_grab_sends_livescan():
-	# Why: PV Live button does not always fill the PrairieLink grab buffer.
-	r = _relay()
-	r._arm_live_grab()
-	assert r.com.calls == ["live"]
-
-
-def test_unknown_command_is_rejected():
-	r = _relay()
-	out = r.handle_command({"cmd": "shutdown"})
-	assert out["ok"] is False
-	assert "unknown" in out["error"]
-
-
-class _StubPl:
-	def GetState(self, key, index=None, subindex=None):
-		if index is None:
-			return "4.0"
-		if subindex is None:
-			return f"{key}:{index}"
-		return f"{key}:{index}:{subindex}"
-
-	def GetMotorPosition(self, axis, device=None):
-		return 1.25 if device is None else 9.0
-
-
-def test_prairie_com_get_state_and_motor():
-	c = PrairieCom("127.0.0.1")
-	c._pl = _StubPl()
-	st = c.get_state("dwellTime")
-	assert st["value"] == "4.0"
-	st = c.get_state("micronsPerPixel", "XAxis")
-	assert st["value"] == "micronsPerPixel:XAxis"
-	mot = c.get_motor_position("y")
-	assert mot["axis"] == "Y"
-	assert mot["value"] == 1.25
-
-
-def test_prairie_com_rejects_empty_key_and_bad_axis():
-	c = PrairieCom("127.0.0.1")
-	c._pl = _StubPl()
-	try:
-		c.get_state("")
-		assert False
-	except ValueError:
-		pass
-	try:
-		c.get_motor_position("Q")
-		assert False
-	except ValueError:
-		pass
-
-
-def test_grab_one_uses_direct_gi_when_selected():
-	import numpy as np
-
-	from prairie_live.gi_grab import GiResult
-
-	class FakeGi:
-		last_error = ""
-
-		def grab(self, ch, w, h):
-			return GiResult(np.full((h, w), 9, np.uint16), "ACK DONE", w * h, 0x1000000, True)
-
-	r = Relay("127.0.0.1", "0000", 1, grab=True, grab_api="gi")
-	r._gi = FakeGi()
-	r._gi_wh = (64, 128)
-	r._grab_one()
-	assert r.latest_frame().shape == (64, 128)
-	assert int(r.latest_frame().max()) == 9
-
-
-def test_script_command_reuses_gi_link_instead_of_new_login():
-	r = _relay()
-
-	class Link:
-		timeout = 10.0
-
-		def __init__(self):
-			self.sent = []
-
-		def send_command(self, *parts):
-			self.sent.append((parts, self.timeout))
-			return "ACK\nDONE"
-
-	class Gi:
-		link = Link()
-
-	r._gi = Gi()
-	out = r.handle_command({"cmd": "mark_points"})
-	assert out["via"] == "tcp"
-	assert Gi.link.sent == [(("-MarkPoints",), 60.0)]
-	assert Gi.link.timeout == 10.0
-
-
-def test_get_state_uses_gi_link_query():
-	r = _relay()
-
-	class Link:
-		timeout = 10.0
-		asked = []
-
-		def query(self, *parts):
-			Link.asked.append(parts)
-			return "7.6"
-
-	class Gi:
-		link = Link()
-
-	r._gi = Gi()
-	out = r.handle_command({"cmd": "get_state", "key": "currentScanAmplitude", "index": "XAxis"})
-	assert out == {"ok": True, "cmd": "get_state", "key": "currentScanAmplitude", "value": "7.6"}
-	assert Link.asked == [("-gts", "currentScanAmplitude", "XAxis")]
-	assert r.com.calls == []

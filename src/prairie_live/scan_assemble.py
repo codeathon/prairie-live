@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-# 1×1 ReadImage scalars are junk. A 512×1 live line is not.
+# 1×1 frames are junk. A 512×1 live line is not.
 _JUNK = 8
 _FULL = 32
 

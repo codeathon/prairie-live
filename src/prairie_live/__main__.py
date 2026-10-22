@@ -69,7 +69,8 @@ def _one_shot(command: str, rest: list[str]) -> None:
 	p.add_argument("--host", default="127.0.0.1")
 	p.add_argument("--password", default="0000")
 	p.add_argument("--relay", help="host[:port] of prairie_live.relay")
-	p.add_argument("--tcp", action="store_true", help="commands only, port 1236")
+	# PV's script port is the only direct path now; kept so old command lines parse.
+	p.add_argument("--tcp", action="store_true", help=argparse.SUPPRESS)
 	p.add_argument("--key", help="GetState key, e.g. dwellTime")
 	p.add_argument("--index", help="optional GetState index, e.g. XAxis")
 	p.add_argument("--subindex", help="optional GetState subindex")
@@ -103,15 +104,9 @@ def _connect(args):
 		c = RelayClient(host, int(port or 25100))
 		c.connect()
 		return c
-	if args.tcp:
-		from prairie_live.tcp_backend import PrairieTcp
+	from prairie_live.pv_script import PvScript
 
-		c = PrairieTcp(args.host, args.password)
-		c.connect()
-		return c
-	from prairie_live.com_backend import PrairieCom
-
-	c = PrairieCom(args.host, args.password)
+	c = PvScript(args.host, args.password)
 	c.connect()
 	return c
 

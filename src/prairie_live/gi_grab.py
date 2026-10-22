@@ -1,10 +1,7 @@
 """Direct script -gi grab: PV writes the image into a buffer we own.
 
-PrairieLink's GetImage / GetImage_2 (script -gi) and ReadImage (-rrd) send PV
-this process ID plus a buffer address inside python.exe, and PV writes pixels
-there. On the scope PC (PV 6.1.64.15, PrairieLink64 6.0.64.73 from the GAC)
-those COM calls return None in a few ms, while the same -gi sent here fills
-the buffer at both low and high addresses. Only works with PV on this PC.
+`-gi <channel> <pid> <address>` makes PV write the current image into a
+buffer inside this python.exe, so it only works with PV on the same PC.
 """
 
 from __future__ import annotations

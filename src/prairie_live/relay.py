@@ -1,6 +1,8 @@
-"""Optional relay when the viewer PC does not have PrairieLink installed.
+"""Scope-PC relay: PV frames on --port, JSON commands on --port+1.
 
-Run on the scope PC. Frames on --port, JSON commands on --port+1.
+Talks to PrairieView only over its script port (TCP 1236): frames via -gi
+into our own buffer, Mark Points / state / Live / T-series as script
+commands on the same logged-in session. PrairieLink COM is not used.
 Ctrl+C (or Ctrl+Break on Windows) stops cleanly by closing listen sockets
 so accept() cannot hang forever.
 """
@@ -9,25 +11,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import queue
 import signal
 import socket
 import sys
-import tempfile
 import threading
 import time
 
-from prairie_live.com_backend import PrairieCom
-from prairie_live.prairie_link import SOH, PrairieLink
 from prairie_live.protocol import pack_frame
-from prairie_live.tcp_backend import DEFAULT_PORT as PV_SCRIPT_PORT
+from prairie_live.pv_script import PvScript
 
 DEFAULT_PORT = 25100
-# After pausing grab, wait for an in-flight GetImage to release the COM lock.
-_GRAB_DRAIN_S = 0.35
-# COM script calls must not block the relay ctrl socket forever.
-_COM_SCRIPT_TIMEOUT_S = 45.0
 
 
 def grab_heartbeat_line(
@@ -39,7 +32,7 @@ def grab_heartbeat_line(
 	"""Scope-console line so a dark analysis FOV can be diagnosed without the plot."""
 	ch = f" ch={int(channel)}" if channel is not None else ""
 	if frame is None:
-		line = f"grab heartbeat:{ch} NO FRAME  {last_error or 'no COM frame'}"
+		line = f"grab heartbeat:{ch} NO FRAME  {last_error or 'no -gi frame'}"
 	else:
 		h, w = frame.shape[:2]
 		line = (
@@ -61,40 +54,19 @@ class Relay:
 		*,
 		image_wh=(512, 512),
 		grab: bool = False,
-		grab_api: str = "com",
 	):
 		self.channel = channel
-		self.password = password
-		self.pv_host = pv_host
-		self.com = PrairieCom(pv_host, password)
-		# (height, width) — matches numpy frame.shape / GetImage_2 args.
-		h, w = image_wh
-		self.com._last_wh = (int(h), int(w))
-		# Same COM as grab — a second Connect races password vs -gi on port 1236
-		# ("unexpected parameter 0000-gi"). Scripts pause grab via _pause_grab.
-		self.script_com: PrairieCom | None = None
-		# Default off: GetImage_2 maps to script -gi with process/buffer addresses
-		# and PV then reports "Unexpected parameter <huge number>".
+		self.pv = PvScript(pv_host, password, image_wh=image_wh)
 		self._grab_enabled = bool(grab)
-		# "gi": our own -gi buffer on TCP 1236 instead of PrairieLink's GetImage.
-		self.grab_api = grab_api
-		self._gi = None
-		self._gi_wh = (int(h), int(w))
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
-		self._pause_grab = threading.Event()
-		self._script_lock = threading.Lock()
-		# One-shot so the console shows whether grab is zeros vs a real FOV.
 		self._logged_first_grab = False
-		self._logged_gi2 = False
 		self._hb_t = 0.0
 		self._send_n = 0
 		self._send_wh = None
 		self._send_max = -1
-		# Jobs run on the grab thread — win32com STA cannot GetImage from another thread.
-		self._com_jobs: queue.Queue = queue.Queue()
-		self._com_ready = threading.Event()
+		self._n_fired = 0
 
 	def note_send(self, w: int, h: int, peak: int) -> None:
 		self._send_n += 1
@@ -108,183 +80,66 @@ class Relay:
 		return f"send {w}x{h} n={self._send_n} max={self._send_max}"
 
 	def start(self) -> None:
-		if self._grab_enabled:
-			# Why: Connect+GetImage must share one thread. Main-thread Connect then
-			# grab-thread GetImage returned None (analysis: "no frame from relay").
-			threading.Thread(
-				target=self._grab_loop, daemon=True, name="pv-grab"
-			).start()
-			if not self._com_ready.wait(30.0):
-				raise RuntimeError("grab thread did not Connect in 30s")
-			if self.script_com is None:
-				raise RuntimeError(
-					"grab Connect failed. PrairieView must be open on this PC."
-				)
-		else:
-			self.com.connect()
-			self.script_com = self.com
-			print("grab OFF (default); pass --grab only when you need live frames")
-
-	def _probe_and_pick_channel(self) -> None:
-		# Why: Live can be on PMT2/3 or 256/1024² while we asked GetImage_2 for 512 ch1.
 		try:
-			probe = self.com.probe_live_grab(self.channel)
-		except Exception as e:
-			print(f"grab probe failed: {e}")
+			self.pv.connect()
+		except OSError as e:
+			raise RuntimeError(
+				f"cannot reach PrairieView script port on {self.pv.host}:{self.pv.port} "
+				f"({e}). PrairieView must be open with scripting enabled."
+			) from e
+		h, w = self.pv.wh
+		print(f"PV script port {self.pv.host}:{self.pv.port}  FOV {int(w)}x{int(h)}")
+		if not self._grab_enabled:
+			print("grab OFF (default); pass --grab for live frames")
 			return
-		print(f"grab probe FOV {int(probe['wh'][1])}x{int(probe['wh'][0])}")
-		for row in probe["rows"]:
-			print(f"  {row}")
-		if int(probe["channel"]) != int(self.channel):
-			print(
-				f"switching grab channel {self.channel} -> {probe['channel']} "
-				"(Live counts were on a different PMT)"
-			)
-			self.channel = int(probe["channel"])
-		scores = probe.get("scores") or {}
-		if max(scores.values(), default=-1.0) <= 0:
-			print(
-				"all channels max=0 after Live — PrairieLink is not the PV window. "
-				"Take one Snapshot in PV, leave Live running, watch max=."
-			)
-
-	def _arm_live_grab(self) -> None:
-		# Why: the PV Live Scan *button* refreshes the PV window; PrairieLink's
-		# GetImage/ReadImage buffer often stays on the last T-series until
-		# -LiveScan is sent on this COM connection. Markpoints are not required.
 		try:
-			self.com.start_live()
-			print("sent -LiveScan; FOV grab should move with no markpoints")
+			self.pv.start_live()
+			print("sent -LiveScan")
 		except Exception as e:
-			print(f"-LiveScan failed ({e}); press l in view or click Live in PV")
+			print(f"-LiveScan failed ({e}); click Live in PV")
+		try:
+			print(f"  ch{self.channel}: {self.pv.grab(self.channel).summary()}")
+		except Exception as e:
+			print(f"  ch{self.channel}: -gi probe failed: {e}")
+		threading.Thread(target=self._grab_loop, daemon=True, name="pv-grab").start()
+		print(f"grab ON (direct -gi, pid={self.pv.gi.pid})")
 
 	def stop(self) -> None:
 		self._stop.set()
-		self._pause_grab.set()
-		if not self._grab_enabled and self.com is not None:
-			try:
-				self.com.disconnect()
-			except Exception:
-				pass
-			self.script_com = None
-
-	def _init_grab_com(self) -> None:
-		try:
-			import pythoncom
-
-			pythoncom.CoInitialize()
-		except Exception:
-			pass
-		self.com.connect()
-		self.script_com = self.com
-		self._arm_live_grab()
-		if self.grab_api == "gi":
-			self._init_gi()
-			return
-		self._probe_and_pick_channel()
-		kind = getattr(self.com, "grab_api", None) or "GetImage_2"
-		print(f"grab ON ({kind}) COM-thread; use without --grab if PV shows -gi errors")
-		to = getattr(self.com, "timeout_api", None)
-		if to:
-			print(f"COM timeout: {to}")
-
-	def _init_gi(self) -> None:
-		from prairie_live.gi_grab import GiGrabber
-
-		self._gi = GiGrabber(
-			PrairieLink(
-				host=self.pv_host,
-				port=PV_SCRIPT_PORT,
-				password=self.password,
-				timeout=10.0,
-			)
-		)
-		self._gi_wh = self._gi.fov_wh(self._gi_wh)
-		h, w = self._gi_wh
-		print(f"grab ON (direct -gi, pid={self._gi.pid}) {int(w)}x{int(h)}")
-		try:
-			print(f"  ch{self.channel}: {self._gi.grab(self.channel, w, h).summary()}")
-		except Exception as e:
-			print(f"  ch{self.channel}: -gi probe failed: {e}")
-
-	def _gi_frame(self):
-		h, w = self._gi_wh
-		try:
-			with self._script_lock:
-				frame = self._gi.grab(self.channel, w, h).frame
-		except Exception as e:
-			self._gi.last_error = f"-gi {type(e).__name__}: {e}"
-			time.sleep(0.2)
-			return None
-		if frame is None:
-			time.sleep(0.05)
-		return frame
+		self.pv.disconnect()
 
 	def _grab_loop(self) -> None:
-		try:
-			self._init_grab_com()
-		except Exception as e:
-			print(f"grab Connect failed: {e}")
-			self.script_com = None
-		finally:
-			self._com_ready.set()
-		if self.script_com is None:
-			return
-		try:
-			while not self._stop.is_set():
-				self._drain_com_jobs()
-				if self._pause_grab.is_set():
-					time.sleep(0.01)
-					continue
-				self._grab_one()
-		finally:
-			if self._gi is not None:
-				self._gi.close()
-				self._gi = None
-			try:
-				self.com.disconnect()
-			except Exception:
-				pass
-			self.script_com = None
-
-	def _drain_com_jobs(self) -> None:
-		while True:
-			try:
-				fn, box, err, done = self._com_jobs.get_nowait()
-			except queue.Empty:
-				return
-			try:
-				box.append(fn())
-			except BaseException as e:
-				err.append(e)
-			done.set()
+		while not self._stop.is_set():
+			self._grab_one()
+			# The PV lock is not fair; this gap lets Mark Points commands in.
+			time.sleep(0.01)
 
 	def _grab_one(self) -> None:
-		frame = self._gi_frame() if self._gi is not None else self.com.get_frame(self.channel)
+		try:
+			frame = self.pv.grab(self.channel).frame
+		except Exception as e:
+			self.pv.last_error = f"-gi {type(e).__name__}: {e}"
+			frame = None
+			time.sleep(0.2)
 		if frame is not None:
 			with self._lock:
 				self._latest = frame
 			if not self._logged_first_grab:
-				# Why: analysis "dark screen" was often grab max=0, not the plot.
 				self._logged_first_grab = True
 				print(
 					f"first grab {int(frame.shape[1])}x{int(frame.shape[0])} "
 					f"min={int(frame.min())} max={int(frame.max())} "
 					f"mean={float(frame.mean()):.1f}"
 				)
-			failed = getattr(self.com, "_grab_failed", ())
-			if (not self._logged_gi2) and "ReadImage" in failed:
-				self._logged_gi2 = True
-				print("ReadImage frozen during Live; grabbing via GetImage_2")
 		else:
-			time.sleep(0.01)
+			time.sleep(0.05)
 		now = time.monotonic()
 		if now - self._hb_t >= 2.0:
 			self._hb_t = now
-			src = self._gi if self._gi is not None else self.com
-			err = getattr(src, "last_error", "") or ""
 			print(
-				grab_heartbeat_line(frame, err, self.channel, sent=self.sent_note()),
+				grab_heartbeat_line(
+					frame, self.pv.last_error, self.channel, sent=self.sent_note()
+				),
 				flush=True,
 			)
 
@@ -294,152 +149,48 @@ class Relay:
 
 	def handle_command(self, payload: dict) -> dict:
 		cmd = payload.get("cmd")
-		self._pause_grab.set()
-		time.sleep(_GRAB_DRAIN_S)
 		try:
 			return self._dispatch(cmd, payload)
-		finally:
-			if not self._stop.is_set():
-				self._pause_grab.clear()
-
-	def _script(self) -> PrairieCom:
-		if self.script_com is None:
-			raise RuntimeError("relay script COM not connected")
-		return self.script_com
-
-	def _run_script_com(self, fn, *, timeout: float = _COM_SCRIPT_TIMEOUT_S):
-		"""Run a script COM call on the grab thread (same STA as GetImage)."""
-		if not self._grab_enabled:
-			# No grab thread — tests and --no-grab scripts call COM inline.
-			return fn()
-		done = threading.Event()
-		box: list = []
-		err: list[BaseException] = []
-		self._com_jobs.put((fn, box, err, done))
-		if not done.wait(timeout):
-			raise TimeoutError(f"COM script timed out after {timeout:.0f}s")
-		if err:
-			raise err[0]
-		return box[0]
-
-	def _dispatch(self, cmd, payload: dict) -> dict:
-		try:
-			sc = self._script()
-			if cmd == "tseries":
-				self._run_script_com(sc.start_tseries)
-			elif cmd == "abort":
-				self._run_script_com(sc.abort)
-			elif cmd == "live":
-				self._run_script_com(sc.start_live)
-			elif cmd == "ping":
-				pass
-			elif cmd == "get_state" and self._gi is not None:
-				parts = [str(payload.get("key", ""))]
-				for k in ("index", "subindex"):
-					if payload.get(k) is not None:
-						parts.append(str(payload[k]))
-				with self._script_lock:
-					value = self._gi.link.query("-gts", *parts)
-				return {"ok": True, "cmd": "get_state", "key": parts[0], "value": value}
-			elif cmd == "get_state":
-				return self._run_script_com(
-					lambda: sc.get_state(
-						payload.get("key", ""),
-						payload.get("index"),
-						payload.get("subindex"),
-					)
-				)
-			elif cmd == "get_motor_position":
-				return self._run_script_com(
-					lambda: sc.get_motor_position(
-						payload.get("axis", ""),
-						payload.get("device"),
-					)
-				)
-			elif cmd == "load_mark_points":
-				return self._load_mark_points(
-					payload.get("xml", ""),
-					payload.get("path"),
-				)
-			elif cmd == "mark_points":
-				return self._mark_points(sc)
-			elif cmd == "mark_all_points":
-				parts = payload.get("parts") or []
-				if not isinstance(parts, list) or not parts:
-					raise ValueError("mark_all_points requires non-empty parts list")
-				wait_ms = float(payload.get("wait_ms") or 0.0)
-				return self._run_script_com(
-					lambda: sc.mark_all_points(parts, wait_ms=wait_ms)
-				)
-			else:
-				return {"ok": False, "error": f"unknown cmd {cmd}"}
-			return {"ok": True, "cmd": cmd}
 		except Exception as e:
 			return {"ok": False, "cmd": cmd, "error": str(e)}
 
-	def _load_mark_points(self, xml: str, path: str | None) -> dict:
-		if not xml or not str(xml).strip():
-			raise ValueError("load_mark_points requires xml content")
-		from prairie_live.com_backend import _unique_mp_path
-
-		# TCP first: it waits for PV's DONE, while COM SendScriptCommands on the
-		# 6.0 PrairieLink against PV 6.1 can return without PV acting on it.
-		disk = _unique_mp_path(path)
-		print(f"load_mark_points xml_bytes={len(xml)} path={disk!r}")
-		parent = os.path.dirname(disk)
-		if parent:
-			os.makedirs(parent, exist_ok=True)
-		try:
-			os.unlink(disk)
-		except FileNotFoundError:
-			pass
-		with open(disk, "w", encoding="utf-8") as f:
-			f.write(xml)
-		try:
-			raw = self._script_command("-LoadMarkPoints", disk)
-			print(f"load_mark_points TCP DONE path={disk} {raw[:200]!r}")
-			return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
-		except Exception as tcp_err:
-			print(f"load_mark_points TCP failed ({tcp_err}); trying COM …")
-		sc = self._script()
-		out = self._run_script_com(
-			lambda: sc.load_mark_points_xml(xml, path),
-			timeout=_COM_SCRIPT_TIMEOUT_S,
-		)
-		print(f"load_mark_points COM OK → {out.get('path')}")
-		return out
-
-	def _mark_points(self, sc) -> dict:
-		self._n_fired = getattr(self, "_n_fired", 0) + 1
-		n = self._n_fired
-		t0 = time.monotonic()
-		try:
-			raw = self._script_command("-MarkPoints")
+	def _dispatch(self, cmd, payload: dict) -> dict:
+		pv = self.pv
+		if cmd == "ping":
+			# The GUI's relay light goes green only when PV's session is up too.
+			if pv.link is None:
+				raise RuntimeError("PrairieView script port not connected")
+			return {"ok": True, "cmd": "ping"}
+		if cmd == "tseries":
+			return pv.start_tseries()
+		if cmd == "abort":
+			return pv.abort()
+		if cmd == "live":
+			return pv.start_live()
+		if cmd == "get_state":
+			return pv.get_state(
+				payload.get("key", ""), payload.get("index"), payload.get("subindex")
+			)
+		if cmd == "get_motor_position":
+			return pv.get_motor_position(payload.get("axis", ""), payload.get("device"))
+		if cmd == "load_mark_points":
+			xml = payload.get("xml", "")
+			out = pv.load_mark_points(xml, payload.get("path"))
+			print(f"load_mark_points xml_bytes={len(xml)} DONE path={out['path']}")
+			return out
+		if cmd == "mark_points":
+			self._n_fired += 1
+			t0 = time.monotonic()
+			out = pv.mark_points()
 			dt = (time.monotonic() - t0) * 1000.0
-			print(f"mark_points #{n} TCP DONE in {dt:.0f} ms {raw[:120]!r}")
-			return {"ok": True, "cmd": "mark_points", "via": "tcp", "pv": raw}
-		except Exception as tcp_err:
-			print(f"mark_points #{n} TCP failed ({tcp_err}); trying COM …")
-		self._run_script_com(sc.mark_points)
-		print(f"mark_points #{n} COM sent (no PV confirmation)")
-		return {"ok": True, "cmd": "mark_points", "via": "com"}
-
-	def _script_command(self, *parts: str) -> str:
-		"""Script cmd on the -gi grab link; PV parses a second login as a command."""
-		if self._gi is None:
-			# A fresh socket would resend the password into PV's script parser
-			# ("Unexpected parameter <password>"); let the caller use COM.
-			raise RuntimeError("no shared PV script link (run with --grab-api gi)")
-		cmd = SOH.join(parts)
-		print(f"script TCP send: {cmd[:120]!r}")
-		link = self._gi.link
-		with self._script_lock:
-			old = link.timeout
-			link.timeout = 60.0
-			try:
-				return link.send_command(*parts)
-			finally:
-				link.timeout = old
+			print(f"mark_points #{self._n_fired} DONE in {dt:.0f} ms")
+			return out
+		if cmd == "mark_all_points":
+			parts = payload.get("parts") or []
+			if not isinstance(parts, list) or not parts:
+				raise ValueError("mark_all_points requires non-empty parts list")
+			return pv.mark_all_points(parts, wait_ms=float(payload.get("wait_ms") or 0.0))
+		return {"ok": False, "error": f"unknown cmd {cmd}"}
 
 
 def _peer(conn: socket.socket) -> str:
@@ -488,13 +239,6 @@ def _serve_frames(conn: socket.socket, relay: Relay, fps: float) -> None:
 
 
 def _serve_ctrl(conn: socket.socket, relay: Relay) -> None:
-	# This thread calls PrairieLink COM; it needs its own apartment.
-	try:
-		import pythoncom
-
-		pythoncom.CoInitialize()
-	except Exception:
-		pass
 	peer = "?"
 	try:
 		peer = f"{conn.getpeername()[0]}:{conn.getpeername()[1]}"
@@ -580,13 +324,12 @@ def listen(relay: Relay, bind: str, port: int, fps: float) -> None:
 	servers = (frame_srv, ctrl_srv)
 
 	def _shutdown(*_args) -> None:
-		# First Ctrl+C: close listen socks (unblocks accept) and stop COM grab.
+		# First Ctrl+C: close listen socks (unblocks accept) and stop the grab.
 		if relay._stop.is_set():
 			print("force exit")
 			sys.exit(1)
 		print("\nstopping (Ctrl+C) …")
 		relay._stop.set()
-		relay._pause_grab.set()
 		for s in servers:
 			try:
 				s.close()
@@ -598,7 +341,7 @@ def listen(relay: Relay, bind: str, port: int, fps: float) -> None:
 	if hasattr(signal, "SIGBREAK"):
 		signal.signal(signal.SIGBREAK, _shutdown)
 
-	print(f"frames {bind}:{port}  ctrl {bind}:{port + 1}  PV={relay.com.host}")
+	print(f"frames {bind}:{port}  ctrl {bind}:{port + 1}  PV={relay.pv.host}")
 	print("Ctrl+C to stop")
 	threading.Thread(
 		target=_accept_loop,
@@ -635,43 +378,28 @@ def _bind(bind: str, port: int) -> socket.socket:
 
 
 def main(argv=None) -> None:
-	p = argparse.ArgumentParser(description="PrairieLink image relay")
+	p = argparse.ArgumentParser(description="PrairieView frame + command relay (scope PC)")
 	p.add_argument("--pv-host", default="127.0.0.1", help="PrairieView IP")
 	p.add_argument("--password", default="0000")
 	p.add_argument("--bind", default="0.0.0.0")
 	p.add_argument("--port", type=int, default=DEFAULT_PORT)
 	p.add_argument("--channel", type=int, default=1)
 	p.add_argument("--fps", type=float, default=20.0)
-	# Avoid COM PixelsPerLine(); seed FOV size for GetImage_2 fallback.
-	p.add_argument("--width", type=int, default=512, help="pixelsPerLine for grab fallback")
-	p.add_argument("--height", type=int, default=512, help="linesPerFrame for grab fallback")
-	p.add_argument(
-		"--grab",
-		action="store_true",
-		help="Enable frame streaming (off by default; can trip PV -gi errors)",
-	)
-	p.add_argument(
-		"--no-grab",
-		action="store_true",
-		help=argparse.SUPPRESS,  # backward alias; grab is already off by default
-	)
-	p.add_argument(
-		"--grab-api",
-		choices=("com", "gi"),
-		default="com",
-		help="com: PrairieLink GetImage/ReadImage. gi: send -gi with our own "
-		"buffer (scope PC only; use when COM returns empty images)",
-	)
+	# Used only if PV does not answer -gts pixelsPerLine / linesPerFrame.
+	p.add_argument("--width", type=int, default=512, help="FOV width fallback")
+	p.add_argument("--height", type=int, default=512, help="FOV height fallback")
+	p.add_argument("--grab", action="store_true", help="stream live frames (-gi)")
+	p.add_argument("--no-grab", action="store_true", help=argparse.SUPPRESS)
+	# Old launch lines pass --grab-api gi; -gi is now the only grab path.
+	p.add_argument("--grab-api", choices=("gi",), default="gi", help=argparse.SUPPRESS)
 	args = p.parse_args(argv)
 
-	do_grab = bool(args.grab) and not bool(args.no_grab)
 	relay = Relay(
 		args.pv_host,
 		args.password,
 		args.channel,
 		image_wh=(args.height, args.width),
-		grab=do_grab,
-		grab_api=args.grab_api,
+		grab=bool(args.grab) and not bool(args.no_grab),
 	)
 	relay.start()
 	try:

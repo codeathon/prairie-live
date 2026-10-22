@@ -1,12 +1,11 @@
 """Scope-PC report for "NO FRAME": python -m prairie_live grab-doctor --password UAKF
 
-Every PrairieLink image API (GetImage, GetImage_2, ReadImage) makes PV write
-into this python.exe's memory; scripts and GetState do not. The report checks
-the things that decide whether that write can happen (which PV / PrairieLink
-build is registered and running, elevation and integrity of both processes,
-32/64-bit, recent Windows / Defender changes) and then calls -gi directly with
-a buffer below 2 GiB and one wherever numpy puts it, so the PV reply text is
-visible instead of PrairieLink's empty array.
+The relay's -gi grab makes PV write pixels into this python.exe's memory. The
+report checks what decides whether that write can happen (which PV build is
+running, elevation and integrity of both processes, 32/64-bit, recent Windows /
+Defender changes, and whether a PrairieLink COM build is still registered) and
+then sends -gi with a buffer below 2 GiB and one wherever numpy puts it, so
+PV's reply text is visible.
 """
 
 from __future__ import annotations
@@ -208,7 +207,9 @@ def section_prairie_processes(rep: Report) -> None:
 def section_com_registration(rep: Report) -> None:
 	import winreg
 
-	rep.section("PrairieLink COM registration")
+	rep.section("PrairieLink COM registration (not used by prairie-live)")
+	rep.add("prairie-live talks to PV only on its script port. PrairieLink 6.0 is a")
+	rep.add("test-only build; if it is listed below, have it unregistered.")
 	views = (("64-bit view", winreg.KEY_WOW64_64KEY), ("32-bit view", winreg.KEY_WOW64_32KEY))
 	for progid in ("PrairieLink64.Application", "PrairieLink.Application"):
 		for label, flag in views:
@@ -288,41 +289,6 @@ def section_windows_changes(rep: Report, days: int) -> None:
 	)
 
 
-def section_com_calls(rep: Report, host: str, password: str, channel: int) -> None:
-	from prairie_live.com_backend import _dispatch, raw_summary
-
-	rep.section("PrairieLink COM calls (what the relay uses)")
-	try:
-		import pythoncom
-
-		pythoncom.CoInitialize()
-	except Exception:
-		pass
-	pl = _dispatch()
-
-	def call(label, fn):
-		t0 = time.perf_counter()
-		try:
-			out = fn()
-			dt = (time.perf_counter() - t0) * 1000
-			rep.add(f"{label}: {raw_summary(out)}  ({dt:.0f} ms)  repr={repr(out)[:80]}")
-			return out
-		except Exception as e:
-			rep.add(f"{label}: ERROR {type(e).__name__}: {e}")
-			return None
-
-	call("Connect", lambda: pl.Connect(host, password))
-	call("Connected", lambda: pl.Connected())
-	call("GetState pixelsPerLine", lambda: pl.GetState("pixelsPerLine"))
-	call("GetState linesPerFrame", lambda: pl.GetState("linesPerFrame"))
-	call("PixelsPerLine()", lambda: pl.PixelsPerLine())
-	call("LinesPerFrame()", lambda: pl.LinesPerFrame())
-	call(f"GetImage({channel})", lambda: pl.GetImage(channel))
-	call(f"GetImage_2({channel},512,512)", lambda: pl.GetImage_2(channel, 512, 512))
-	call(f"ReadImage({channel},0,1000ms)", lambda: pl.ReadImage(channel, 0, 1000))
-	call("Disconnect", lambda: pl.Disconnect())
-
-
 def section_raw_gi(rep: Report, host: str, password: str, channel: int) -> None:
 	from prairie_live.gi_grab import GiGrabber
 	from prairie_live.prairie_link import PrairieLink
@@ -391,7 +357,6 @@ def main(argv=None) -> None:
 		_guard(rep, "registry", lambda: section_com_registration(rep))
 		_guard(rep, "installs", lambda: section_installs(rep))
 		_guard(rep, "windows", lambda: section_windows_changes(rep, args.days))
-		_guard(rep, "com", lambda: section_com_calls(rep, args.pv_host, args.password, args.channel))
 	_guard(rep, "raw -gi", lambda: section_raw_gi(rep, args.pv_host, args.password, args.channel))
 	if args.rrd:
 		_guard(rep, "raw -rrd", lambda: section_raw_rrd(rep, args.pv_host, args.password, args.rrd_wait))

@@ -8,7 +8,7 @@ PrairieView script password: Tools → Scripts → Edit Scripts (default `0000`)
 [analysis PC]                              [scope PC]
  python -m prairie_live mp-sync …           PrairieView (Live)
         |  TCP 25100 frames / 25101 cmds         python -m prairie_live relay --grab
-        +---------------------------------------- PrairieLink COM (local)
+        +---------------------------------------- PV script port TCP 1236 (local)
 ```
 
 Set `PYTHONPATH` in every new shell (PowerShell):
@@ -56,49 +56,41 @@ New-NetFirewallRule -DisplayName "prairie-live relay" -Direction Inbound -Action
 
 Start **Live** in PrairieView first. Leave this window open.
 
-`--grab` streams frames for ΔF/F scoring and `trial_images/` PNGs (required for
-mp-sync with `images_dir` set). PrairieView 6.1 uses `ReadImage`/`ReadImages`
-and `SetTimeoutAndRetries(120000)` when those COM methods exist; 5.8 still
-uses `GetImage_2`. Same `relay --grab` flag and ports.
+The relay talks to PrairieView only on its script port (TCP 1236, one login):
+frames via `-gi` into the relay's own buffer, Mark Points, `-gts` state, Live,
+T-series and Abort as script commands. PrairieLink COM is not used — the
+PrairieLink 6.0 build registered on the scope PC is test-only.
+`--grab` streams frames for ΔF/F scoring and `trial_images/` PNGs.
 
 ```powershell
 cd C:\Users\schollab\code\prairie-live
 $env:PYTHONPATH = "$PWD\src"
-python -m prairie_live relay --pv-host 127.0.0.1 --password 0000 --channel 1 --fps 12 --grab
+python -m prairie_live relay --pv-host 127.0.0.1 --password UAKF --channel 1 --fps 12 --grab
 ```
 
 Success: `frames 0.0.0.0:25100  ctrl 0.0.0.0:25101  PV=127.0.0.1`
 
 ### Heartbeat says `NO FRAME raw=None`
 
-PrairieLink's `GetImage`, `GetImage_2` and `ReadImage` all ask PrairieView to
-write pixels into this python.exe's memory (script `-gi` / `-rrd` with a
-process ID and buffer address). When that hand-off fails they return an empty
-array, while scripts and `GetState` keep working. Run the report on the scope
-PC with Live Scan on, and watch PrairieView for an error popup:
+`-gi` asks PrairieView to write pixels into the relay's memory (process ID plus
+buffer address), so the relay must run on the scope PC. Run the report on the
+scope PC with Live Scan on, and watch PrairieView for an error popup:
 
 ```powershell
 python -m prairie_live grab-doctor --password UAKF --channel 1 --rrd
 ```
 
-It writes `grab_doctor.txt` (send it to Bruker). If the `direct script -gi`
-lines show `wrote=` with a real `max=`, run the relay with our own buffer:
-
-```powershell
-python -m prairie_live relay --pv-host 127.0.0.1 --password UAKF --channel 1 --fps 12 --grab --grab-api gi
-```
+It writes `grab_doctor.txt` (send it to Bruker). The `direct script -gi` lines
+should show `wrote=` with a real `max=`.
 
 ## Analysis PC — live FOV
 
 **Live Scan alone should already stream the FOV.** Mark Points are not required
 for the left image (or the `fov` / `p99` traces). Hitting Live in PrairieView
-refreshes the PV window; the analysis PC only moves if `relay --grab` is running
-and PrairieLink is following that Live buffer. Relay sends `-LiveScan` when grab
-starts; if the figure stays `STALE`, click the analysis window and press
-`l` (same command over COM). On grab start the relay prints a `grab probe`
-table (`ch1…ch4 max=`). If every channel is `max=0` after Live, PrairieLink
-is not the PV image window — take one **Snapshot** in PV, leave Live on, and
-watch `max=` on the heartbeat. Status is in three places: the **window caption**,
+refreshes the PV window; the analysis PC only moves if `relay --grab` is running.
+Relay sends `-LiveScan` when grab starts; if the figure stays `STALE`, click the
+analysis window and press `l`. If the heartbeat shows `max=0` after Live, check
+`--channel`, take one **Snapshot** in PV, leave Live on, and watch `max=`. Status is in three places: the **window caption**,
 a **yellow overlay** on the FOV, and stdout (`HUD v4`). `LIVE` + `max=` > 0
 means frames are new. `no frame from relay` means `--grab` is off or the TCP
 link is not delivering packets. Relay prints `grab heartbeat:` every 2s.
@@ -116,7 +108,7 @@ the per-id lines will sit on the sample 8-point list. `--config experiment.json`
 reads `series` and `disk_radius`. Later panels go on this grid, not extra windows.
 
 Title `max=` is the latest raw PMT peak. `max=0` on a 512² frame means grab is
-empty (wrong `--channel`, or Live not actually filling the PrairieLink buffer).
+empty (wrong `--channel`, or Live not running in PV).
 `grab 1x1 (not an FOV)` means pull this branch and restart **relay first**, then view.
 
 ```powershell
@@ -193,8 +185,8 @@ CLI flag names use hyphens (`--via-relay`, `--n-groups`, …).
 | `via_relay` | string | Relay address for Mark Points + frames, e.g. `10.33.107.221:25100` |
 | `relay` | string \| null | Alternate relay host for frame scoring only (usually `null`; `via_relay` covers both) |
 | `log` | string | JSONL trial log path (default `trials.jsonl`) |
-| `host` | string | Direct PrairieLink host when not using relay (scope loopback `127.0.0.1`) |
-| `port` | int | Direct PrairieLink TCP port (default `1236`) |
+| `host` | string | PrairieView script host when not using relay (scope loopback `127.0.0.1`) |
+| `port` | int | PrairieView script TCP port (default `1236`) |
 | `password` | string | PrairieView script password |
 | `iterations` | int | How many times to reshuffle groups and run the full power sweep |
 | `n_groups` | int | Number of random point groups per iteration |

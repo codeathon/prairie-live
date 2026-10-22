@@ -31,9 +31,9 @@ def _make_backend(args):
 		return client
 	if args.mock:
 		return MockScope(args.channel)
-	from prairie_live.com_backend import PrairieCom
+	from prairie_live.pv_script import PvScript
 
-	client = PrairieCom(args.host, args.password)
+	client = PvScript(args.host, args.password)
 	client.connect()
 	return client
 
@@ -513,7 +513,7 @@ def main(argv=None) -> None:
 	p = argparse.ArgumentParser(description="PrairieView live viewer")
 	p.add_argument("--host", default="127.0.0.1", help="PrairieView IP")
 	p.add_argument("--password", default="0000")
-	p.add_argument("--relay", help="optional host[:port] if this PC has no PrairieLink")
+	p.add_argument("--relay", help="host[:port] of the scope-PC relay (otherwise PV script port on --host)")
 	p.add_argument("--channel", type=int, default=1)
 	p.add_argument("--interval-ms", type=int, default=50)
 	p.add_argument(
