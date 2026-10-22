@@ -106,17 +106,21 @@ def parse_galvo_point_list(xml_string: str) -> list[dict]:
 			"z": float(el.attrib.get("Z", 0)),
 			"is_spiral": el.attrib.get("IsSpiral", _SPIRAL_DEFAULTS["is_spiral"]),
 			"spiral_width": el.attrib.get(
-				"SpiralWidth", _SPIRAL_DEFAULTS["spiral_width"]
+				"SpiralWidth",
+				el.attrib.get("SpiralSize", _SPIRAL_DEFAULTS["spiral_width"]),
 			),
 			"spiral_height": el.attrib.get(
-				"SpiralHeight", _SPIRAL_DEFAULTS["spiral_height"]
+				"SpiralHeight",
+				el.attrib.get("SpiralSize", _SPIRAL_DEFAULTS["spiral_height"]),
 			),
 			# .gpl often has SpiralSize as FOV fraction (e.g. 0.4), not µm.
 			"spiral_size_fov": (
 				el.attrib["SpiralSize"] if "SpiralSize" in el.attrib else None
 			),
+			# A .gpl SpiralSize is in point units; inventing µm would override it.
 			"spiral_size_um": el.attrib.get(
-				"SpiralSizeInMicrons", _SPIRAL_DEFAULTS["spiral_size_um"]
+				"SpiralSizeInMicrons",
+				None if "SpiralSize" in el.attrib else _SPIRAL_DEFAULTS["spiral_size_um"],
 			),
 			"spiral_revolutions": el.attrib.get(
 				"SpiralRevolutions", _DEFAULT_SPIRAL_REVS
@@ -139,6 +143,16 @@ def parse_galvo_point_list(xml_string: str) -> list[dict]:
 def _gpl_as_step(pts: list[dict]) -> dict:
 	"""Wrap .gpl points as one series step (pool only; trials rebuild XML)."""
 	meta = template_meta([])
+	p0 = pts[0] if pts else {}
+	if p0.get("duration_ms"):
+		meta["duration"] = float(p0["duration_ms"])
+	if p0.get("spiral_revolutions") not in (None, ""):
+		meta["spiral_revolutions"] = str(p0["spiral_revolutions"])
+	if p0.get("uncaging_laser"):
+		meta["uncaging_laser"] = str(p0["uncaging_laser"])
+	# PV runs a .gpl group one point after another at full power; all-at-once
+	# would split the beam across the group.
+	meta["all_points_at_once"] = "False"
 	return {
 		"id": "1",
 		"name": "GPL",
@@ -262,8 +276,8 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 			"iteration_delay": "0.00",
 			"duration": 10.0,
 			"repetitions": 1,
-			"initial_delay": "0.00",
-			"inter_point_delay": "0.01",
+			"initial_delay": "0",
+			"inter_point_delay": "10",
 			"spiral_revolutions": _DEFAULT_SPIRAL_REVS,
 			"uncaging_laser": _DEFAULT_LASER,
 			"trigger_selection": "None",
@@ -383,7 +397,7 @@ def groups_to_xml(groups: list[dict]) -> str:
 
 		galvo = ET.SubElement(el, "PVGalvoPointElement")
 		galvo.set("InitialDelay", str(g.get("initial_delay", "0.00")))
-		galvo.set("InterPointDelay", str(g.get("inter_point_delay", "0.01")))
+		galvo.set("InterPointDelay", str(g.get("inter_point_delay", "10")))
 		galvo.set("Duration", str(g["duration"] or active_pts[0]["duration"]))
 		galvo.set("SpiralRevolutions", str(g.get("spiral_revolutions", "0")))
 		galvo.set("Points", points_str)

@@ -1605,7 +1605,8 @@ def execute_session(
 	# Point spiral size from experiment when cloning pool points.
 	if opt.get("spiral_size_um") is not None:
 		for pt in points:
-			pt["spiral_size_um"] = str(opt["spiral_size_um"])
+			if pt.get("spiral_size_fov") in (None, ""):
+				pt["spiral_size_um"] = str(opt["spiral_size_um"])
 	if opt.get("spiral") is not None:
 		for pt in points:
 			pt["is_spiral"] = "True" if bool(opt["spiral"]) else "False"
@@ -1626,14 +1627,13 @@ def execute_session(
 			f"NOTE: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
 			"(typical of .gpl galvo lists). -MarkAllPoints would mis-read "
 			"those as FOV fractions. Switching stim_mode → series "
-			"(-LoadMarkPoints / -MarkPoints), AllPointsAtOnce."
+			"(-LoadMarkPoints / -MarkPoints), one point at a time."
 		)
 		stim_mode = "series"
-		opt["all_points_at_once"] = True
-	# Match .gpl Z / Duration when present (after config merge).
-	if any(abs(float(p.get("z", 0))) > 1e-6 for p in points):
-		opt["use_3d"] = True
-		print("NOTE: nonzero Z on points → Use3D=True")
+	# .gpl Z is the absolute focus the points were drawn at, not an offset;
+	# Use3D with it can refocus the uncaging beam away from the sample.
+	if any(abs(float(p.get("z", 0))) > 1e-6 for p in points) and not opt.get("use_3d"):
+		print("NOTE: points carry Z; Use3D stays off (fire at the current focus)")
 	gpl_durs = [p.get("duration_ms") for p in points if p.get("duration_ms")]
 	if gpl_durs and float(opt.get("duration_ms") or 0) in (0.0, 16.92):
 		opt["duration_ms"] = float(gpl_durs[0])

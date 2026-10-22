@@ -526,3 +526,58 @@ def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
 		if json.loads(ln).get("phase") == "slm_packed"
 	]
 	assert packed == []
+
+
+RIG_GPL = """<?xml version="1.0" encoding="utf-8"?>
+<PVGalvoPointList>
+  <PVGalvoPoint X="-3.25" Y="-3.67" Name="Point 1" Index="0" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.1849" SpiralRevolutions="5" Z="3595.85" />
+  <PVGalvoPoint X="-2.33" Y="-3.60" Name="Point 2" Index="1" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.1849" SpiralRevolutions="5" Z="3595.85" />
+  <PVGalvoPoint X="-1.41" Y="-3.67" Name="Point 3" Index="2" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.1849" SpiralRevolutions="5" Z="3595.85" />
+</PVGalvoPointList>
+"""
+
+
+def test_gpl_group_fires_like_pv(tmp_path: Path):
+	"""A .gpl group must keep its dwell/spiral and fire one point at a time."""
+	import xml.etree.ElementTree as ET
+
+	from prairie_live.gui_session import apply_gui_overrides
+	from prairie_live.sync_loop import execute_session
+	from prairie_live.xml_summary import summarize_fat_xml
+
+	gpl = tmp_path / "rig.gpl"
+	gpl.write_text(RIG_GPL, encoding="utf-8")
+	opt = apply_gui_overrides(
+		series=str(gpl),
+		powers=[160.0],
+		seed=0,
+		repetitions=1,
+		stim_dff_min=0.0,
+		n_points=3,
+		stim_mode="series",
+		trigger="none",
+		xml_fields=summarize_fat_xml(str(gpl)),
+	)
+	scope = tmp_path / "trial.xml"
+	opt.update(
+		dry_run=True,
+		scope_xml=str(scope),
+		via_relay=None,
+		mock_scores=True,
+		f0_s=0,
+		f1_s=0,
+		inter_trial=0,
+		log=str(tmp_path / "t.jsonl"),
+		images_dir=str(tmp_path / "img"),
+	)
+	execute_session(opt, show_candidate_gui=False)
+	root = ET.fromstring(scope.read_text(encoding="utf-8"))
+	assert root.get("AllPointsAtOnce") == "False"
+	assert root.get("Use3D") == "False"
+	galvo = root.find(".//PVGalvoPointElement")
+	assert float(galvo.get("Duration")) == 100.0
+	assert galvo.get("SpiralRevolutions") == "5"
+	assert galvo.get("InterPointDelay") == "10"
+	pt = galvo.find("Point")
+	assert pt.get("SpiralWidth") == "0.1849"
+	assert pt.get("SpiralSizeInMicrons") is None

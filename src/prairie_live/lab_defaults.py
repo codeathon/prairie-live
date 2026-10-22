@@ -31,7 +31,8 @@ def lab_defaults() -> dict[str, Any]:
 		"image_height_px": 512,
 		"laser": "Monaco",
 		"use_3d": False,
-		"all_points_at_once": True,
+		# None: use the Mark Points file (PV default is one point at a time).
+		"all_points_at_once": None,
 		"spiral": True,
 		"spiral_size_um": 54.5,
 		"spiral_revolutions": 5,
