@@ -72,6 +72,7 @@ def _file(handler: BaseHTTPRequestHandler, path: Path, ctype: str) -> None:
 	data = path.read_bytes()
 	handler.send_response(200)
 	handler.send_header("Content-Type", ctype)
+	handler.send_header("Cache-Control", "no-store")
 	handler.send_header("Content-Length", str(len(data)))
 	handler.end_headers()
 	handler.wfile.write(data)

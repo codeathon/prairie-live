@@ -14,11 +14,13 @@
   <section class="stage">
     <div id="fov_grid" class="fov-grid">
       <div class="tile" id="tile_live">
-        <h3>Live scan</h3>
+        <div class="tile-head">
+          <h3>Live scan</h3>
+          <button type="button" id="marks_toggle" class="fov-toggle" aria-pressed="true" title="Hide Mark Points overlay">MP</button>
+        </div>
         <div class="fov-wrap">
           <img id="live_img" alt="live FOV" />
           <svg id="live_marks" preserveAspectRatio="xMidYMid meet" viewBox="0 0 1 1"></svg>
-          <button type="button" id="marks_toggle" class="fov-toggle" aria-pressed="true" title="Hide Mark Points overlay">MP</button>
         </div>
         <p id="live_cap" class="muted">connecting to relay…</p>
         <p id="marks_note" class="muted"></p>

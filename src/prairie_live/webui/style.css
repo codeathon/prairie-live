@@ -52,6 +52,14 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   padding: 6px 8px;
 }
 .tile h3 { margin: 0 0 4px; font-size: 0.9rem; }
+.tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.tile-head h3 { margin: 0; }
 /* FOV shrinks to whatever the cell allows; contain keeps it square. */
 .tile img {
   flex: 1 1 auto;
@@ -74,26 +82,24 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
 .fov-wrap svg.hidden { display: none; }
 .fov-wrap circle { fill: none; stroke: #00ffff; }
 .fov-wrap text { fill: #00ffff; paint-order: stroke; stroke: #000; }
-/* Corner control on the live scan; keeps the FOV readable when marks are dense. */
+/* Next to "Live scan"; toggles the Mark Points overlay. */
 .fov-toggle {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  z-index: 2;
+  flex: 0 0 auto;
   margin: 0;
-  padding: 2px 7px;
+  padding: 2px 8px;
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   border-radius: 4px;
-  background: rgba(18, 20, 26, 0.72);
+  background: #102016;
   color: #00ffff;
-  border: 1px solid rgba(0, 255, 255, 0.55);
+  border: 1px solid #00cccc;
   cursor: pointer;
 }
 .fov-toggle[aria-pressed="false"] {
   color: var(--muted);
   border-color: #3a4150;
+  background: #12151c;
 }
 
 /* Two sub-columns: Rig + Session | Fat XML; log (+ candidates) share the rest. */
