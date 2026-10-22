@@ -158,7 +158,9 @@ class Handler(BaseHTTPRequestHandler):
 			from prairie_live.scan_geometry import overlay_points
 
 			geom, wh = STATE.live.scan_geometry()
-			out = overlay_points(list(STATE.points or []), geom)
+			out = overlay_points(
+				list(STATE.points or []), geom, STATE.live.scan_geometry_error()
+			)
 			out["frame_wh"] = list(wh) if wh else None
 			_json(self, out)
 			return

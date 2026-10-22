@@ -27,10 +27,26 @@ def test_fetch_geometry_parses_pv_replies():
 	assert g == {"amp_x": 7.6, "amp_y": -7.6, "ctr_x": 0.0, "ctr_y": 0.2}
 
 
-def test_fetch_geometry_none_when_pv_silent():
+def test_fetch_geometry_says_which_read_failed():
 	vals = dict(GEOM)
 	vals[("currentScanAmplitude", "XAxis")] = ""
-	assert fetch_scan_geometry(FakeRelay(vals)) is None
+	with pytest.raises(ValueError, match="currentScanAmplitude XAxis: PV replied ''"):
+		fetch_scan_geometry(FakeRelay(vals))
+
+
+def test_fetch_geometry_reports_relay_error():
+	class Down:
+		def get_state(self, key, index=None):
+			return {"ok": False, "error": "PrairieView script port not connected"}
+
+	with pytest.raises(ValueError, match="not connected"):
+		fetch_scan_geometry(Down())
+
+
+def test_waiting_note_carries_reason():
+	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
+	out = overlay_points(pts, None, "ValueError: currentScanAmplitude XAxis: PV replied ''")
+	assert "PV replied" in out["note"]
 
 
 def test_galvo_points_map_into_frame():

@@ -27,17 +27,19 @@ def _num(text: Any) -> float | None:
 	return None
 
 
-def fetch_scan_geometry(client) -> dict[str, float] | None:
-	"""Scan amplitude/center from PV via the relay; None if PV does not answer."""
+def fetch_scan_geometry(client) -> dict[str, float]:
+	"""Scan amplitude/center from PV via the relay; ValueError says which read failed."""
 	geom: dict[str, float] = {}
 	for name, key, index in _KEYS:
 		out = client.get_state(key, index)
-		val = _num(out.get("value")) if out.get("ok", True) else None
+		if not out.get("ok", True):
+			raise ValueError(f"{key} {index}: {out.get('error') or 'relay error'}")
+		val = _num(out.get("value"))
 		if val is None:
-			return None
+			raise ValueError(f"{key} {index}: PV replied {out.get('value')!r}")
 		geom[name] = val
 	if not geom["amp_x"] or not geom["amp_y"]:
-		return None
+		raise ValueError(f"scan amplitude is 0 (X {geom['amp_x']}, Y {geom['amp_y']})")
 	return geom
 
 
@@ -47,14 +49,18 @@ def is_fraction_space(points: list[dict]) -> bool:
 	)
 
 
-def overlay_points(points: list[dict], geom: dict[str, float] | None) -> dict:
+def overlay_points(
+	points: list[dict], geom: dict[str, float] | None, error: str = ""
+) -> dict:
 	"""Points as image fractions for drawing, plus a note when they cannot be placed."""
 	if is_fraction_space(points):
 		return {"points": [_row(p, float(p["x"]), float(p["y"]), None) for p in points], "note": ""}
 	if not geom:
+		why = f" ({error})" if error else ""
 		return {
 			"points": [],
-			"note": "Mark Points are in galvo units; waiting for PV scan range from the relay",
+			"note": "Mark Points are in galvo units; waiting for PV scan range "
+			f"from the relay{why}",
 		}
 	ax, ay = geom["amp_x"], geom["amp_y"]
 	rows = []

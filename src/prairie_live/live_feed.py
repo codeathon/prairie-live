@@ -21,6 +21,7 @@ class LiveFeed:
 		self.detail = "connecting…"
 		self.live_started = False
 		self.geometry: dict | None = None
+		self.geometry_error = ""
 		self.frame_wh: tuple[int, int] | None = None
 		self._stop = threading.Event()
 		self._lock = threading.Lock()
@@ -58,15 +59,21 @@ class LiveFeed:
 		with self._lock:
 			return self.geometry, self.frame_wh
 
+	def scan_geometry_error(self) -> str:
+		with self._lock:
+			return self.geometry_error
+
 	def _poll_geometry(self, client) -> None:
 		from prairie_live.scan_geometry import fetch_scan_geometry
 
+		err = ""
 		try:
 			geom = fetch_scan_geometry(client)
-		except Exception:
-			geom = None
+		except Exception as exc:
+			geom, err = None, f"{type(exc).__name__}: {exc}"[:200]
 		with self._lock:
 			self.geometry = geom
+			self.geometry_error = err
 
 	def png_bytes(self) -> bytes | None:
 		with self._lock:
