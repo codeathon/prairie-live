@@ -1,0 +1,19 @@
+
+##### mp-sync session 2026-10-22 18:14:54 UTC #####
+
+============================================================
+TRIAL 0
+============================================================
+  Fired points:  2, 12, 11
+  Group name:    PL_t0000_g1
+  Laser power:   160.0  (Prairie UI UncagingLaserPower)
+  Repetitions:   3
+  Per-point ΔF/F:  (none)
+  Stim mode:     series   trigger=none  line=None
+  TTL / pulse:   n/a (series mode or single trial)
+  Visual:        ori=None°  contrast=None%
+  t_rts_mono:    None
+  t_ttl_mono:    None
+  ΔF/F score:    none
+  Images:        (none)
+  One-liner:     trial 0 · points [2,12,11] · power 160.0 · mode series · score none

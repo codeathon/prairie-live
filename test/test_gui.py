@@ -89,7 +89,7 @@ def test_board_highlights_changed_only_over_threshold():
 		{"id": "4", "x": 0.4, "y": 0.4},
 	]
 	row = {
-		"trial_index": 0,
+		"trial_index": 1,
 		"power": 140,
 		"point_ids": ["1", "2", "3"],
 		"point_scores": {"1": 0.20, "2": 0.01, "3": 0.40},
@@ -105,6 +105,7 @@ def test_board_highlights_changed_only_over_threshold():
 	assert mark_style(by_id["4"])["kind"] == "pool"
 	assert "140" in st["title"]
 	assert "1,2,3" in st["title"]
+	assert "trial 1/6" in st["title"]
 
 
 def test_power_boards_update_matching_window_only():
@@ -113,7 +114,7 @@ def test_power_boards_update_matching_window_only():
 	assert unique_powers([75, 140, 75]) == [75.0, 140.0]
 	boards.update(
 		{
-			"trial_index": 0,
+			"trial_index": 1,
 			"power": 75,
 			"point_ids": ["1"],
 			"point_scores": {"1": 0.3},
@@ -123,7 +124,7 @@ def test_power_boards_update_matching_window_only():
 	assert 140.0 not in boards.states
 	boards.update(
 		{
-			"trial_index": 1,
+			"trial_index": 2,
 			"power": 140,
 			"point_ids": ["2"],
 			"point_scores": {"2": 0.1},

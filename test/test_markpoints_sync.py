@@ -214,7 +214,7 @@ def test_dry_run_writes_jsonl(tmp_path: Path):
 	assert json.loads(lines[-1])["phase"] == "candidates"
 	assert json.loads(lines[-2])["phase"] == "recommendation"
 	done = [json.loads(ln) for ln in lines if json.loads(ln).get("phase") == "done"]
-	assert done[0]["trial_index"] == 0
+	assert done[0]["trial_index"] == 1
 	assert done[0]["score_kind"] == "mock"
 	assert done[0].get("point_scores")
 	assert estimate_series_ms(

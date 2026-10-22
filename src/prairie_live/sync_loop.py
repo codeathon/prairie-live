@@ -298,7 +298,8 @@ def run_sync_loop(
 	rng = random.Random(seed)
 	scores: dict[str, float] | None = None
 	all_trials: list[dict] = []
-	trial_index = 0
+	# 1-based so the GUI shows trial 1/N … N/N (not 0/N … N-1/N).
+	trial_index = 1
 	mode = str(stim_mode or "series").lower()
 	slm_params = stim_params_from_meta(meta) if mode == "slm" else {}
 	# One folder per mp-sync invocation; trials nest underneath.
