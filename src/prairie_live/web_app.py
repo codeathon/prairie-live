@@ -154,6 +154,14 @@ class Handler(BaseHTTPRequestHandler):
 			self.end_headers()
 			self.wfile.write(png)
 			return
+		if u.path == "/api/points":
+			from prairie_live.scan_geometry import overlay_points
+
+			geom, wh = STATE.live.scan_geometry()
+			out = overlay_points(list(STATE.points or []), geom)
+			out["frame_wh"] = list(wh) if wh else None
+			_json(self, out)
+			return
 		if u.path == "/api/status":
 			self._drain()
 			with STATE.lock:

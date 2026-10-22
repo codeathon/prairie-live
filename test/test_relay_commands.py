@@ -321,3 +321,24 @@ def test_script_command_reuses_gi_link_instead_of_new_login():
 	assert out["via"] == "tcp"
 	assert Gi.link.sent == [(("-MarkPoints",), 60.0)]
 	assert Gi.link.timeout == 10.0
+
+
+def test_get_state_uses_gi_link_query():
+	r = _relay()
+
+	class Link:
+		timeout = 10.0
+		asked = []
+
+		def query(self, *parts):
+			Link.asked.append(parts)
+			return "7.6"
+
+	class Gi:
+		link = Link()
+
+	r._gi = Gi()
+	out = r.handle_command({"cmd": "get_state", "key": "currentScanAmplitude", "index": "XAxis"})
+	assert out == {"ok": True, "cmd": "get_state", "key": "currentScanAmplitude", "value": "7.6"}
+	assert Link.asked == [("-gts", "currentScanAmplitude", "XAxis")]
+	assert r.com.calls == []

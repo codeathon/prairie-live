@@ -61,6 +61,18 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   display: block;
 }
 .tile p { margin: 4px 0 0; font-size: 0.85em; }
+.tile p:empty { display: none; }
+/* Overlay shares the image box; meet == object-fit: contain, so marks line up. */
+.fov-wrap { position: relative; flex: 1 1 auto; min-height: 0; }
+.fov-wrap img, .fov-wrap svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.fov-wrap svg { pointer-events: none; overflow: visible; }
+.fov-wrap circle { fill: none; stroke: #ffd400; }
+.fov-wrap text { fill: #ffd400; paint-order: stroke; stroke: #000; }
 
 /* Two sub-columns: Rig + Session | Fat XML; log (+ candidates) share the rest. */
 .side {

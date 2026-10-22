@@ -79,6 +79,39 @@ async function refreshRelay() {
   }
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+async function refreshPoints() {
+  let res;
+  try {
+    res = await jget("/api/points");
+  } catch (_) {
+    return;
+  }
+  const svg = $("live_marks");
+  const [w, h] = res.frame_wh || [1, 1];
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.replaceChildren();
+  const unit = Math.min(w, h);
+  for (const p of res.points || []) {
+    const cx = p.fx * w;
+    const cy = p.fy * h;
+    const c = document.createElementNS(SVG_NS, "circle");
+    c.setAttribute("cx", cx);
+    c.setAttribute("cy", cy);
+    c.setAttribute("r", Math.max((p.r || 0) * w, unit * 0.012));
+    c.setAttribute("stroke-width", unit * 0.004);
+    const t = document.createElementNS(SVG_NS, "text");
+    t.setAttribute("x", cx + unit * 0.016);
+    t.setAttribute("y", cy - unit * 0.012);
+    t.setAttribute("font-size", unit * 0.03);
+    t.setAttribute("stroke-width", unit * 0.006);
+    t.textContent = p.id;
+    svg.append(c, t);
+  }
+  $("marks_note").textContent = res.note || "";
+}
+
 async function refreshLive() {
   try {
     const r = await fetch("/api/live.png?t=" + Date.now());
@@ -177,6 +210,7 @@ async function onXmlFile(ev) {
   $("xml_path").textContent = res.path;
   $("plan").textContent = res.plan || "";
   showXmlFields(res.fields || {});
+  refreshPoints();
   if (res.fields && res.fields.repetitions) $("repetitions").value = res.fields.repetitions;
   syncTypedPowers();
 }
@@ -272,6 +306,7 @@ async function boot() {
   window.addEventListener("resize", fitGrid);
   setInterval(refreshRelay, 4000);
   setInterval(refreshLive, 150);
+  setInterval(refreshPoints, 2000);
   setInterval(tick, 800);
 }
 

@@ -333,6 +333,14 @@ class Relay:
 				self._run_script_com(sc.start_live)
 			elif cmd == "ping":
 				pass
+			elif cmd == "get_state" and self._gi is not None:
+				parts = [str(payload.get("key", ""))]
+				for k in ("index", "subindex"):
+					if payload.get(k) is not None:
+						parts.append(str(payload[k]))
+				with self._script_lock:
+					value = self._gi.link.query("-gts", *parts)
+				return {"ok": True, "cmd": "get_state", "key": parts[0], "value": value}
 			elif cmd == "get_state":
 				return self._run_script_com(
 					lambda: sc.get_state(

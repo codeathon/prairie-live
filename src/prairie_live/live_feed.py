@@ -20,6 +20,8 @@ class LiveFeed:
 		self.ok = False
 		self.detail = "connecting…"
 		self.live_started = False
+		self.geometry: dict | None = None
+		self.frame_wh: tuple[int, int] | None = None
 		self._stop = threading.Event()
 		self._lock = threading.Lock()
 		self._thread: threading.Thread | None = None
@@ -51,6 +53,20 @@ class LiveFeed:
 				"live_started": self.live_started,
 				"addr": self.addr,
 			}
+
+	def scan_geometry(self) -> tuple[dict | None, tuple[int, int] | None]:
+		with self._lock:
+			return self.geometry, self.frame_wh
+
+	def _poll_geometry(self, client) -> None:
+		from prairie_live.scan_geometry import fetch_scan_geometry
+
+		try:
+			geom = fetch_scan_geometry(client)
+		except Exception:
+			geom = None
+		with self._lock:
+			self.geometry = geom
 
 	def png_bytes(self) -> bytes | None:
 		with self._lock:
@@ -93,7 +109,12 @@ class LiveFeed:
 				with self._lock:
 					self.live_started = True
 					self.detail = "LiveScan on"
+			# Zoom/pan change the scan range, so the Mark Points overlay re-reads it.
+			next_geom = 0.0
 			while not self._stop.is_set():
+				if time.monotonic() >= next_geom:
+					self._poll_geometry(client)
+					next_geom = time.monotonic() + 2.0
 				with self._lock:
 					if self.addr != addr:
 						break
@@ -109,6 +130,7 @@ class LiveFeed:
 				png = png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
 				with self._lock:
 					self.png = png
+					self.frame_wh = (int(oriented.shape[1]), int(oriented.shape[0]))
 					self.ok = True
 					if started:
 						self.detail = "live FOV"
