@@ -229,6 +229,10 @@ async function onXmlFile(ev) {
   syncTypedPowers();
 }
 
+function rowKey(r) {
+  return String(r.key || `${r.id}@${r.power ?? r.min_power ?? ""}`);
+}
+
 function renderCandidates(ranked) {
   lastRanked = ranked || [];
   const box = $("cand_box");
@@ -242,16 +246,17 @@ function renderCandidates(ranked) {
   box.hidden = false;
   $("side").classList.add("has-cands");
   if (!picked.size) {
-    lastRanked.filter((r) => r.stimulated).forEach((r) => picked.add(String(r.id)));
+    lastRanked.filter((r) => r.stimulated).forEach((r) => picked.add(rowKey(r)));
   }
   for (const r of lastRanked) {
     const tr = document.createElement("tr");
-    const id = String(r.id);
-    if (picked.has(id)) tr.classList.add("picked");
-    tr.innerHTML = `<td>${picked.has(id) ? "●" : "○"}</td><td>${id}</td><td>${r.min_power ?? "—"}</td><td>${r.dff == null ? "—" : Number(r.dff).toFixed(3)}</td><td>${r.tercile}</td>`;
+    const key = rowKey(r);
+    const pwr = r.power ?? r.min_power;
+    if (picked.has(key)) tr.classList.add("picked");
+    tr.innerHTML = `<td>${picked.has(key) ? "●" : "○"}</td><td>${r.id}</td><td>${pwr ?? "—"}</td><td>${r.dff == null ? "—" : Number(r.dff).toFixed(3)}</td><td>${r.tercile}</td>`;
     tr.addEventListener("click", () => {
-      if (picked.has(id)) picked.delete(id);
-      else picked.add(id);
+      if (picked.has(key)) picked.delete(key);
+      else picked.add(key);
       renderCandidates(lastRanked);
     });
     tb.appendChild(tr);
@@ -310,7 +315,7 @@ async function boot() {
   $("stop").addEventListener("click", () => jpost("/api/stop", {}));
   $("sel_top").addEventListener("click", () => {
     picked.clear();
-    lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(String(r.id)));
+    lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(rowKey(r)));
     renderCandidates(lastRanked);
   });
   $("sel_clear").addEventListener("click", () => {
@@ -318,7 +323,7 @@ async function boot() {
     renderCandidates(lastRanked);
   });
   $("save_xml").addEventListener("click", async () => {
-    const res = await jpost("/api/save-candidates", { ids: [...picked] });
+    const res = await jpost("/api/save-candidates", { ids: [...picked], keys: [...picked] });
     $("save_status").textContent = res.ok ? `saved ${res.path}` : res.error || "save failed";
   });
   fitGrid();

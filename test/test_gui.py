@@ -168,22 +168,24 @@ def test_candidate_table_and_save(tmp_path):
 	trials = [
 		{"point_scores": {"a": 0.4, "b": 0.2}, "power": 80},
 		{"point_scores": {"c": -0.01}, "power": 80},
+		{"point_scores": {"a": -0.3, "b": -0.2, "c": -0.1}, "power": 100},
 	]
 	ranked = rank_candidate_points(trials, pts, stim_dff_min=0.0)
 	picked = default_picked_ids(ranked)
-	# All imaged changes (including darkening burns), not only the top tercile.
-	assert picked == {"a", "b", "c"}
+	# Every point×power burn (80 and 100), not min-power collapse.
+	assert picked == {"a@80", "b@80", "c@80", "a@100", "b@100", "c@100"}
 	cells = table_cells(ranked)
 	assert cells[0]["id"] == ranked[0]["id"]
-	assert "min_power" in cells[0]
-	picked = toggle_picked(picked, ranked[-1]["id"])
+	assert "key" in cells[0]
+	assert "power" in cells[0]
+	picked = toggle_picked(picked, ranked[-1]["key"])
 	sel = selected_rows(ranked, picked)
-	assert {r["id"] for r in sel} == picked
+	assert {r["key"] for r in sel} == picked
 	path = write_candidates_xml(sel, {"duration": 10.0}, tmp_path / "next_series.xml")
 	text = path.read_text(encoding="utf-8")
 	assert "PVMarkPointSeriesElements" in text
-	for r in sel:
-		assert f'Index="{r["id"]}"' in text
+	for pid in {r["id"] for r in sel}:
+		assert f'Index="{pid}"' in text
 	assert "next_series.xml" in save_status(len(sel), path)
 
 

@@ -1,4 +1,4 @@
-"""Rank fat-XML points by lowest power that still stimulated (f0/f1 ΔF/F)."""
+"""Candidate list: every point×power that showed an imaged |ΔF/F| change."""
 
 from __future__ import annotations
 
@@ -23,54 +23,67 @@ def is_image_change(dff: float | None, stim_dff_min: float = 0.0) -> bool:
 	return abs(float(dff)) > float(stim_dff_min)
 
 
+def candidate_key(pid: str, power: float) -> str:
+	return f"{pid}@{float(power):g}"
+
+
 def rank_candidate_points(
 	trials: list[dict[str, Any]],
 	points: list[dict[str, Any]],
 	*,
 	stim_dff_min: float = 0.0,
 ) -> list[dict[str, Any]]:
-	"""Any imaged change counts. Lowest such power first, then largest |ΔF/F|."""
+	"""One row per (point, power) that burned / changed in the images.
+
+	Powers 80 and 100 both changing point 7 → two rows (7@80 and 7@100).
+	Points with no imaged change are omitted.
+	"""
 	by_id = {str(p["id"]): dict(p) for p in points}
-	hits: dict[str, list[tuple[float, float]]] = {pid: [] for pid in by_id}
+	# Best |ΔF/F| seen for each point at each power.
+	best: dict[tuple[str, float], float] = {}
+	thresh = float(stim_dff_min)
 	for row in trials:
 		ps = row.get("point_scores")
 		if not isinstance(ps, dict) or not ps:
 			continue
 		power = float(row.get("power") if row.get("power") is not None else 0)
 		for pid, dff in ps.items():
-			hits.setdefault(str(pid), []).append((power, float(dff)))
+			d = float(dff)
+			if not is_image_change(d, thresh):
+				continue
+			key = (str(pid), power)
+			if key not in best or abs(d) > abs(best[key]):
+				best[key] = d
 	ranked: list[dict[str, Any]] = []
-	thresh = float(stim_dff_min)
-	for pid, pt in by_id.items():
-		pairs = hits.get(pid) or []
-		stim = [(p, d) for p, d in pairs if is_image_change(d, thresh)]
-		if stim:
-			min_p = min(p for p, _ in stim)
-			at = [d for p, d in stim if p == min_p]
-			dff = max(at, key=lambda d: abs(d))
-			ranked.append(_cand_row(pt, True, min_p, dff))
-		else:
-			best = max(pairs, key=lambda pd: abs(pd[1]), default=None)
-			ranked.append(_cand_row(pt, False, None, None if best is None else best[1]))
+	for (pid, power), dff in best.items():
+		pt = by_id.get(pid)
+		if pt is None:
+			continue
+		ranked.append(_cand_row(pt, power, dff))
 	ranked.sort(
 		key=lambda r: (
-			0 if r["stimulated"] else 1,
-			float(r["min_power"]) if r["stimulated"] else 1e9,
+			float(r["power"]),
 			-(abs(float(r["dff"])) if r["dff"] is not None else -1e9),
+			str(r["id"]),
 		)
 	)
 	_assign_terciles(ranked)
 	return ranked
 
 
-def _cand_row(pt: dict, stimulated: bool, min_power, dff) -> dict[str, Any]:
+def _cand_row(pt: dict, power: float, dff: float) -> dict[str, Any]:
+	pid = str(pt["id"])
+	pwr = float(power)
 	return {
-		"id": str(pt["id"]),
+		"id": pid,
+		"key": candidate_key(pid, pwr),
 		"x": float(pt["x"]),
 		"y": float(pt["y"]),
-		"stimulated": stimulated,
-		"min_power": min_power,
-		"dff": dff,
+		"stimulated": True,
+		"power": pwr,
+		# Older UI / logs used min_power for the stimulating power column.
+		"min_power": pwr,
+		"dff": float(dff),
 		"tercile": "none",
 		"point": pt,
 	}
@@ -92,15 +105,28 @@ def _assign_terciles(ranked: list[dict[str, Any]]) -> None:
 
 def format_candidates_txt(ranked: list[dict[str, Any]]) -> str:
 	lines = [
-		"CANDIDATES — any |ΔF/F| change; lowest such power, then largest |ΔF/F|",
-		"id  tercile  min_power  dff",
+		"CANDIDATES — every point×power with an imaged |ΔF/F| change",
+		"id  power  dff  tercile",
 	]
 	for r in ranked:
-		pwr = "-" if r["min_power"] is None else str(r["min_power"])
+		pwr = "-" if r.get("power") is None else f"{float(r['power']):g}"
 		dff = "-" if r["dff"] is None else f"{float(r['dff']):.4f}"
-		tag = "change" if r["stimulated"] else "no change"
-		lines.append(f"{r['id']}  {r['tercile']}  {pwr}  {dff}  {tag}")
+		lines.append(f"{r['id']}  {pwr}  {dff}  {r['tercile']}")
 	return "\n".join(lines) + "\n"
+
+
+def unique_points_from_rows(selected: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Deduplicate by point id (first row wins) for next-round XML."""
+	out: list[dict[str, Any]] = []
+	seen: set[str] = set()
+	for r in selected:
+		pt = r.get("point") or r
+		pid = str(pt.get("id") or r.get("id"))
+		if pid in seen:
+			continue
+		seen.add(pid)
+		out.append(pt)
+	return out
 
 
 def write_candidates_xml(
@@ -109,7 +135,7 @@ def write_candidates_xml(
 	path: str | Path,
 ) -> Path:
 	"""Fat XML (one ungrouped pool) for the next mp-sync --series."""
-	pts = [r.get("point") or r for r in selected]
+	pts = unique_points_from_rows(selected)
 	if not pts:
 		raise ValueError("no points selected")
 	step = build_group_step(pts, name="candidates", power=0.0, meta=meta)
@@ -138,7 +164,13 @@ def write_session_candidates(
 		dest = Path(dest)
 		dest.mkdir(parents=True, exist_ok=True)
 		(dest / "candidates.txt").write_text(text, encoding="utf-8")
-		slim = [{k: r[k] for k in ("id", "x", "y", "stimulated", "min_power", "dff", "tercile")} for r in ranked]
+		slim = [
+			{
+				k: r[k]
+				for k in ("id", "key", "x", "y", "power", "min_power", "dff", "tercile", "stimulated")
+			}
+			for r in ranked
+		]
 		(dest / "candidates.json").write_text(
 			json.dumps(slim, indent=2) + "\n", encoding="utf-8"
 		)

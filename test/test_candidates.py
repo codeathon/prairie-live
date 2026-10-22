@@ -2,6 +2,7 @@ import numpy as np
 
 from prairie_live.candidates import (
 	TERCILE_RGB,
+	candidate_key,
 	rank_candidate_points,
 	write_candidates_xml,
 	write_session_candidates,
@@ -9,7 +10,8 @@ from prairie_live.candidates import (
 from prairie_live.markpoints import extract_unique_points, load_mark_points_file
 
 
-def test_rank_prefers_low_power_then_high_dff():
+def test_rank_lists_every_point_power_burn():
+	"""Powers 80 and 100 both changing a point → two rows, not min-power collapse."""
 	pts = [
 		{"id": "a", "x": 0.2, "y": 0.2},
 		{"id": "b", "x": 0.5, "y": 0.5},
@@ -24,14 +26,32 @@ def test_rank_prefers_low_power_then_high_dff():
 		{"point_scores": {"d": 0.0}, "power": 100},
 	]
 	ranked = rank_candidate_points(trials, pts, stim_dff_min=0.0)
-	ids = [r["id"] for r in ranked]
-	assert ids[0] == "a"
-	assert ranked[0]["min_power"] == 80
+	keys = [r["key"] for r in ranked]
+	# Sorted by power ascending, then |ΔF/F| descending within power.
+	assert keys[0] == "a@80"
+	assert ranked[0]["power"] == 80
 	assert ranked[0]["dff"] == 0.12
-	assert {r["id"] for r in ranked if r["stimulated"]} == {"a", "b", "c"}
-	assert next(r for r in ranked if r["id"] == "c")["dff"] == -0.25
-	assert next(r for r in ranked if r["id"] == "d")["stimulated"] is False
+	assert set(keys) == {"a@80", "a@140", "b@140", "c@100"}
+	assert next(r for r in ranked if r["key"] == "c@100")["dff"] == -0.25
+	assert all(r["stimulated"] for r in ranked)
+	assert "d" not in {r["id"] for r in ranked}
 	assert ranked[0]["tercile"] in TERCILE_RGB
+
+
+def test_power_100_lists_almost_all_when_almost_all_burn():
+	pts = [{"id": str(i), "x": i / 20, "y": i / 20} for i in range(1, 11)]
+	scores_80 = {str(i): 0.05 for i in range(1, 4)}
+	scores_100 = {str(i): -0.3 for i in range(1, 11)}
+	trials = [
+		{"point_scores": scores_80, "power": 80},
+		{"point_scores": scores_100, "power": 100},
+	]
+	ranked = rank_candidate_points(trials, pts, stim_dff_min=0.0)
+	at_100 = [r for r in ranked if r["power"] == 100]
+	at_80 = [r for r in ranked if r["power"] == 80]
+	assert len(at_100) == 10
+	assert len(at_80) == 3
+	assert {r["key"] for r in at_100} == {f"{i}@100" for i in range(1, 11)}
 
 
 def test_burn_darkening_is_a_candidate():
@@ -39,7 +59,8 @@ def test_burn_darkening_is_a_candidate():
 	trials = [{"point_scores": {"7": -0.4}, "power": 100}]
 	ranked = rank_candidate_points(trials, pts, stim_dff_min=0.0)
 	assert ranked[0]["stimulated"] is True
-	assert ranked[0]["min_power"] == 100
+	assert ranked[0]["key"] == "7@100"
+	assert ranked[0]["power"] == 100
 	assert ranked[0]["tercile"] == "top"
 
 
@@ -66,16 +87,31 @@ def test_write_candidates_and_top_xml(tmp_path):
 	assert (tmp_path / "candidates.txt").is_file()
 	assert (tmp_path / "candidates_top.xml").is_file()
 	assert any(r["tercile"] == "top" for r in ranked)
+	assert all("key" in r for r in ranked)
 	xml = write_candidates_xml(ranked[:3], meta, tmp_path / "next.xml")
 	assert xml.is_file()
 	assert "PVMarkPointSeriesElements" in xml.read_text(encoding="utf-8")
+
+
+def test_candidate_key_format():
+	assert candidate_key("7", 100) == "7@100"
+	assert candidate_key("7", 80.0) == "7@80"
 
 
 def test_tercile_color_helper():
 	assert TERCILE_RGB["top"] != TERCILE_RGB["mid"]
 	from prairie_live.candidate_view import _label, _nearest
 
-	row = {"id": "3", "stimulated": True, "min_power": 80, "dff": 0.2, "x": 0.0, "y": 0.0}
-	assert "p=80" in _label(row)
-	assert _nearest([row], (32, 32), 0.0, 0.0) == "3"
+	row = {
+		"id": "3",
+		"key": "3@80",
+		"stimulated": True,
+		"power": 80,
+		"min_power": 80,
+		"dff": 0.2,
+		"x": 0.0,
+		"y": 0.0,
+	}
+	assert "3@80" in _label(row)
+	assert _nearest([row], (32, 32), 0.0, 0.0) == "3@80"
 	assert _nearest([row], (32, 32), 30.0, 30.0) is None

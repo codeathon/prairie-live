@@ -44,9 +44,13 @@ def maybe_show_candidates(
 			return None
 
 
+def _row_key(r: dict) -> str:
+	return str(r.get("key") or r.get("id"))
+
+
 def default_picked_ids(ranked: list[dict]) -> set[str]:
-	"""Every point with an imaged change starts selected."""
-	return {str(r["id"]) for r in ranked if r.get("stimulated")}
+	"""Every point×power burn starts selected."""
+	return {_row_key(r) for r in ranked if r.get("stimulated")}
 
 
 def toggle_picked(picked: set[str], pid: str) -> set[str]:
@@ -61,18 +65,21 @@ def toggle_picked(picked: set[str], pid: str) -> set[str]:
 
 def selected_rows(ranked: list[dict], picked: set[str]) -> list[dict]:
 	want = {str(p) for p in picked}
-	return [r for r in ranked if str(r["id"]) in want]
+	return [r for r in ranked if _row_key(r) in want]
 
 
 def table_cells(ranked: list[dict]) -> list[dict]:
 	rows: list[dict] = []
 	for r in ranked:
-		pwr = "-" if r.get("min_power") is None else f"{r['min_power']:g}"
+		pwr = r.get("power", r.get("min_power"))
+		pwr_s = "-" if pwr is None else f"{float(pwr):g}"
 		dff = "-" if r.get("dff") is None else f"{float(r['dff']):.3f}"
 		rows.append(
 			{
 				"id": str(r["id"]),
-				"min_power": pwr,
+				"key": _row_key(r),
+				"power": pwr_s,
+				"min_power": pwr_s,
 				"dff": dff,
 				"tercile": str(r.get("tercile") or "none"),
 			}
@@ -125,11 +132,11 @@ def show_candidate_picker(
 	canvas = FigureCanvasTkAgg(fig, master=left)
 	canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-	cols = ("id", "min_power", "dff", "tercile")
+	cols = ("id", "power", "dff", "tercile")
 	tree = ttk.Treeview(right, columns=cols, show="headings", height=18, selectmode="extended")
 	for col, w, hd in (
 		("id", 50, "id"),
-		("min_power", 80, "min power"),
+		("power", 70, "power"),
 		("dff", 70, "ΔF/F"),
 		("tercile", 70, "tercile"),
 	):
@@ -137,7 +144,12 @@ def show_candidate_picker(
 		tree.column(col, width=w, anchor=tk.CENTER)
 	tree.pack(fill=tk.BOTH, expand=True)
 	for cell in table_cells(ranked):
-		tree.insert("", tk.END, iid=cell["id"], values=(cell["id"], cell["min_power"], cell["dff"], cell["tercile"]))
+		tree.insert(
+			"",
+			tk.END,
+			iid=cell["key"],
+			values=(cell["id"], cell["power"], cell["dff"], cell["tercile"]),
+		)
 
 	status = tk.StringVar(value=save_status(len(picked), None))
 	ttk.Label(right, textvariable=status, wraplength=320).pack(fill=tk.X, pady=(8, 4))
@@ -161,7 +173,7 @@ def show_candidate_picker(
 			ring = Circle((cx, cy), 8, fill=False, ec=rgb, lw=2.0)
 			ax.add_patch(ring)
 			txt = ax.text(cx + 10, cy, _label(r), color=rgb, fontsize=8)
-			artists.append((str(r["id"]), ring, txt))
+			artists.append((_row_key(r), ring, txt))
 		_restyle(artists, picked)
 		canvas.draw_idle()
 
@@ -195,7 +207,7 @@ def show_candidate_picker(
 		_set_picked(toggle_picked(picked, item))
 
 	def do_top() -> None:
-		_set_picked(default_picked_ids(ranked))
+		_set_picked({_row_key(r) for r in ranked if r.get("tercile") == "top"})
 
 	def do_clear() -> None:
 		_set_picked(set())
@@ -247,7 +259,7 @@ def show_candidate_fov(
 	ax.imshow(bg, origin="upper")
 	ax.set_axis_off()
 	ax.set_title("candidates  click=select  s=save XML  q=close", color="#ffee55")
-	picked: set[str] = {r["id"] for r in ranked if r.get("tercile") == "top"}
+	picked: set[str] = default_picked_ids(ranked)
 	artists = []
 	for r in ranked:
 		cx = float(r["x"]) * (bg.shape[1] - 1)
@@ -257,7 +269,7 @@ def show_candidate_fov(
 		ax.add_patch(ring)
 		label = _label(r)
 		txt = ax.text(cx + 10, cy, label, color=rgb, fontsize=8)
-		artists.append((r["id"], ring, txt))
+		artists.append((_row_key(r), ring, txt))
 	_restyle(artists, picked)
 
 	def on_click(event):
@@ -275,7 +287,7 @@ def show_candidate_fov(
 
 	def on_key(event):
 		if event.key == "s":
-			sel = [r for r in ranked if r["id"] in picked]
+			sel = selected_rows(ranked, picked)
 			if not sel:
 				print("no points selected")
 				return
@@ -293,9 +305,11 @@ def show_candidate_fov(
 
 
 def _label(r: dict) -> str:
-	if not r.get("stimulated"):
-		return f"{r['id']}  no stim"
-	return f"{r['id']}  p={r['min_power']}  ΔF/F={float(r['dff']):.3f}"
+	pwr = r.get("power", r.get("min_power"))
+	pwr_s = "-" if pwr is None else f"{float(pwr):g}"
+	dff = r.get("dff")
+	dff_s = "-" if dff is None else f"{float(dff):.3f}"
+	return f"{r['id']}@{pwr_s}  ΔF/F={dff_s}"
 
 
 def _fov_bg(fov: np.ndarray | None) -> np.ndarray:
@@ -310,8 +324,9 @@ def _fov_bg(fov: np.ndarray | None) -> np.ndarray:
 
 
 def _nearest(ranked, shape, x, y) -> str | None:
+	"""Nearest FOV ring; returns row key (id@power), not bare point id."""
 	h, w = int(shape[0]), int(shape[1])
-	best_id = None
+	best_key = None
 	best_d = 14.0 ** 2
 	for r in ranked:
 		cx = float(r["x"]) * (w - 1)
@@ -319,8 +334,8 @@ def _nearest(ranked, shape, x, y) -> str | None:
 		d = (cx - x) ** 2 + (cy - y) ** 2
 		if d < best_d:
 			best_d = d
-			best_id = str(r["id"])
-	return best_id
+			best_key = _row_key(r)
+	return best_key
 
 
 def _restyle(artists, picked: set[str]) -> None:

@@ -190,6 +190,8 @@ class Handler(BaseHTTPRequestHandler):
 						"ranked": [
 							{
 								"id": r["id"],
+								"key": r.get("key") or r["id"],
+								"power": r.get("power", r.get("min_power")),
 								"min_power": r.get("min_power"),
 								"dff": r.get("dff"),
 								"tercile": r.get("tercile"),
@@ -343,8 +345,13 @@ class Handler(BaseHTTPRequestHandler):
 
 		try:
 			body = json.loads(raw.decode("utf-8") or "{}")
-			ids = {str(i) for i in (body.get("ids") or [])}
-			sel = [r for r in STATE.ranked if str(r["id"]) in ids]
+			# Prefer row keys (id@power); bare ids still match for older clients.
+			want = {str(i) for i in (body.get("ids") or body.get("keys") or [])}
+			sel = [
+				r
+				for r in STATE.ranked
+				if str(r.get("key") or r["id"]) in want or str(r["id"]) in want
+			]
 			if not sel:
 				raise ValueError("no points selected")
 			out = Path(STATE.opt.get("images_dir") or "trial_images")
