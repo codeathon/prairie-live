@@ -369,9 +369,12 @@ class Handler(BaseHTTPRequestHandler):
 				kind, payload = STATE.q.get_nowait()
 				if kind == "trial":
 					STATE.append(trial_log_line(payload))
+					from prairie_live.scan_geometry import points_for_image
+
+					geom, _ = STATE.live.scan_geometry()
 					st = board_state(
 						payload,
-						STATE.points,
+						points_for_image(list(STATE.points or []), geom),
 						stim_dff_min=float(STATE.opt.get("stim_dff_min") or 0.0),
 						n_trials=STATE.n_trials,
 					)

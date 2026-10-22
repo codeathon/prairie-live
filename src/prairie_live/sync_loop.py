@@ -168,8 +168,7 @@ def score_points_dff(
 		out[str(pt.get("id", i))] = float((a - b) / b)
 	if n_oob:
 		print(
-			f"  score: skipped {n_oob}/{len(points)} points outside imaging FOV "
-			f"(X/Y not in ~0–1)"
+			f"  score: skipped {n_oob}/{len(points)} points outside the imaging FOV"
 		)
 	return out
 
@@ -653,6 +652,31 @@ def _run_stim_epoch(
 	return f0_frames, f1_frames
 
 
+def _image_points(
+	gpts: list[dict],
+	point_pool: list[dict] | None,
+	relay: Any | None,
+) -> tuple[list[dict], list[dict] | None]:
+	"""Map galvo Mark Points onto the imaging FOV for ΔF/F disks and PNG rings."""
+	from prairie_live.scan_geometry import (
+		fetch_scan_geometry,
+		is_fraction_space,
+		points_for_image,
+	)
+
+	if is_fraction_space(gpts):
+		return gpts, point_pool
+	geom = None
+	if relay is not None:
+		try:
+			geom = fetch_scan_geometry(relay)
+		except Exception as exc:
+			print(f"  score: cannot read PV scan range ({exc}); galvo points stay OOB")
+	if geom is None:
+		return gpts, point_pool
+	return points_for_image(gpts, geom), points_for_image(point_pool, geom)
+
+
 def _finish_trial_frames(
 	row: dict,
 	*,
@@ -668,6 +692,7 @@ def _finish_trial_frames(
 ) -> None:
 	"""Score + optional PNG dump into <run>/tXXXX/ (f0/f1 disk ΔF/F)."""
 	row.setdefault("repetitions", 1)
+	score_pts, pool_pts = _image_points(gpts, point_pool, relay)
 	if mock_scores:
 		row["point_scores"] = {
 			str(p["id"]): abs(hash((str(p["id"]), row.get("power"), it))) % 1000 / 1000.0
@@ -678,7 +703,7 @@ def _finish_trial_frames(
 	elif relay is not None and f0_frames and f1_frames:
 		try:
 			row["point_scores"] = score_points_dff(
-				f0_frames, f1_frames, gpts, radius=disk_radius
+				f0_frames, f1_frames, score_pts, radius=disk_radius
 			)
 			vals = list(row["point_scores"].values())
 			row["score"] = float(np.mean(vals)) if vals else 0.0
@@ -699,8 +724,8 @@ def _finish_trial_frames(
 				trial_index=int(row["trial_index"]),
 				frames_f0=f0_frames,
 				frames_f1=f1_frames,
-				fired_points=gpts,
-				all_points=point_pool,
+				fired_points=score_pts,
+				all_points=pool_pts,
 				power=float(row["power"]) if row.get("power") is not None else None,
 				radius=disk_radius,
 			)
@@ -1647,12 +1672,12 @@ def execute_session(
 		f"trigger={opt['trigger']}  stim_mode={stim_mode}  "
 		f"laser={meta.get('uncaging_laser')}  group_size={gs}"
 	)
-	# Flag .gpl / XML coords that leave the visible FOV (valid for -slm galvos,
-	# but disk ΔF/F and PNG marks only work for ~0–1).
+	# Galvo-list coords (typical of PV saved series). Firing uses them as-is;
+	# ΔF/F disks map them through currentScanAmplitude/Center before scoring.
 	if oob:
 		print(
-			f"WARNING: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
-			"(ok for .gpl/-lmp; imaging-FOV scoring skips them). Examples:"
+			f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
+			"ΔF/F scoring maps them onto the live FOV via PV scan range. Examples:"
 		)
 		for p in oob[:5]:
 			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")

@@ -50,6 +50,39 @@ def is_fraction_space(points: list[dict]) -> bool:
 	)
 
 
+def galvo_to_fraction(x: float, y: float, geom: dict[str, float]) -> tuple[float, float]:
+	"""Galvo voltage → image fraction; amplitude is the half-width of the scan."""
+	ax = 2.0 * float(geom["amp_x"])
+	ay = 2.0 * float(geom["amp_y"])
+	return (
+		0.5 + (float(x) - float(geom["ctr_x"])) / ax,
+		0.5 + (float(y) - float(geom["ctr_y"])) / ay,
+	)
+
+
+def points_for_image(
+	points: list[dict] | None, geom: dict[str, float] | None
+) -> list[dict]:
+	"""Copies of points with X/Y as 0–1 image fractions (for ΔF/F disks and rings).
+
+	Already-fraction points are returned unchanged. Galvo points need geom;
+	without it they are left as-is (disk_mean then skips them as OOB).
+	"""
+	if not points:
+		return []
+	if is_fraction_space(points) or not geom:
+		return list(points)
+	out: list[dict] = []
+	for p in points:
+		row = dict(p)
+		fx, fy = galvo_to_fraction(float(p["x"]), float(p["y"]), geom)
+		row["x"], row["y"] = fx, fy
+		row["x_galvo"] = float(p["x"])
+		row["y_galvo"] = float(p["y"])
+		out.append(row)
+	return out
+
+
 def overlay_points(
 	points: list[dict], geom: dict[str, float] | None, error: str = ""
 ) -> dict:
@@ -63,11 +96,10 @@ def overlay_points(
 			"note": "Mark Points are in galvo units; waiting for PV scan range "
 			f"from the relay{why}",
 		}
-	ax, ay = 2.0 * geom["amp_x"], 2.0 * geom["amp_y"]
+	ax = 2.0 * geom["amp_x"]
 	rows = []
 	for p in points:
-		fx = 0.5 + (float(p["x"]) - geom["ctr_x"]) / ax
-		fy = 0.5 + (float(p["y"]) - geom["ctr_y"]) / ay
+		fx, fy = galvo_to_fraction(float(p["x"]), float(p["y"]), geom)
 		size = p.get("spiral_size_fov") or p.get("spiral_width")
 		r = abs(float(size) / ax) / 2 if size not in (None, "") else None
 		rows.append(_row(p, fx, fy, r))
