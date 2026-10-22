@@ -70,6 +70,14 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
 }
 .tile p { margin: 4px 0 0; font-size: 0.85em; }
 .tile p:empty { display: none; }
+/* Fixed caption band under Live scan so status/notes cannot resize the FOV. */
+#tile_live .live-caps {
+  flex: 0 0 2.8em;
+  min-height: 2.8em;
+  margin-top: 4px;
+  overflow: hidden;
+}
+#tile_live .live-caps p { margin: 0; font-size: 0.85em; line-height: 1.35; }
 #marks_note.dimmed { visibility: hidden; }
 /* Overlay shares the image box; meet == object-fit: contain, so marks line up. */
 .fov-wrap { position: relative; flex: 1 1 auto; min-height: 0; }

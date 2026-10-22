@@ -86,7 +86,13 @@ def points_for_image(
 def overlay_points(
 	points: list[dict], geom: dict[str, float] | None, error: str = ""
 ) -> dict:
-	"""Points as image fractions for drawing, plus a note when they cannot be placed."""
+	"""Points as image fractions for drawing, plus a note when they cannot be placed.
+
+	No note when the pool is empty — a geometry-only note was shrinking the live
+	FOV about a second after load, before any Mark Points file was chosen.
+	"""
+	if not points:
+		return {"points": [], "note": ""}
 	if is_fraction_space(points):
 		return {"points": [_row(p, float(p["x"]), float(p["y"]), None) for p in points], "note": ""}
 	if not geom:

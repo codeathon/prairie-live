@@ -89,6 +89,14 @@ def test_galvo_points_wait_for_geometry():
 	assert out["points"] == [] and "galvo" in out["note"]
 
 
+def test_empty_pool_has_no_note():
+	# A geometry-only note with no points used to shrink the live FOV on load.
+	assert overlay_points([], {"amp_x": 4.2, "amp_y": 4.2, "ctr_x": 0.0, "ctr_y": 0.0}) == {
+		"points": [],
+		"note": "",
+	}
+
+
 def test_fraction_points_used_as_is():
 	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_8fov.xml"))
 	out = overlay_points(pts, None)

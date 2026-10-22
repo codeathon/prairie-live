@@ -144,7 +144,7 @@ function fitGrid() {
   const n = grid.children.length || 1;
   const W = grid.clientWidth;
   const H = grid.clientHeight;
-  const chrome = 48; // tile title + caption + padding
+  const chrome = 56; // tile title + live caption band + padding
   let best = 1;
   let bestSide = 0;
   for (let c = 1; c <= n; c++) {
