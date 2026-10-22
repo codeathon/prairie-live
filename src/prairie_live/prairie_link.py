@@ -63,7 +63,9 @@ class PrairieLink:
 					break
 				continue
 			if not chunk:
-				break
+				raise ConnectionResetError(
+					f"PrairieView closed the script connection; got {buf[:200]!r}"
+				)
 			buf += chunk
 			if b"DONE" in buf:
 				break

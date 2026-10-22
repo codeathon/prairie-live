@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import tempfile
 import threading
+import time
 
 import numpy as np
 
@@ -56,13 +57,60 @@ class PvScript:
 		self.gi: GiGrabber | None = None
 		self.lock = threading.Lock()
 		self.last_error = ""
+		self.reconnects = 0
+		self._opened_at = 0.0
+		self._started = False
 
 	def connect(self) -> None:
+		self._open()
+		self._started = True
+		self.wh = self.gi.fov_wh(self.wh)
+
+	def _open(self) -> None:
+		self._opened_at = time.monotonic()
 		self.link = PrairieLink(
 			host=self.host, port=self.port, password=self.password, timeout=10.0
 		)
 		self.gi = GiGrabber(self.link)
-		self.wh = self.gi.fov_wh(self.wh)
+
+	def _reopen(self, parts: tuple, err: Exception) -> None:
+		"""PV dropped the session: log which command was in flight, log in again."""
+		self.reconnects += 1
+		print(
+			f"PV closed the script connection during {' '.join(parts)!r} "
+			f"({type(err).__name__}: {err}); reconnect #{self.reconnects}",
+			flush=True,
+		)
+		if self.gi is not None:
+			self.gi.close()
+		self.link = self.gi = None
+		wait = 1.0 - (time.monotonic() - self._opened_at)
+		if wait > 0:
+			time.sleep(wait)
+		try:
+			self._open()
+		except OSError as e:
+			print(f"reconnect to PV failed: {e}", flush=True)
+
+	def _call(self, parts: tuple, fn):
+		"""Run fn under the lock; on a dropped socket reconnect but never resend."""
+		with self.lock:
+			if self.link is None:
+				if not self._started:
+					raise RuntimeError("not connected to PrairieView script port")
+				if time.monotonic() - self._opened_at < 1.0:
+					raise RuntimeError("reconnecting to PrairieView")
+				self._open()
+			try:
+				return fn()
+			except (ConnectionError, OSError) as e:
+				if isinstance(e, TimeoutError):
+					raise
+				self._reopen(parts, e)
+				raise RuntimeError(
+					f"PrairieView dropped the connection during {parts[0]} ({e}); "
+					"reconnected, command not resent"
+				) from e
 
 	def disconnect(self) -> None:
 		if self.gi is not None:
@@ -72,15 +120,10 @@ class PvScript:
 			self.link.close()
 			self.link = None
 
-	def _require(self) -> PrairieLink:
-		if self.link is None:
-			raise RuntimeError("not connected to PrairieView script port")
-		return self.link
-
 	def send(self, *parts: str, timeout: float = 60.0) -> str:
 		"""One script command; waits for PV's DONE (TimeoutError otherwise)."""
-		link = self._require()
-		with self.lock:
+		def run():
+			link = self.link
 			old = link.timeout
 			link.timeout = timeout
 			try:
@@ -88,18 +131,18 @@ class PvScript:
 			finally:
 				link.timeout = old
 
+		return self._call(parts, run)
+
 	def query(self, *parts: str) -> str:
-		link = self._require()
-		with self.lock:
-			return link.query(*parts)
+		return self._call(parts, lambda: self.link.query(*parts))
 
 	def grab(self, channel: int, w: int | None = None, h: int | None = None) -> GiResult:
-		if self.gi is None:
-			raise RuntimeError("not connected to PrairieView script port")
 		hh, ww = self.wh
-		with self.lock:
-			res = self.gi.grab(int(channel), int(w or ww), int(h or hh))
-		self.last_error = self.gi.last_error
+		res = self._call(
+			("-gi", str(channel)),
+			lambda: self.gi.grab(int(channel), int(w or ww), int(h or hh)),
+		)
+		self.last_error = res.summary() if res.frame is None else ""
 		return res
 
 	def get_frame(self, channel: int = 1) -> np.ndarray | None:

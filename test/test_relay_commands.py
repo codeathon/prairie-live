@@ -197,3 +197,45 @@ def test_bind_second_listen_fails():
 		a.close()
 
 
+
+
+class DroppingLink(FakeLink):
+	def query(self, *parts):
+		self.sent.append((parts, self.timeout))
+		raise ConnectionResetError("[WinError 10054] forcibly closed by the remote host")
+
+
+def test_dropped_session_reconnects_and_names_the_command(monkeypatch, capsys):
+	r = Relay("127.0.0.1", "0000", 1)
+	opened = []
+
+	def fake_open():
+		r.pv._opened_at = -10.0
+		r.pv.link = FakeLink()
+		r.pv.gi = None
+		opened.append(1)
+
+	monkeypatch.setattr(r.pv, "_open", fake_open)
+	r.pv._started = True
+	r.pv.link = DroppingLink()
+	out = r.handle_command({"cmd": "get_state", "key": "currentScanAmplitude", "index": "XAxis"})
+	assert out["ok"] is False and "not resent" in out["error"]
+	assert opened == [1]
+	assert "during '-gts currentScanAmplitude XAxis'" in capsys.readouterr().out
+	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
+	assert _cmds(r) == [("-MarkPoints",)]
+
+
+def test_prairie_link_raises_when_pv_closes_socket():
+	import socket
+
+	from prairie_live.prairie_link import PrairieLink
+
+	a, b = socket.socketpair()
+	link = PrairieLink.__new__(PrairieLink)
+	link.sock, link.timeout = a, 2.0
+	b.sendall(b"ACK\r\n")
+	b.shutdown(socket.SHUT_WR)
+	with pytest.raises(ConnectionResetError):
+		link.send_command("-gts", "x")
+	b.close()

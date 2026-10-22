@@ -81,3 +81,17 @@ def test_fraction_points_used_as_is():
 	out = overlay_points(pts, None)
 	assert len(out["points"]) == 8
 	assert out["points"][0]["fx"] == pytest.approx(pts[0]["x"], abs=1e-4)
+
+
+def test_live_feed_stops_polling_after_dropped_session():
+	from prairie_live.live_feed import LiveFeed
+
+	class Dropped:
+		def get_state(self, key, index=None):
+			return {"ok": False, "error": "PrairieView dropped the connection during -gts (reset)"}
+
+	feed = LiveFeed("127.0.0.1:25100")
+	assert feed._poll_geometry(Dropped()) is None
+	assert "polling stopped" in feed.scan_geometry_error()
+	assert feed._poll_geometry(FakeRelay(GEOM)) == 2.0
+	assert feed.scan_geometry_error() == ""
