@@ -50,24 +50,37 @@ def test_waiting_note_carries_reason():
 
 
 def test_galvo_points_map_into_frame():
+	# Half-width amplitude: frame spans center ± amplitude.
 	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
 	g = fetch_scan_geometry(FakeRelay(GEOM))
 	out = overlay_points(pts, g)
 	p1 = out["points"][0]
-	assert p1["fx"] == pytest.approx(0.5 + -3.25489489483074 / 7.6, abs=1e-4)
+	assert p1["fx"] == pytest.approx(0.5 + -3.25489489483074 / 15.2, abs=1e-4)
 	# Negative Y amplitude: scan runs reversed, so negative galvo Y is low in the image.
-	assert p1["fy"] == pytest.approx(0.5 + (-3.66925337390467 - 0.2) / -7.6, abs=1e-4)
-	assert p1["r"] == pytest.approx(0.184901809118501 / 7.6 / 2, abs=1e-4)
-	assert "4 point(s) outside" in out["note"]
+	assert p1["fy"] == pytest.approx(0.5 + (-3.66925337390467 - 0.2) / -15.2, abs=1e-4)
+	assert p1["r"] == pytest.approx(0.184901809118501 / 15.2 / 2, abs=1e-4)
 
 
-def test_rig_points_inside_centered_scan():
+def test_rig_scan_puts_all_picked_points_in_frame():
+	# PV 6.1 on the rig at zoom 1: amplitude 4.2035577285, center 0 on both axes.
+	rig = {
+		("currentScanAmplitude", "XAxis"): "4.2035577285",
+		("currentScanAmplitude", "YAxis"): "4.2035577285",
+		("currentScanCenter", "XAxis"): "0",
+		("currentScanCenter", "YAxis"): "0",
+	}
 	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
-	vals = dict(GEOM)
-	vals[("currentScanCenter", "YAxis")] = "0"
-	out = overlay_points(pts, fetch_scan_geometry(FakeRelay(vals)))
+	out = overlay_points(pts, fetch_scan_geometry(FakeRelay(rig)))
 	assert all(0 <= p["fx"] <= 1 and 0 <= p["fy"] <= 1 for p in out["points"])
-	assert out["note"] == "PV scan X 7.6 @ 0, Y -7.6 @ 0"
+	assert out["note"] == "PV scan X 0 ± 4.20356, Y 0 ± 4.20356"
+	p1 = out["points"][0]
+	assert round(p1["fx"] * 512) == 58 and round(p1["fy"] * 512) == 33
+
+
+def test_points_outside_scan_are_counted():
+	pts = [{"id": "1", "x": 5.0, "y": 0.0}, {"id": "2", "x": 0.0, "y": 0.0}]
+	g = {"amp_x": 4.2, "amp_y": 4.2, "ctr_x": 0.0, "ctr_y": 0.0}
+	assert "1 point(s) outside" in overlay_points(pts, g)["note"]
 
 
 def test_galvo_points_wait_for_geometry():

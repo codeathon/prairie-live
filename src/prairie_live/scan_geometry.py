@@ -1,8 +1,9 @@
 """Map Mark Points X/Y onto the live image (0–1 of width/height).
 
-PV saves Mark Points positions in galvo units (rig: about ±3.5), the same
-units as its scan state: the frame spans currentScanCenter ± currentScanAmplitude/2
-on each axis, and a negative amplitude means that axis is scanned reversed.
+PV saves Mark Points positions in galvo units, the same units as its scan
+state. currentScanAmplitude is the half-width: the frame spans
+currentScanCenter ± currentScanAmplitude on each axis (rig, zoom 1: ±4.2, with
+picked points out to ±3.75). A negative amplitude means that axis is reversed.
 Points already inside 0–1 are image fractions and are used as is.
 """
 
@@ -62,7 +63,7 @@ def overlay_points(
 			"note": "Mark Points are in galvo units; waiting for PV scan range "
 			f"from the relay{why}",
 		}
-	ax, ay = geom["amp_x"], geom["amp_y"]
+	ax, ay = 2.0 * geom["amp_x"], 2.0 * geom["amp_y"]
 	rows = []
 	for p in points:
 		fx = 0.5 + (float(p["x"]) - geom["ctr_x"]) / ax
@@ -72,7 +73,8 @@ def overlay_points(
 		rows.append(_row(p, fx, fy, r))
 	n_out = sum(1 for r in rows if not (0 <= r["fx"] <= 1 and 0 <= r["fy"] <= 1))
 	note = (
-		f"PV scan X {ax:g} @ {geom['ctr_x']:g}, Y {ay:g} @ {geom['ctr_y']:g}"
+		f"PV scan X {geom['ctr_x']:g} ± {geom['amp_x']:g}, "
+		f"Y {geom['ctr_y']:g} ± {geom['amp_y']:g}"
 		+ (f" · {n_out} point(s) outside the current scan" if n_out else "")
 	)
 	return {"points": rows, "note": note}
