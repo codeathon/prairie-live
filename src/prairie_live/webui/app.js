@@ -85,7 +85,10 @@ let marksNote = "";
 
 function applyMarksVisibility() {
   $("live_marks").classList.toggle("hidden", !marksOn);
-  $("marks_note").textContent = marksOn ? marksNote : "";
+  // Keep the note's height when hiding marks so the FOV does not jump.
+  const note = $("marks_note");
+  note.textContent = marksNote;
+  note.classList.toggle("dimmed", !marksOn);
   const btn = $("marks_toggle");
   btn.setAttribute("aria-pressed", marksOn ? "true" : "false");
   btn.title = marksOn ? "Hide Mark Points overlay" : "Show Mark Points overlay";

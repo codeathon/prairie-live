@@ -70,6 +70,7 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
 }
 .tile p { margin: 4px 0 0; font-size: 0.85em; }
 .tile p:empty { display: none; }
+#marks_note.dimmed { visibility: hidden; }
 /* Overlay shares the image box; meet == object-fit: contain, so marks line up. */
 .fov-wrap { position: relative; flex: 1 1 auto; min-height: 0; }
 .fov-wrap img, .fov-wrap svg {
