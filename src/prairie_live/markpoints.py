@@ -11,6 +11,13 @@ import copy
 import xml.etree.ElementTree as ET
 from typing import Any
 
+from prairie_live.lab_defaults import (
+	DEFAULT_TRIGGER_FREQUENCY,
+	DEFAULT_TRIGGER_SELECTION,
+	NO_TRIGGER_IDENTIFIER,
+	trigger_identifier_for,
+)
+
 # Lab Mark Points UI defaults (2026-08): Monaco, Force 2D, spiral 54.5 µm / 8.
 # Used only when the source series omits these fields.
 _SPIRAL_DEFAULTS = {
@@ -25,7 +32,7 @@ _DEFAULT_USE_3D = "False"
 # PV's saved series stores UncagingLaserPower as a fraction of this UI value
 # (rig file: 0.4 at UI 160, 0.625 at UI 250).
 POWER_FULL_SCALE = 400.0
-_NO_TRIGGER_ID = "00000000-0000-0000-0000-000000000000"
+_NO_TRIGGER_ID = NO_TRIGGER_IDENTIFIER
 
 
 def parse_mark_points(xml_string: str) -> list[dict]:
@@ -299,6 +306,7 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 			"spiral_revolutions": _DEFAULT_SPIRAL_REVS,
 			"uncaging_laser": _DEFAULT_LASER,
 			"trigger_selection": "None",
+			"trigger_identifier": _NO_TRIGGER_ID,
 			"trigger_frequency": "None",
 			"trigger_count": "1",
 			"async_sync_frequency": "None",
@@ -322,6 +330,7 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 		"spiral_revolutions",
 		"uncaging_laser",
 		"trigger_selection",
+		"trigger_identifier",
 		"trigger_frequency",
 		"trigger_count",
 		"async_sync_frequency",
@@ -331,7 +340,16 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 		"pv_saved_format",
 		"step_delay",
 	)
-	return {k: s0.get(k, template_meta([])[k]) for k in keys}
+	meta = {k: s0.get(k, template_meta([])[k]) for k in keys}
+	# PV saved series often omit TriggerSelection and only store the GUID.
+	tid = str(meta.get("trigger_identifier") or _NO_TRIGGER_ID)
+	if tid != _NO_TRIGGER_ID and str(meta.get("trigger_selection") or "None") in (
+		"None",
+		"none",
+		"",
+	):
+		meta["trigger_selection"] = DEFAULT_TRIGGER_SELECTION
+	return meta
 
 
 def xml_power(power: float, meta: dict[str, Any] | None = None) -> float:
@@ -388,7 +406,12 @@ def build_group_step(
 		"indices": _indices_from_points(pts),
 		"uncaging_laser": meta.get("uncaging_laser", _DEFAULT_LASER),
 		"trigger_selection": trig,
-		"trigger_frequency": meta.get("trigger_frequency", "None"),
+		"trigger_identifier": trigger_identifier_for(
+			trig, meta.get("trigger_identifier")
+		),
+		"trigger_frequency": meta.get(
+			"trigger_frequency", DEFAULT_TRIGGER_FREQUENCY
+		),
 		"trigger_count": meta.get("trigger_count", "1"),
 		"async_sync_frequency": meta.get("async_sync_frequency", "None"),
 		"voltage_output_category": meta.get("voltage_output_category", "None"),
@@ -433,7 +456,13 @@ def groups_to_xml(groups: list[dict]) -> str:
 		el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
 		el.set("UncagingLaserPower", str(g.get("xml_power", g["laser_pwr"])))
 		el.set("TriggerFrequency", str(g.get("trigger_frequency", "None")))
-		el.set("TriggerSelection", str(g.get("trigger_selection", "None")))
+		trig = str(g.get("trigger_selection", "None"))
+		el.set("TriggerSelection", trig)
+		# Preferred fat layout uses the label; still emit GUID when we have one
+		# so PV does not fall back to None after -LoadMarkPoints.
+		tid = trigger_identifier_for(trig, g.get("trigger_identifier"))
+		if tid != _NO_TRIGGER_ID:
+			el.set("TriggerIdentifier", tid)
 		el.set("TriggerCount", str(g.get("trigger_count", "1")))
 		el.set("AsyncSyncFrequency", str(g.get("async_sync_frequency", "None")))
 		el.set("VoltageOutputCategoryName", str(g.get("voltage_output_category", "None")))
@@ -496,11 +525,23 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 			el.set("Repetitions", str(g["repetitions"]))
 			el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
 			el.set("UncagingLaserPower", str(g.get("xml_power", g["laser_pwr"])))
-			el.set("TriggerFrequency", str(g.get("trigger_frequency", "None")))
+			# First point waits for Trig In 1; later points in the saved series
+			# chain without a new wait (same as PV's own export).
 			trig = str(g.get("trigger_selection", "None")) if first else "None"
-			if trig != "None":
+			freq = (
+				str(g.get("trigger_frequency", DEFAULT_TRIGGER_FREQUENCY))
+				if first and trig not in ("None", "none", "")
+				else "None"
+			)
+			el.set("TriggerFrequency", freq)
+			if trig not in ("None", "none", ""):
 				el.set("TriggerSelection", trig)
-			el.set("TriggerIdentifier", _NO_TRIGGER_ID)
+			tid = (
+				trigger_identifier_for(trig, g.get("trigger_identifier"))
+				if first
+				else _NO_TRIGGER_ID
+			)
+			el.set("TriggerIdentifier", tid)
 			el.set("TriggerCount", str(g.get("trigger_count", "1")))
 			el.set("AsyncSyncFrequency", str(g.get("async_sync_frequency", "None")))
 			el.set("VoltageOutputCategoryName", str(g.get("voltage_output_category", "None")))
@@ -613,6 +654,9 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 			"raw_points": points_attr,
 			"uncaging_laser": el.attrib.get("UncagingLaser", _DEFAULT_LASER),
 			"trigger_selection": el.attrib.get("TriggerSelection", "None"),
+			"trigger_identifier": el.attrib.get(
+				"TriggerIdentifier", _NO_TRIGGER_ID
+			),
 			"trigger_frequency": el.attrib.get("TriggerFrequency", "None"),
 			"trigger_count": el.attrib.get("TriggerCount", "1"),
 			"async_sync_frequency": el.attrib.get("AsyncSyncFrequency", "None"),

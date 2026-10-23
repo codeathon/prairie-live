@@ -308,16 +308,27 @@ def run_sync_loop(
 		print(f"trial images → {run_root}")
 
 	from prairie_live.lab_defaults import (
+		DEFAULT_TRIGGER_FREQUENCY,
 		DEFAULT_TRIGGER_SELECTION,
 		normalize_trigger_selection,
+		trigger_identifier_for,
 	)
 
 	trig_sel = str(meta.get("trigger_selection", "None"))
 	if trigger == "none":
 		trig_sel = "None"
+		meta["trigger_selection"] = "None"
+		meta["trigger_frequency"] = "None"
 	elif trigger in ("serial", "wait"):
-		# Intermediate XML / -slm tokens must use the Bruker BNC name.
+		# Intermediate XML / -slm tokens must use the Bruker BNC name + GUID.
 		trig_sel = normalize_trigger_selection(trig_sel) or DEFAULT_TRIGGER_SELECTION
+		meta["trigger_selection"] = trig_sel
+		meta["trigger_identifier"] = trigger_identifier_for(
+			trig_sel, meta.get("trigger_identifier")
+		)
+		# One DTR pulse releases the whole group (matches PV Wait for Trigger).
+		if str(meta.get("trigger_frequency") or "None") in ("None", "none", ""):
+			meta["trigger_frequency"] = DEFAULT_TRIGGER_FREQUENCY
 	if mode == "slm":
 		slm_params["trigger_selection"] = trig_sel
 

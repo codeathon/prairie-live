@@ -615,3 +615,39 @@ def test_pv_saved_series_reads_and_writes_like_pv(tmp_path: Path):
 	g = els[0].find("PVGalvoPointElement")
 	assert (g.get("Duration"), g.get("SpiralRevolutions"), g.get("InterPointDelay")) == ("36.0", "8", "14")
 	assert els[0].get("Repetitions") == "3"
+
+
+def test_pv_saved_serial_writes_trig_in_1_guid_not_null():
+	"""Null TriggerIdentifier makes PV show Trigger Selection = None."""
+	import xml.etree.ElementTree as ET
+
+	from prairie_live.lab_defaults import (
+		DEFAULT_TRIGGER_FREQUENCY,
+		DEFAULT_TRIGGER_IDENTIFIER,
+		DEFAULT_TRIGGER_SELECTION,
+		NO_TRIGGER_IDENTIFIER,
+	)
+	from prairie_live.markpoints import load_mark_points_file
+
+	steps = load_mark_points_file("samples/MarkPoints_rig_saved.xml")
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["trigger_selection"] = DEFAULT_TRIGGER_SELECTION
+	meta["trigger_frequency"] = DEFAULT_TRIGGER_FREQUENCY
+	meta["trigger_identifier"] = DEFAULT_TRIGGER_IDENTIFIER
+	step = build_group_step(
+		pts[:3],
+		name="g",
+		power=160.0,
+		meta=meta,
+		trigger_selection=DEFAULT_TRIGGER_SELECTION,
+	)
+	root = ET.fromstring(groups_to_xml([step]))
+	els = root.findall("PVMarkPointElement")
+	assert els[0].get("TriggerSelection") == "Trig In 1"
+	assert els[0].get("TriggerFrequency") == "FirstRepetition"
+	assert els[0].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
+	assert els[0].get("TriggerIdentifier") != NO_TRIGGER_IDENTIFIER
+	# Later points in the saved chain do not wait again.
+	assert els[1].get("TriggerIdentifier") == NO_TRIGGER_IDENTIFIER
+	assert els[1].get("TriggerSelection") is None
