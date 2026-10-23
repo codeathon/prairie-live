@@ -87,10 +87,11 @@ def test_load_and_fire_mark_points_on_one_session(tmp_path):
 	assert out["ok"] is True and out["path"] == path
 	assert (tmp_path / "trial.xml").read_text() == "<x/>"
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	# -Silent -NoWait -MarkPoints (no per-trial Abort — that pops E:\Markpoints).
+	# Block on -MarkPoints (no -NoWait): caller pulses DTR while DONE waits.
+	# No per-trial Abort — that pops E:\Markpoints dialogs.
 	assert r.pv.link.sent == [
 		(("-LoadMarkPoints", path), 60.0),
-		(("-Silent", "-NoWait", "-MarkPoints"), 60.0),
+		(("-Silent", "-MarkPoints"), 180.0),
 	]
 	assert r.pv.link.timeout == 10.0
 
@@ -118,9 +119,9 @@ def test_mark_all_points_waits_whole_ms_then_fires():
 	assert out["ok"] is True
 	assert _cmds(r) == [
 		("-Wait", "22"),
-		("-Silent", "-NoWait", *parts),
+		("-Silent", *parts),
 	]
-	assert out.get("no_wait") is True
+	assert out.get("no_wait") is False
 
 
 def test_mark_all_points_no_wait_false_when_trigger_none():
@@ -261,7 +262,7 @@ def test_dropped_session_reconnects_and_names_the_command(monkeypatch, capsys):
 	assert opened == [1]
 	assert "during '-gts currentScanAmplitude XAxis'" in capsys.readouterr().out
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	assert _cmds(r) == [("-Silent", "-NoWait", "-MarkPoints")]
+	assert _cmds(r) == [("-Silent", "-MarkPoints")]
 
 
 def test_prairie_link_raises_when_pv_closes_socket():

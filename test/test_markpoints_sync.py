@@ -230,12 +230,12 @@ class _FakeRelayMp:
 		self.calls.append(("load", xml[:40], path))
 		return {"ok": True, "cmd": "load_mark_points", "path": "x.xml"}
 
-	def mark_points(self, *, no_wait=None):
-		self.calls.append(("mark", no_wait))
+	def mark_points(self, *, no_wait=None, timeout=None):
+		self.calls.append(("mark", no_wait, timeout))
 		return {"ok": True, "cmd": "mark_points", "no_wait": no_wait}
 
-	def mark_all_points(self, parts, *, wait_ms=0.0, no_wait=None):
-		self.calls.append(("slm", list(parts), wait_ms, no_wait))
+	def mark_all_points(self, parts, *, wait_ms=0.0, no_wait=None, timeout=None):
+		self.calls.append(("slm", list(parts), wait_ms, no_wait, timeout))
 		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts), "no_wait": no_wait}
 
 	def get_frame(self):
@@ -386,7 +386,7 @@ def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
 		log.close()
 	assert len(rows) == 1
 	assert len(relay.calls) == 1
-	kind, parts, wait_ms, _no_wait = relay.calls[0]
+	kind, parts, wait_ms, _no_wait, _timeout = relay.calls[0]
 	assert kind == "slm"
 	assert parts[0] == "-MarkAllPoints"
 	assert wait_ms == 22.1

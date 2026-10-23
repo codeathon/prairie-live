@@ -191,8 +191,9 @@ class Relay:
 		if cmd == "mark_points":
 			self._n_fired += 1
 			t0 = time.monotonic()
-			no_wait = payload.get("no_wait")
-			out = pv.mark_points(no_wait=bool(True if no_wait is None else no_wait))
+			no_wait = bool(payload["no_wait"]) if "no_wait" in payload else False
+			timeout = float(payload.get("timeout") or 180.0)
+			out = pv.mark_points(no_wait=no_wait, timeout=timeout)
 			dt = (time.monotonic() - t0) * 1000.0
 			print(f"mark_points #{self._n_fired} DONE in {dt:.0f} ms no_wait={out.get('no_wait')}")
 			return out
@@ -200,9 +201,11 @@ class Relay:
 			parts = payload.get("parts") or []
 			if not isinstance(parts, list) or not parts:
 				raise ValueError("mark_all_points requires non-empty parts list")
-			kw: dict = {"wait_ms": float(payload.get("wait_ms") or 0.0)}
-			if "no_wait" in payload:
-				kw["no_wait"] = bool(payload.get("no_wait"))
+			kw: dict = {
+				"wait_ms": float(payload.get("wait_ms") or 0.0),
+				"timeout": float(payload.get("timeout") or 180.0),
+				"no_wait": bool(payload["no_wait"]) if "no_wait" in payload else False,
+			}
 			out = pv.mark_all_points(parts, **kw)
 			print(
 				f"mark_all_points DONE no_wait={out.get('no_wait')} "

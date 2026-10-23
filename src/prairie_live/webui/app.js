@@ -1,6 +1,8 @@
 const $ = (id) => document.getElementById(id);
 const picked = new Set();
 let lastRanked = [];
+/** When ranked results change, seed ● on stimulated rows once. Clear selection must stay empty. */
+let rankedSig = "";
 
 async function jget(url) {
   const r = await fetch(url);
@@ -247,11 +249,16 @@ function renderCandidates(ranked) {
   if (!lastRanked.length) {
     box.hidden = true;
     $("side").classList.remove("has-cands");
+    rankedSig = "";
     return;
   }
   box.hidden = false;
   $("side").classList.add("has-cands");
-  if (!picked.size) {
+  const sig = lastRanked.map(rowKey).join("\0");
+  if (sig !== rankedSig) {
+    // New run results only — do not re-select after the user hits Clear selection.
+    rankedSig = sig;
+    picked.clear();
     lastRanked.filter((r) => r.stimulated).forEach((r) => picked.add(rowKey(r)));
   }
   for (const r of lastRanked) {
@@ -352,6 +359,7 @@ async function boot() {
     renderCandidates(lastRanked);
   });
   $("sel_clear").addEventListener("click", () => {
+    // Clear ● selection only — rows stay (ranking from the last run).
     picked.clear();
     renderCandidates(lastRanked);
   });

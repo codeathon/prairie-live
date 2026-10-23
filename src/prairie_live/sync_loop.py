@@ -957,10 +957,70 @@ def _run_slm_packed_batch(
 		except Exception as exc:
 			print(f"  pulse_map.txt save failed: {exc}")
 
+	wait_s = (
+		float(slm_params.get("duration_ms") or 0)
+		+ float(slm_params.get("initial_delay_ms") or 0)
+		+ pad_ms
+	) / 1000.0
+	# PV Delay between packed sets — gap between Trig In 1 edges.
+	gap_s = max(float(delay_ms) / 1000.0, wait_s)
+	mp_timeout = max(180.0, gap_s * n + 60.0)
+	want = _want_frames(
+		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
+	)
+	# Serial: pulse every Trig In 1 *while* -slm blocks (same burn fix as series).
+	dtr_during_slm = (
+		not dry_run
+		and trigger == "serial"
+		and ttl is not None
+		and not visual_cfg.enabled
+	)
+	pulse_times: list[float] = []
+
 	if dry_run:
 		print(
 			f"  [dry] packed -slm power={power} n_groups={n} "
 			f"cmd={' '.join(slm_parts)}"
+		)
+	elif dtr_during_slm:
+		from prairie_live.stim_fire import run_while_pulsing_dtr
+
+		def _do_packed() -> None:
+			_fire_mark_all_points(
+				parts=slm_parts,
+				wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+				pl=pl,
+				relay=relay,
+				via_relay=via_relay,
+				no_wait=False,
+				timeout=mp_timeout,
+			)
+
+		def _on_pulse(i: int) -> None:
+			pulse_times.append(time.time())
+			entry = group_map[i]
+			print(
+				f"  trigger {i}/{n - 1}: trial {trial_index_start + i} "
+				f"pts={entry['point_ids']}"
+			)
+
+		print(
+			f"  packed -slm power={power} n_groups={n} "
+			f"(DTR during wait, {n} triggers)"
+		)
+		print("  pulse map:")
+		for e in group_map:
+			print(
+				f"    pulse {e['trigger_index']}: "
+				f"{e['group_name']} points={e['point_ids']}"
+			)
+		run_while_pulsing_dtr(
+			_do_packed,
+			ttl=ttl,
+			n_pulses=n,
+			ttl_width_s=ttl_width_s,
+			gap_s=gap_s if n > 1 else 0.0,
+			on_pulse=_on_pulse,
 		)
 	else:
 		_fire_mark_all_points(
@@ -969,6 +1029,8 @@ def _run_slm_packed_batch(
 			pl=pl,
 			relay=relay,
 			via_relay=via_relay,
+			no_wait=False,
+			timeout=mp_timeout,
 		)
 		print(f"  packed -slm power={power} n_groups={n} (awaiting {n} triggers)")
 		print("  pulse map:")
@@ -978,14 +1040,6 @@ def _run_slm_packed_batch(
 				f"{e['group_name']} points={e['point_ids']}"
 			)
 
-	wait_s = (
-		float(slm_params.get("duration_ms") or 0)
-		+ float(slm_params.get("initial_delay_ms") or 0)
-		+ pad_ms
-	) / 1000.0
-	want = _want_frames(
-		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
-	)
 	rows: list[dict] = []
 	for gi, gpts in enumerate(groups_pts):
 		entry = group_map[gi]
@@ -1027,25 +1081,34 @@ def _run_slm_packed_batch(
 				f"pts={entry['point_ids']}"
 			)
 
-		f0_frames, f1_frames = _run_stim_epoch(
-			row,
-			trigger=trigger,
-			ttl=ttl,
-			ttl_width_s=ttl_width_s,
-			dry_run=dry_run,
-			visual_stim=visual_stim,
-			visual_cfg=visual_cfg,
-			rng=rng,
-			relay=relay,
-			want=want,
-			f0_s=f0_s,
-			f1_s=f1_s,
-			frame_poll_s=frame_poll_s,
-			wait_s=wait_s,
-			trigger_msg=trigger_msg,
-		)
-		if trigger_msg and not visual_cfg.enabled and trigger != "serial":
-			print(trigger_msg)
+		f0_frames: list = []
+		f1_frames: list = []
+		if dtr_during_slm:
+			# DTRs already fired during -slm; do not pulse again.
+			if gi < len(pulse_times):
+				row["t_ttl"] = pulse_times[gi]
+			if want:
+				f1_frames = _collect_frames(relay, max(f1_s, 0.05), frame_poll_s)
+		else:
+			f0_frames, f1_frames = _run_stim_epoch(
+				row,
+				trigger=trigger,
+				ttl=ttl,
+				ttl_width_s=ttl_width_s,
+				dry_run=dry_run,
+				visual_stim=visual_stim,
+				visual_cfg=visual_cfg,
+				rng=rng,
+				relay=relay,
+				want=want,
+				f0_s=f0_s,
+				f1_s=f1_s,
+				frame_poll_s=frame_poll_s,
+				wait_s=wait_s,
+				trigger_msg=trigger_msg,
+			)
+			if trigger_msg and not visual_cfg.enabled and trigger != "serial":
+				print(trigger_msg)
 
 		_finish_trial_frames(
 			row,
@@ -1064,7 +1127,7 @@ def _run_slm_packed_batch(
 		if on_trial:
 			on_trial(row)
 		rows.append(row)
-		if inter_trial_s > 0 and gi < n - 1:
+		if inter_trial_s > 0 and gi < n - 1 and not dtr_during_slm:
 			time.sleep(inter_trial_s)
 	return rows
 
@@ -1168,24 +1231,6 @@ def _run_slm_single_trial(
 		}
 	)
 
-	if dry_run:
-		print(
-			f"  [dry] single -slm trial {trial_index}: {gname} "
-			f"power={power} pts={point_ids}"
-		)
-	else:
-		_fire_mark_all_points(
-			parts=slm_parts,
-			wait_ms=float(slm_params.get("initial_delay_ms") or 0),
-			pl=pl,
-			relay=relay,
-			via_relay=via_relay,
-		)
-		print(
-			f"  single -slm trial {trial_index}: {gname} "
-			f"power={power} pts={point_ids}"
-		)
-
 	wait_s = (
 		float(slm_params.get("duration_ms") or 0)
 		+ float(slm_params.get("initial_delay_ms") or 0)
@@ -1223,25 +1268,79 @@ def _run_slm_single_trial(
 	else:
 		trigger_msg = f"  wait trigger 0/0: trial {trial_index} pts={point_ids}"
 
-	f0_frames, f1_frames = _run_stim_epoch(
-		row,
-		trigger=trigger,
-		ttl=ttl,
-		ttl_width_s=ttl_width_s,
-		dry_run=dry_run,
-		visual_stim=visual_stim,
-		visual_cfg=visual_cfg,
-		rng=rng,
-		relay=relay,
-		want=want,
-		f0_s=f0_s,
-		f1_s=f1_s,
-		frame_poll_s=frame_poll_s,
-		wait_s=wait_s,
-		trigger_msg=trigger_msg,
-	)
-	if trigger_msg and not visual_cfg.enabled and trigger != "serial":
-		print(trigger_msg)
+	f0_frames: list = []
+	f1_frames: list = []
+	if want and not dry_run and not visual_cfg.enabled:
+		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+
+	if dry_run:
+		print(
+			f"  [dry] single -slm trial {trial_index}: {gname} "
+			f"power={power} pts={point_ids}"
+		)
+	elif trigger == "serial" and ttl is not None and not visual_cfg.enabled:
+		from prairie_live.stim_fire import run_while_pulsing_dtr
+
+		def _do_slm() -> None:
+			_fire_mark_all_points(
+				parts=slm_parts,
+				wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+				pl=pl,
+				relay=relay,
+				via_relay=via_relay,
+				no_wait=False,
+				timeout=max(180.0, wait_s + 60.0),
+			)
+
+		print(
+			f"  single -slm trial {trial_index}: {gname} "
+			f"power={power} pts={point_ids} (DTR during wait)"
+		)
+		run_while_pulsing_dtr(
+			_do_slm,
+			ttl=ttl,
+			n_pulses=1,
+			ttl_width_s=ttl_width_s,
+			row=row,
+			on_pulse=lambda _i: print(trigger_msg),
+		)
+		if want:
+			f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+	else:
+		_fire_mark_all_points(
+			parts=slm_parts,
+			wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+			pl=pl,
+			relay=relay,
+			via_relay=via_relay,
+			no_wait=False,
+			timeout=max(180.0, wait_s + 60.0),
+		)
+		print(
+			f"  single -slm trial {trial_index}: {gname} "
+			f"power={power} pts={point_ids}"
+		)
+		f0_b, f1_frames = _run_stim_epoch(
+			row,
+			trigger=trigger,
+			ttl=ttl,
+			ttl_width_s=ttl_width_s,
+			dry_run=dry_run,
+			visual_stim=visual_stim,
+			visual_cfg=visual_cfg,
+			rng=rng,
+			relay=relay,
+			want=want,
+			f0_s=0.0 if f0_frames else f0_s,
+			f1_s=f1_s,
+			frame_poll_s=frame_poll_s,
+			wait_s=wait_s,
+			trigger_msg=trigger_msg,
+		)
+		if not f0_frames:
+			f0_frames = f0_b
+		if trigger_msg and not visual_cfg.enabled and trigger != "serial":
+			print(trigger_msg)
 
 	_finish_trial_frames(
 		row,
@@ -1328,24 +1427,6 @@ def _run_series_trial(
 	if scope_xml:
 		write_scope_xml(series, scope_xml)
 
-	row["t_cmd"] = time.time()
-	log.write({**row, "phase": "armed"})
-
-	if dry_run:
-		print(f"  [dry] trial {trial_index}: {gname} power={power} pts={point_ids}")
-	else:
-		_fire_mark_points(
-			xml=xml,
-			scope_xml=scope_xml,
-			pl=pl,
-			relay=relay,
-			via_relay=via_relay,
-		)
-		print(f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids}")
-
-	want = _want_frames(
-		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
-	)
 	# PV-saved XML: each point has FirstRepetition → one DTR per point.
 	per_point_trig = (
 		trigger == "serial"
@@ -1357,14 +1438,24 @@ def _run_series_trial(
 	reps = max(int(meta.get("repetitions", 1)), 1)
 	dur_s = float(meta.get("duration", 0) or 0) / 1000.0
 	inter_s = float(meta.get("inter_point_delay_ms") or meta.get("inter_point_delay") or 0)
-	# inter_point_delay may already be ms string from XML.
 	if inter_s > 5:
 		inter_s = inter_s / 1000.0
 	between = max(dur_s * reps + inter_s, 0.0)
-	# Last pulse still needs full series settle in wait_s.
 	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
 	if n_pulses > 1:
 		wait_s = max(between + pad_ms / 1000.0, 0.0)
+	mp_timeout = max(180.0, wait_s * n_pulses + 60.0)
+
+	want = _want_frames(
+		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
+	)
+	# Baseline frames before arming Mark Points.
+	f0_frames: list = []
+	if want and not dry_run and not visual_cfg.enabled:
+		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+
+	row["t_cmd"] = time.time()
+	log.write({**row, "phase": "armed"})
 
 	trig_msg = ""
 	if trigger == "serial":
@@ -1372,25 +1463,72 @@ def _run_series_trial(
 	elif trigger == "none":
 		trig_msg = f"  [none] trial {trial_index} pts={point_ids}"
 
-	f0_frames, f1_frames = _run_stim_epoch(
-		row,
-		trigger=trigger,
-		ttl=ttl,
-		ttl_width_s=ttl_width_s,
-		dry_run=dry_run,
-		visual_stim=visual_stim,
-		visual_cfg=visual_cfg,
-		rng=rng,
-		relay=relay,
-		want=want,
-		f0_s=f0_s,
-		f1_s=f1_s,
-		frame_poll_s=frame_poll_s,
-		wait_s=wait_s,
-		trigger_msg=trig_msg,
-		n_pulses=n_pulses,
-		wait_between_pulses_s=between if n_pulses > 1 else 0.0,
-	)
+	f1_frames: list = []
+	if dry_run:
+		print(f"  [dry] trial {trial_index}: {gname} power={power} pts={point_ids}")
+	elif trigger == "serial" and ttl is not None and not visual_cfg.enabled:
+		# Pulse DTR *while* -MarkPoints blocks on DONE (Trig In 1). -NoWait was
+		# returning before PV armed, so later DTR never burned.
+		from prairie_live.stim_fire import run_while_pulsing_dtr
+
+		def _do_mp() -> None:
+			_fire_mark_points(
+				xml=xml,
+				scope_xml=scope_xml,
+				pl=pl,
+				relay=relay,
+				via_relay=via_relay,
+				no_wait=False,
+				timeout=mp_timeout,
+			)
+
+		print(f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids} (DTR during wait)")
+		run_while_pulsing_dtr(
+			_do_mp,
+			ttl=ttl,
+			n_pulses=n_pulses,
+			ttl_width_s=ttl_width_s,
+			gap_s=between if n_pulses > 1 else 0.0,
+			row=row,
+			on_pulse=lambda i: print(
+				f"{trig_msg}  (pulse {i}/{n_pulses - 1})" if n_pulses > 1 else trig_msg
+			),
+		)
+		if want:
+			f1_frames = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
+	else:
+		_fire_mark_points(
+			xml=xml,
+			scope_xml=scope_xml,
+			pl=pl,
+			relay=relay,
+			via_relay=via_relay,
+			no_wait=False,
+			timeout=mp_timeout,
+		)
+		print(f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids}")
+		f0_b, f1_frames = _run_stim_epoch(
+			row,
+			trigger=trigger,
+			ttl=ttl,
+			ttl_width_s=ttl_width_s,
+			dry_run=dry_run,
+			visual_stim=visual_stim,
+			visual_cfg=visual_cfg,
+			rng=rng,
+			relay=relay,
+			want=want,
+			f0_s=0.0 if f0_frames else f0_s,
+			f1_s=f1_s,
+			frame_poll_s=frame_poll_s,
+			wait_s=wait_s,
+			trigger_msg=trig_msg,
+			n_pulses=n_pulses,
+			wait_between_pulses_s=between if n_pulses > 1 else 0.0,
+		)
+		if not f0_frames:
+			f0_frames = f0_b
+
 	row["n_triggers"] = n_pulses
 	row["trigger_index"] = 0
 
@@ -1422,32 +1560,28 @@ def _fire_mark_all_points(
 	pl: PrairieLink | None,
 	relay: Any | None,
 	via_relay: bool,
-	no_wait: bool | None = None,
+	no_wait: bool = False,
+	timeout: float = 180.0,
 ) -> None:
 	"""Send -MarkAllPoints (-slm); prefer relay when via_relay.
 
-	``no_wait`` defaults from trigger tokens in ``parts`` (Trig In 1 → True) so
-	DONE returns before we pulse DTR.
+	Keep ``no_wait=False`` for photostim: pulse DTR while this blocks (stim_fire).
 	"""
 	if via_relay:
 		if relay is None:
 			raise RuntimeError("via_relay set but relay client is not connected")
-		out = relay.mark_all_points(parts, wait_ms=wait_ms, no_wait=no_wait)
+		out = relay.mark_all_points(
+			parts, wait_ms=wait_ms, no_wait=no_wait, timeout=timeout
+		)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay mark_all_points failed: {out}")
 		return
 	if pl is None:
 		raise RuntimeError("need PrairieLink or --via-relay for stim_mode=slm")
-	# TCP path: optional -Wait then -MarkAllPoints as separate commands.
-	from prairie_live.pv_script import _script_parts_wait_on_trigger
-
 	tokens = [str(p) for p in parts]
-	use_nw = _script_parts_wait_on_trigger(tokens) if no_wait is None else bool(no_wait)
 	if wait_ms and float(wait_ms) > 0:
-		# PV requires integer ms for -Wait.
 		pl.send_command("-Wait", str(int(round(float(wait_ms)))))
-	# No per-trial -Abort here — that pops E:\Markpoints "delete folder?" dialogs.
-	if use_nw:
+	if no_wait:
 		pl.send_command("-Silent", "-NoWait", *tokens)
 	else:
 		pl.send_command("-Silent", *tokens)
@@ -1460,12 +1594,13 @@ def _fire_mark_points(
 	pl: PrairieLink | None,
 	relay: Any | None,
 	via_relay: bool,
-	no_wait: bool = True,
+	no_wait: bool = False,
+	timeout: float = 180.0,
 ) -> None:
 	"""Load + fire one series; prefer relay push when via_relay (no SMB).
 
-	Default ``no_wait=True``: series with Trig In 1 would otherwise block DONE
-	until DTR, which we only pulse after this returns.
+	``no_wait=False`` (default): block until DONE. Caller pulses DTR concurrently
+	when Trigger=serial (see ``stim_fire.run_while_pulsing_dtr``).
 	"""
 	if via_relay:
 		if relay is None:
@@ -1473,7 +1608,7 @@ def _fire_mark_points(
 		out = relay.load_mark_points(xml)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay load_mark_points failed: {out}")
-		out = relay.mark_points(no_wait=no_wait)
+		out = relay.mark_points(no_wait=no_wait, timeout=timeout)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay mark_points failed: {out}")
 		return

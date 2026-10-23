@@ -226,20 +226,24 @@ class PvScript:
 		raw = self.send("-LoadMarkPoints", disk)
 		return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
 
-	def mark_points(self, *, no_wait: bool = False) -> dict:
-		# With Trig In 1, -MarkPoints blocks DONE until the trigger; we pulse
-		# DTR only after this returns — -NoWait breaks that deadlock.
-		# Do NOT -Abort before every trial (that causes E:\\Markpoints dialogs).
+	def mark_points(self, *, no_wait: bool = False, timeout: float = 180.0) -> dict:
+		"""Run current Mark Points series.
+
+		Default blocks until DONE. For Trig In 1, the caller must pulse DTR
+		*while* this waits (see ``stim_fire.run_while_pulsing_dtr``). Do not use
+		-NoWait for photostim — DONE returns before PV is armed for the trigger,
+		so later DTR never burns.
+		"""
 		if no_wait:
-			raw = self.send("-Silent", "-NoWait", "-MarkPoints")
+			raw = self.send("-Silent", "-NoWait", "-MarkPoints", timeout=timeout)
 		else:
-			raw = self.send("-Silent", "-MarkPoints")
+			raw = self.send("-Silent", "-MarkPoints", timeout=timeout)
 		if _pv_task_busy(raw):
 			self.ensure_idle_for_stim()
 			if no_wait:
-				raw = self.send("-Silent", "-NoWait", "-MarkPoints")
+				raw = self.send("-Silent", "-NoWait", "-MarkPoints", timeout=timeout)
 			else:
-				raw = self.send("-Silent", "-MarkPoints")
+				raw = self.send("-Silent", "-MarkPoints", timeout=timeout)
 		return {"ok": True, "cmd": "mark_points", "pv": raw, "no_wait": bool(no_wait)}
 
 	def mark_all_points(
@@ -248,18 +252,18 @@ class PvScript:
 		*,
 		wait_ms: float = 0.0,
 		no_wait: bool | None = None,
+		timeout: float = 180.0,
 	) -> dict:
 		"""parts from build_mark_all_points_parts (starts with -MarkAllPoints).
 
-		When the hologram waits on a countable trigger (e.g. Trig In 1), PV does
-		not send DONE until that edge — but our DTR pulse runs *after* this call.
-		Default: prepend -NoWait whenever a trigger name is in ``parts``.
+		Default ``no_wait=False``: block until DONE. Pulse DTR concurrently when
+		using Trig In 1 (``stim_fire.run_while_pulsing_dtr``).
 		"""
 		if not parts:
 			raise ValueError("mark_all_points requires non-empty parts list")
 		tokens = [str(p) for p in parts]
 		if no_wait is None:
-			no_wait = _script_parts_wait_on_trigger(tokens)
+			no_wait = False
 		if wait_ms and float(wait_ms) > 0:
 			# PV -Wait requires an integer millisecond count (rejects 22.100).
 			self.send("-Wait", str(int(round(float(wait_ms)))))
@@ -268,10 +272,10 @@ class PvScript:
 			send_toks = ["-NoWait", *send_toks]
 		if send_toks[0] not in ("-Silent", "-s"):
 			send_toks = ["-Silent", *send_toks]
-		raw = self.send(*send_toks)
+		raw = self.send(*send_toks, timeout=timeout)
 		if _pv_task_busy(raw):
 			self.ensure_idle_for_stim()
-			raw = self.send(*send_toks)
+			raw = self.send(*send_toks, timeout=timeout)
 		return {
 			"ok": True,
 			"cmd": "mark_all_points",

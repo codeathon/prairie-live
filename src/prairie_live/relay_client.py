@@ -102,11 +102,18 @@ class RelayClient:
 			payload["path"] = path
 		return self._command(payload)
 
-	def mark_points(self, *, no_wait: bool | None = None) -> dict:
+	def mark_points(
+		self,
+		*,
+		no_wait: bool | None = None,
+		timeout: float | None = None,
+	) -> dict:
 		"""Run current Mark Points series on the scope (-MarkPoints)."""
 		payload: dict = {"cmd": "mark_points"}
 		if no_wait is not None:
 			payload["no_wait"] = bool(no_wait)
+		if timeout is not None:
+			payload["timeout"] = float(timeout)
 		return self._command(payload)
 
 	def mark_all_points(
@@ -115,6 +122,7 @@ class RelayClient:
 		*,
 		wait_ms: float = 0.0,
 		no_wait: bool | None = None,
+		timeout: float | None = None,
 	) -> dict:
 		"""Simultaneous SLM fire (-MarkAllPoints / -slm) on the scope."""
 		payload: dict = {"cmd": "mark_all_points", "parts": list(parts)}
@@ -122,6 +130,8 @@ class RelayClient:
 			payload["wait_ms"] = float(wait_ms)
 		if no_wait is not None:
 			payload["no_wait"] = bool(no_wait)
+		if timeout is not None:
+			payload["timeout"] = float(timeout)
 		return self._command(payload)
 
 	def _command(self, payload: dict) -> dict:

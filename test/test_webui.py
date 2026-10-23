@@ -74,6 +74,18 @@ def test_webui_exposes_psychopy_controls():
 	assert _body_float({"visual_lead_ms": "100"}, "visual_lead_ms") == 100.0
 
 
+def test_candidate_clear_is_selection_not_list():
+	html = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/index.html").read_text(
+		encoding="utf-8"
+	)
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	assert "Clear selection" in html
+	assert "rankedSig" in js
+	assert "do not re-select after the user hits Clear" in js
+
+
 def test_com_ports_never_empty():
 	assert list_com_ports()
 
