@@ -30,7 +30,7 @@ from prairie_live.sync_loop import (
 FAT_XML = """<?xml version="1.1"?>
 <PVMarkPointSeriesElements Use3D="True" AllPointsAtOnce="True" Iterations="1" IterationDelay="0.00">
   <PVMarkPointElement Repetitions="1" UncagingLaser="Uncaging" UncagingLaserPower="0.75"
-    TriggerSelection="PFI1" TriggerFrequency="None" TriggerCount="1"
+    TriggerSelection="Trig In 1" TriggerFrequency="None" TriggerCount="1"
     AsyncSyncFrequency="None" VoltageOutputCategoryName="None"
     VoltageRecCategoryName="None" parameterSet="CurrentSettings">
     <PVGalvoPointElement InitialDelay="0.00" InterPointDelay="0.01" Duration="10"
@@ -456,8 +456,8 @@ def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
 	]
 	assert packed[0]["group_trigger_map"][0]["point_ids"] == rows[0]["point_ids"]
 	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
-	# Packed string contains two PFI1 tokens (one per set) + Delay between.
-	assert relay.calls[0][1].count("PFI1") == 2
+	# Packed string contains two Trig In 1 tokens (one per set) + Delay between.
+	assert relay.calls[0][1].count("Trig In 1") == 2
 
 
 def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
@@ -615,3 +615,41 @@ def test_pv_saved_series_reads_and_writes_like_pv(tmp_path: Path):
 	g = els[0].find("PVGalvoPointElement")
 	assert (g.get("Duration"), g.get("SpiralRevolutions"), g.get("InterPointDelay")) == ("36.0", "8", "14")
 	assert els[0].get("Repetitions") == "3"
+
+
+def test_pv_saved_serial_writes_trig_in_1_guid_not_null():
+	"""Null TriggerIdentifier makes PV show Trigger Selection = None."""
+	import xml.etree.ElementTree as ET
+
+	from prairie_live.lab_defaults import (
+		DEFAULT_TRIGGER_FREQUENCY,
+		DEFAULT_TRIGGER_IDENTIFIER,
+		DEFAULT_TRIGGER_SELECTION,
+		NO_TRIGGER_IDENTIFIER,
+	)
+	from prairie_live.markpoints import load_mark_points_file
+
+	steps = load_mark_points_file("samples/MarkPoints_rig_saved.xml")
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["trigger_selection"] = DEFAULT_TRIGGER_SELECTION
+	meta["trigger_frequency"] = DEFAULT_TRIGGER_FREQUENCY
+	meta["trigger_identifier"] = DEFAULT_TRIGGER_IDENTIFIER
+	step = build_group_step(
+		pts[:3],
+		name="g",
+		power=160.0,
+		meta=meta,
+		trigger_selection=DEFAULT_TRIGGER_SELECTION,
+	)
+	root = ET.fromstring(groups_to_xml([step]))
+	els = root.findall("PVMarkPointElement")
+	assert els[0].get("TriggerSelection") == "Trig In 1"
+	assert els[0].get("TriggerFrequency") == "FirstRepetition"
+	assert els[0].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
+	assert els[0].get("TriggerIdentifier") != NO_TRIGGER_IDENTIFIER
+	# Match PV-saved XML: every point waits on Trig In 1 / FirstRepetition.
+	assert els[1].get("TriggerSelection") == "Trig In 1"
+	assert els[1].get("TriggerFrequency") == "FirstRepetition"
+	assert els[1].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
+	assert els[2].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER

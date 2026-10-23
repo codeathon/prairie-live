@@ -7,7 +7,14 @@ import threading
 
 from prairie_live.com_ports import list_com_ports
 from prairie_live.gui_session import apply_gui_overrides
-from prairie_live.lab_defaults import DEFAULT_RELAY, DEFAULT_SERIAL, STIM_MODES, lab_defaults
+from prairie_live.lab_defaults import (
+	DEFAULT_RELAY,
+	DEFAULT_SERIAL,
+	DEFAULT_TRIGGER_SELECTION,
+	STIM_MODES,
+	lab_defaults,
+	normalize_trigger_selection,
+)
 from prairie_live.relay_status import parse_relay_addr, probe_relay
 from prairie_live.power_view import board_state, render_board_png
 from prairie_live.trial_images import png_bytes_rgb
@@ -19,7 +26,10 @@ def test_lab_defaults_no_experiment_json():
 	assert d["via_relay"] == "10.33.107.221:25100"
 	assert d["serial"] == "COM3"
 	assert d["stim_mode"] == "slm"
+	assert d["trigger_selection"] == DEFAULT_TRIGGER_SELECTION == "Trig In 1"
 	assert "slm" in STIM_MODES and "series" in STIM_MODES
+	assert normalize_trigger_selection("PFI1") == "Trig In 1"
+	assert normalize_trigger_selection("Trig In 1") == "Trig In 1"
 
 
 def test_apply_overrides_without_json():
@@ -38,6 +48,7 @@ def test_apply_overrides_without_json():
 	assert opt["via_relay"] == DEFAULT_RELAY
 	assert opt["serial"] == "COM3"
 	assert opt["stim_mode"] == "slm"
+	assert opt["trigger_selection"] == "Trig In 1"
 	assert opt["cover_all"] is True
 	assert opt["n_groups"] == 2
 

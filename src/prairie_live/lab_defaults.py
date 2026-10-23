@@ -9,9 +9,39 @@ from typing import Any
 DEFAULT_RELAY = os.environ.get("PRAIRIE_LIVE_RELAY") or "10.33.107.221:25100"
 DEFAULT_SERIAL = "COM3"
 DEFAULT_STIM_MODE = "slm"
+# Bruker System Trigger BNC label (DTR → Trig In 1). Older configs used "PFI1".
+DEFAULT_TRIGGER_SELECTION = "Trig In 1"
+# PVSavedMarkPointSeriesElements uses a GUID, not the label. This is Trig In 1
+# on the lab scope (from a PV-saved series). Null GUID = no trigger in the UI.
+DEFAULT_TRIGGER_IDENTIFIER = "446f2fb8-5044-4ad3-be85-9f1b50d4be2a"
+NO_TRIGGER_IDENTIFIER = "00000000-0000-0000-0000-000000000000"
+# Match PV "Wait for Trigger → First repetition" for one DTR per trial/group.
+DEFAULT_TRIGGER_FREQUENCY = "FirstRepetition"
 STIM_MODES = ("slm", "series")
-# serial: PV waits on PFI1 for our DTR pulse. none: PV fires as soon as the command lands.
+# serial: PV waits on Trig In 1 for our DTR pulse. none: PV fires as soon as the command lands.
 TRIGGERS = ("serial", "none")
+_LEGACY_TRIGGER_LINES = frozenset(
+	{"", "None", "none", "PFI1", "pfi1", "TrigIn1", "TrigIn 1", "Trig In1"}
+)
+
+
+def normalize_trigger_selection(name: str | None) -> str:
+	"""Map empty / legacy PFI1 names to the lab Trig In 1 line."""
+	s = str(name or "").strip()
+	if s in _LEGACY_TRIGGER_LINES:
+		return DEFAULT_TRIGGER_SELECTION
+	return s
+
+
+def trigger_identifier_for(selection: str | None, explicit: str | None = None) -> str:
+	"""GUID for PVSaved XML. Prefer an ID from the loaded file; else lab Trig In 1."""
+	ex = str(explicit or "").strip()
+	if ex and ex != NO_TRIGGER_IDENTIFIER:
+		return ex
+	sel = normalize_trigger_selection(selection)
+	if sel in ("None", "none", ""):
+		return NO_TRIGGER_IDENTIFIER
+	return DEFAULT_TRIGGER_IDENTIFIER
 
 
 def lab_defaults() -> dict[str, Any]:
@@ -19,6 +49,7 @@ def lab_defaults() -> dict[str, Any]:
 		"via_relay": DEFAULT_RELAY,
 		"serial": DEFAULT_SERIAL,
 		"trigger": "serial",
+		"trigger_selection": DEFAULT_TRIGGER_SELECTION,
 		"stim_mode": DEFAULT_STIM_MODE,
 		"slm_pack": False,
 		"cover_all": True,

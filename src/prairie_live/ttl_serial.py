@@ -1,7 +1,7 @@
-"""Serial DTR/RTS TTL pulses (PackIO / PFI sync).
+"""Serial DTR/RTS TTL pulses (PackIO / System Trigger sync).
 
-Matches the PsychoPy-style COM3 DTR=photostim, RTS=visual wiring. Wire DTR
-to the PFI line Prairie Mark Points waits on (e.g. PFI1).
+Matches the PsychoPy-style COM DTR=photostim, RTS=visual wiring. Wire DTR
+to Bruker Trig In 1 (the line Mark Points waits on).
 """
 
 from __future__ import annotations

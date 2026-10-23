@@ -98,7 +98,18 @@ def test_load_mark_points_rejects_empty_xml():
 
 def test_mark_all_points_waits_whole_ms_then_fires():
 	r = _relay()
-	parts = ["-MarkAllPoints", "1", "False", "0.1", "0.2", "10", "Monaco", "0.75", "PFI1"]
+	parts = [
+		"-MarkAllPoints",
+		"1",
+		"False",
+		"0.1",
+		"0.2",
+		"10",
+		"Monaco",
+		"0.75",
+		"Trig In 1",
+		"1",
+	]
 	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1})
 	assert out["ok"] is True
 	assert _cmds(r) == [("-Wait", "22"), tuple(parts)]

@@ -226,7 +226,7 @@ CLI flag names use hyphens (`--via-relay`, `--n-groups`, …).
 | `initial_delay_ms` | float | Delay before first point fires (ms) |
 | `inter_point_delay_ms` | float | Delay between points in a group (ms) |
 | `interval_ms` | float | Reference interval ≈ duration + inter-point delay (documentation) |
-| `trigger_selection` | string | PrairieView trigger line, e.g. `PFI1` |
+| `trigger_selection` | string | PrairieView trigger line, e.g. `Trig In 1` |
 | `visual_enabled` | bool | Run embedded PsychoPy gratings on analysis PC (owns COM3 RTS+DTR) |
 | `visual_screen` | int | Monitor index (`0` = primary, `1` = second display) |
 | `visual_refresh_hz` | float | Display refresh rate used for frame timing |

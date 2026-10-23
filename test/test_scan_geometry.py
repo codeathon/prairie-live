@@ -104,7 +104,7 @@ def test_fraction_points_used_as_is():
 	assert out["points"][0]["fx"] == pytest.approx(pts[0]["x"], abs=1e-4)
 
 
-def test_live_feed_stops_polling_after_dropped_session():
+def test_live_feed_keeps_geometry_after_dropped_session():
 	from prairie_live.live_feed import LiveFeed
 
 	class Dropped:
@@ -112,8 +112,15 @@ def test_live_feed_stops_polling_after_dropped_session():
 			return {"ok": False, "error": "PrairieView dropped the connection during -gts (reset)"}
 
 	feed = LiveFeed("127.0.0.1:25100")
-	assert feed._poll_geometry(Dropped()) is None
-	assert "polling stopped" in feed.scan_geometry_error()
+	assert feed._poll_geometry(FakeRelay(GEOM)) == 2.0
+	geom_ok, _ = feed.scan_geometry()
+	assert geom_ok is not None
+	# A later drop must not wipe amplitude/center (that hid galvo MP overlays).
+	wait = feed._poll_geometry(Dropped())
+	assert wait == 30.0
+	assert "paused" in feed.scan_geometry_error() or "last scan" in feed.scan_geometry_error()
+	geom2, _ = feed.scan_geometry()
+	assert geom2 == geom_ok
 	assert feed._poll_geometry(FakeRelay(GEOM)) == 2.0
 	assert feed.scan_geometry_error() == ""
 
@@ -128,8 +135,38 @@ def test_points_for_image_maps_galvo_for_scoring():
 	assert out[0]["id"] == "7"
 	assert 0 < out[0]["x"] < 1 and 0 < out[0]["y"] < 1
 	assert out[0]["x_galvo"] == pts[0]["x"]
-	# Original list is unchanged (firing still uses galvo units).
+	# Original list is unchanged.
 	assert pts[0]["x"] == 0.70059295475
+
+
+def test_prepare_points_for_slm_maps_galvo_via_relay():
+	from prairie_live.scan_geometry import prepare_points_for_slm
+
+	class FakeRelay:
+		def get_state(self, key, index):
+			vals = {
+				("currentScanAmplitude", "XAxis"): 4.2,
+				("currentScanAmplitude", "YAxis"): 4.2,
+				("currentScanCenter", "XAxis"): 0.0,
+				("currentScanCenter", "YAxis"): 0.0,
+			}
+			return {"ok": True, "value": str(vals[(key, index)])}
+
+	pts = [{"id": "7", "x": 0.7, "y": -2.0}]
+	out, note = prepare_points_for_slm(pts, FakeRelay())
+	assert "mapped" in note
+	assert 0 < out[0]["x"] < 1 and 0 < out[0]["y"] < 1
+	assert out[0]["x_galvo"] == 0.7
+	# Already FOV → unchanged path.
+	fov = [{"id": "1", "x": 0.2, "y": 0.3}]
+	got, note2 = prepare_points_for_slm(fov, None)
+	assert "already" in note2
+	assert got[0]["x"] == 0.2
+	try:
+		prepare_points_for_slm(pts, None)
+		assert False, "expected ValueError without relay"
+	except ValueError as exc:
+		assert "relay" in str(exc).lower()
 
 
 def test_score_galvo_points_after_mapping():

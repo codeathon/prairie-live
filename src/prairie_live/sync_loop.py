@@ -276,7 +276,7 @@ def run_sync_loop(
 
 	trigger:
 	  none   — TriggerSelection=None; fires immediately; log t_cmd
-	  serial — PFI1 (or meta); arm then DTR pulse
+	  serial — Trig In 1 (or meta); arm then DTR pulse
 	  wait   — same as serial but no DTR (external TTL)
 
 	via_relay:
@@ -307,12 +307,28 @@ def run_sync_loop(
 		run_root = make_run_dir(images_dir)
 		print(f"trial images → {run_root}")
 
+	from prairie_live.lab_defaults import (
+		DEFAULT_TRIGGER_FREQUENCY,
+		DEFAULT_TRIGGER_SELECTION,
+		normalize_trigger_selection,
+		trigger_identifier_for,
+	)
+
 	trig_sel = str(meta.get("trigger_selection", "None"))
 	if trigger == "none":
 		trig_sel = "None"
-	elif trigger in ("serial", "wait") and trig_sel in ("", "None", "none"):
-		# Series / SLM wait for hardware; default PFI1 matches PackIO wiring.
-		trig_sel = "PFI1"
+		meta["trigger_selection"] = "None"
+		meta["trigger_frequency"] = "None"
+	elif trigger in ("serial", "wait"):
+		# Intermediate XML / -slm tokens must use the Bruker BNC name + GUID.
+		trig_sel = normalize_trigger_selection(trig_sel) or DEFAULT_TRIGGER_SELECTION
+		meta["trigger_selection"] = trig_sel
+		meta["trigger_identifier"] = trigger_identifier_for(
+			trig_sel, meta.get("trigger_identifier")
+		)
+		# One DTR pulse releases the whole group (matches PV Wait for Trigger).
+		if str(meta.get("trigger_frequency") or "None") in ("None", "none", ""):
+			meta["trigger_frequency"] = DEFAULT_TRIGGER_FREQUENCY
 	if mode == "slm":
 		slm_params["trigger_selection"] = trig_sel
 
@@ -551,14 +567,18 @@ def _run_stim_epoch(
 	frame_poll_s: float,
 	wait_s: float,
 	trigger_msg: str = "",
+	n_pulses: int = 1,
+	wait_between_pulses_s: float = 0.0,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
 	"""
 	Visual + TTL epoch: legacy RTS-held grating with DTR at visual_lead_ms.
 
-	When visual is off, preserves the original f0 → DTR → f1 sequence.
+	When visual is off: f0 → DTR (× n_pulses, matching per-point FirstRepetition
+	in a PV-saved series) → f1.
 	"""
 	f0_frames: list[np.ndarray] = []
 	f1_frames: list[np.ndarray] = []
+	n_pulses = max(int(n_pulses), 1)
 
 	if visual_cfg.enabled:
 		params = visual_stim.pick_trial(rng)
@@ -631,22 +651,35 @@ def _run_stim_epoch(
 	if want:
 		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
 
-	if trigger == "serial" and ttl is not None and not dry_run:
-		row["t_ttl"] = time.time()
-		row["t_ttl_mono"] = ttl.pulse_dtr(ttl_width_s)
-		if trigger_msg:
-			print(trigger_msg)
-	elif trigger == "none":
-		row["t_ttl"] = row.get("t_cmd")
-		if trigger_msg:
-			print(trigger_msg)
-	else:
-		row["t_ttl"] = time.time()
-		if trigger_msg:
-			print(trigger_msg)
+	gap = max(float(wait_between_pulses_s), 0.0)
+	for i in range(n_pulses):
+		msg = trigger_msg
+		if n_pulses > 1 and trigger_msg:
+			msg = f"{trigger_msg}  (pulse {i}/{n_pulses - 1})"
+		if trigger == "serial" and ttl is not None and not dry_run:
+			row["t_ttl"] = time.time()
+			t_mono = ttl.pulse_dtr(ttl_width_s)
+			if i == 0:
+				row["t_ttl_mono"] = t_mono
+			if msg:
+				print(msg)
+		elif trigger == "none":
+			row["t_ttl"] = row.get("t_cmd")
+			if msg and i == 0:
+				print(msg)
+		else:
+			row["t_ttl"] = time.time()
+			if msg and i == 0:
+				print(msg)
+		# Let this point finish before the next FirstRepetition wait.
+		if i < n_pulses - 1 and gap > 0:
+			if want and relay is not None:
+				f1_frames.extend(_collect_frames(relay, gap, frame_poll_s))
+			else:
+				time.sleep(gap)
 
 	if want:
-		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+		f1_frames.extend(_collect_frames(relay, max(f1_s, wait_s), frame_poll_s))
 	elif wait_s > 0:
 		time.sleep(max(wait_s, 0.0))
 	return f0_frames, f1_frames
@@ -821,7 +854,7 @@ def _run_slm_packed_batch(
 	from prairie_live.mark_all_points import pack_mark_all_points
 
 	n = len(groups_pts)
-	# PV Delay between packed sets: cover stim + pad so next PFI1 is accepted
+	# PV Delay between packed sets: cover stim + pad so next Trig In 1 is accepted
 	# only after the prior hologram finishes (software also sleeps per pulse).
 	delay_ms = (
 		float(slm_params.get("duration_ms") or 0)
@@ -839,6 +872,7 @@ def _run_slm_packed_batch(
 		spiral_revolutions=slm_params["spiral_revolutions"],
 		fov_width_um=slm_params["fov_width_um"],
 		trigger_selection=trig_sel,
+		trigger_count=slm_params.get("trigger_count", 1),
 		delay_ms=delay_ms,
 	)
 	# Audit XML: one MarkPoint step per group (same order as packed -slm).
@@ -1061,6 +1095,7 @@ def _run_slm_single_trial(
 		spiral_revolutions=slm_params["spiral_revolutions"],
 		fov_width_um=slm_params["fov_width_um"],
 		trigger_selection=trig_sel,
+		trigger_count=slm_params.get("trigger_count", 1),
 		delay_ms=0.0,
 	)
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
@@ -1286,7 +1321,31 @@ def _run_series_trial(
 	want = _want_frames(
 		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
 	)
+	# PV-saved XML: each point has FirstRepetition → one DTR per point.
+	per_point_trig = (
+		trigger == "serial"
+		and bool(meta.get("pv_saved_format"))
+		and str(meta.get("trigger_frequency") or "").lower()
+		not in ("none", "")
+	)
+	n_pulses = len(gpts) if per_point_trig and gpts else 1
+	reps = max(int(meta.get("repetitions", 1)), 1)
+	dur_s = float(meta.get("duration", 0) or 0) / 1000.0
+	inter_s = float(meta.get("inter_point_delay_ms") or meta.get("inter_point_delay") or 0)
+	# inter_point_delay may already be ms string from XML.
+	if inter_s > 5:
+		inter_s = inter_s / 1000.0
+	between = max(dur_s * reps + inter_s, 0.0)
+	# Last pulse still needs full series settle in wait_s.
 	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
+	if n_pulses > 1:
+		wait_s = max(between + pad_ms / 1000.0, 0.0)
+
+	trig_msg = ""
+	if trigger == "serial":
+		trig_msg = f"  trigger: trial {trial_index} pts={point_ids}"
+	elif trigger == "none":
+		trig_msg = f"  [none] trial {trial_index} pts={point_ids}"
 
 	f0_frames, f1_frames = _run_stim_epoch(
 		row,
@@ -1303,7 +1362,12 @@ def _run_series_trial(
 		f1_s=f1_s,
 		frame_poll_s=frame_poll_s,
 		wait_s=wait_s,
+		trigger_msg=trig_msg,
+		n_pulses=n_pulses,
+		wait_between_pulses_s=between if n_pulses > 1 else 0.0,
 	)
+	row["n_triggers"] = n_pulses
+	row["trigger_index"] = 0
 
 	_finish_trial_frames(
 		row,
@@ -1641,21 +1705,14 @@ def execute_session(
 	if stim_mode not in ("series", "slm"):
 		raise SystemExit(f"stim_mode must be 'series' or 'slm', got {stim_mode!r}")
 
-	# .gpl X/Y are often galvo-list coords outside imaging FOV 0–1. -slm treats
-	# them as FOV fractions and fires off-screen; use -lmp/-mp like the UI.
+	# .gpl / PV-saved series often store galvo volts (outside 0–1). For slm we
+	# map them to FOV fractions via the live scan range after the relay connects
+	# (PV has no "save as FOV coords" export). series keeps native galvo X/Y.
 	oob = [
 		p
 		for p in points
 		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
 	]
-	if stim_mode == "slm" and oob:
-		print(
-			f"NOTE: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
-			"(typical of .gpl galvo lists). -MarkAllPoints would mis-read "
-			"those as FOV fractions. Switching stim_mode → series "
-			"(-LoadMarkPoints / -MarkPoints), one point at a time."
-		)
-		stim_mode = "series"
 	# .gpl Z is the absolute focus the points were drawn at, not an offset;
 	# Use3D with it can refocus the uncaging beam away from the sample.
 	if any(abs(float(p.get("z", 0))) > 1e-6 for p in points) and not opt.get("use_3d"):
@@ -1671,12 +1728,11 @@ def execute_session(
 		f"trigger={opt['trigger']}  stim_mode={stim_mode}  "
 		f"laser={meta.get('uncaging_laser')}  group_size={gs}"
 	)
-	# Galvo-list coords (typical of PV saved series). Firing uses them as-is;
-	# ΔF/F disks map them through currentScanAmplitude/Center before scoring.
 	if oob:
 		print(
 			f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
-			"ΔF/F scoring maps them onto the live FOV via PV scan range. Examples:"
+			"stim_mode=slm will map them to FOV via the live scan range; "
+			"series fires galvo coords as-is. Examples:"
 		)
 		for p in oob[:5]:
 			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
@@ -1768,6 +1824,27 @@ def execute_session(
 				port=int(opt["port"]),
 				password=str(opt["password"]),
 			)
+
+		# SLM needs 0–1 FOV; convert galvo XML using live scan geometry.
+		if stim_mode == "slm" and oob:
+			from prairie_live.scan_geometry import prepare_points_for_slm
+
+			try:
+				points, map_note = prepare_points_for_slm(points, relay)
+				print(f"NOTE: {map_note}")
+				for p in points[:5]:
+					gx = p.get("x_galvo", p["x"])
+					gy = p.get("y_galvo", p["y"])
+					print(
+						f"  Point {p['id']}  galvo ({float(gx):.4f}, {float(gy):.4f}) "
+						f"→ FOV ({float(p['x']):.4f}, {float(p['y']):.4f})"
+					)
+			except Exception as exc:
+				print(
+					f"NOTE: cannot map galvo→FOV for -MarkAllPoints ({exc}). "
+					"Switching stim_mode → series (-LoadMarkPoints / -MarkPoints)."
+				)
+				stim_mode = "series"
 
 		show = (
 			show_candidate_gui
