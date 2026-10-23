@@ -1,6 +1,7 @@
 """Trig In 1 detection + burn path: block Mark Points, pulse DTR concurrently.
 
 -NoWait made DONE return before PV armed for Trig In 1, so later DTR never burned.
+DTR must start *after* -LoadMarkPoints / -Wait, once -MarkPoints/-slm is in flight.
 """
 
 from __future__ import annotations
@@ -38,20 +39,23 @@ def test_detect_none_trigger():
 class _FakeTtl:
 	def __init__(self):
 		self.pulses: list[float] = []
+		self.times: list[float] = []
 
 	def pulse_dtr(self, width_s: float):
 		self.pulses.append(width_s)
-		return time.monotonic()
+		self.times.append(time.monotonic())
+		return self.times[-1]
 
 
-def test_run_while_pulsing_dtr_overlaps_fn():
+def test_run_while_pulsing_dtr_starts_mp_before_dtr():
 	ttl = _FakeTtl()
 	order: list[str] = []
+	t0 = time.monotonic()
 
 	def _mp() -> str:
 		order.append("mp_enter")
-		# DTR arm_delay is 0.05; wait so the pulse lands during this call.
-		time.sleep(0.08)
+		# Stay blocked longer than arm_delay so the pulse lands during wait.
+		time.sleep(0.12)
 		order.append("mp_done")
 		return "ok"
 
@@ -65,3 +69,12 @@ def test_run_while_pulsing_dtr_overlaps_fn():
 	assert out == "ok"
 	assert ttl.pulses == [0.01]
 	assert order == ["mp_enter", "mp_done"]
+	# Pulse after arm_delay, while Mark Points was still running.
+	assert ttl.times[0] - t0 >= 0.04
+
+
+def test_slm_script_power_ui_to_fraction():
+	from prairie_live.sync_loop import _slm_script_power
+
+	assert _slm_script_power(160.0, {}) == 0.4
+	assert _slm_script_power(0.75, {}) == 0.75

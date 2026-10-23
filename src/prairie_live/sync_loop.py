@@ -886,9 +886,12 @@ def _run_slm_packed_batch(
 		+ float(pad_ms)
 		+ float(inter_trial_s) * 1000.0
 	)
+	# -slm wants the same 0–1 fraction series writes as UncagingLaserPower.
+	slm_pwr = _slm_script_power(power, meta)
+	print(f"  SLM power UI {float(power):g} → -slm {slm_pwr:g}")
 	slm_parts = pack_mark_all_points(
 		groups_pts,
-		power=power,
+		power=slm_pwr,
 		laser=slm_params["laser"],
 		duration_ms=slm_params["duration_ms"],
 		use_3d=slm_params["use_3d"],
@@ -985,10 +988,13 @@ def _run_slm_packed_batch(
 	elif dtr_during_slm:
 		from prairie_live.stim_fire import run_while_pulsing_dtr
 
+		init_ms = float(slm_params.get("initial_delay_ms") or 0)
+		_pre_stim_delay(wait_ms=init_ms, pl=pl, via_relay=via_relay)
+
 		def _do_packed() -> None:
 			_fire_mark_all_points(
 				parts=slm_parts,
-				wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+				wait_ms=0.0,
 				pl=pl,
 				relay=relay,
 				via_relay=via_relay,
@@ -1005,7 +1011,7 @@ def _run_slm_packed_batch(
 			)
 
 		print(
-			f"  packed -slm power={power} n_groups={n} "
+			f"  packed -slm power={power} (-slm {slm_pwr:g}) n_groups={n} "
 			f"(DTR during wait, {n} triggers)"
 		)
 		print("  pulse map:")
@@ -1172,9 +1178,11 @@ def _run_slm_single_trial(
 	"""
 	from prairie_live.mark_all_points import pack_mark_all_points
 
+	slm_pwr = _slm_script_power(power, meta)
+	print(f"  SLM power UI {float(power):g} → -slm {slm_pwr:g}")
 	slm_parts = pack_mark_all_points(
 		[gpts],
-		power=power,
+		power=slm_pwr,
 		laser=slm_params["laser"],
 		duration_ms=slm_params["duration_ms"],
 		use_3d=slm_params["use_3d"],
@@ -1281,10 +1289,13 @@ def _run_slm_single_trial(
 	elif trigger == "serial" and ttl is not None and not visual_cfg.enabled:
 		from prairie_live.stim_fire import run_while_pulsing_dtr
 
+		init_ms = float(slm_params.get("initial_delay_ms") or 0)
+		_pre_stim_delay(wait_ms=init_ms, pl=pl, via_relay=via_relay)
+
 		def _do_slm() -> None:
 			_fire_mark_all_points(
 				parts=slm_parts,
-				wait_ms=float(slm_params.get("initial_delay_ms") or 0),
+				wait_ms=0.0,
 				pl=pl,
 				relay=relay,
 				via_relay=via_relay,
@@ -1294,7 +1305,7 @@ def _run_slm_single_trial(
 
 		print(
 			f"  single -slm trial {trial_index}: {gname} "
-			f"power={power} pts={point_ids} (DTR during wait)"
+			f"power={power} (-slm {slm_pwr:g}) pts={point_ids} (DTR during wait)"
 		)
 		run_while_pulsing_dtr(
 			_do_slm,
@@ -1467,14 +1478,20 @@ def _run_series_trial(
 	if dry_run:
 		print(f"  [dry] trial {trial_index}: {gname} power={power} pts={point_ids}")
 	elif trigger == "serial" and ttl is not None and not visual_cfg.enabled:
-		# Pulse DTR *while* -MarkPoints blocks on DONE (Trig In 1). -NoWait was
-		# returning before PV armed, so later DTR never burned.
+		# Load first, then pulse DTR only while -MarkPoints waits on Trig In 1.
+		# Bundling -lmp inside the DTR window made the edge arrive during load.
 		from prairie_live.stim_fire import run_while_pulsing_dtr
 
+		_load_mark_points(
+			xml=xml,
+			scope_xml=scope_xml,
+			pl=pl,
+			relay=relay,
+			via_relay=via_relay,
+		)
+
 		def _do_mp() -> None:
-			_fire_mark_points(
-				xml=xml,
-				scope_xml=scope_xml,
+			_mark_points_only(
 				pl=pl,
 				relay=relay,
 				via_relay=via_relay,
@@ -1553,6 +1570,31 @@ def _run_series_trial(
 	return row
 
 
+def _pre_stim_delay(*, wait_ms: float, pl: PrairieLink | None, via_relay: bool) -> None:
+	"""Finish InitialDelay *before* the DTR arm window (so the edge is not early)."""
+	ms = float(wait_ms or 0)
+	if ms <= 0:
+		return
+	if via_relay or pl is None:
+		# No bare -Wait on the relay API; delaying the -slm send is equivalent.
+		time.sleep(ms / 1000.0)
+		return
+	pl.send_command("-Wait", str(int(round(ms))))
+
+
+def _slm_script_power(power: float, meta: dict) -> float:
+	"""UI UncagingLaserPower (e.g. 160) → -MarkAllPoints fraction (0.4).
+
+	Values already in (0, 1] are left as script fractions (tests / advanced).
+	"""
+	from prairie_live.markpoints import xml_power
+
+	p = float(power)
+	if 0.0 < p <= 1.0:
+		return p
+	return float(xml_power(p, meta))
+
+
 def _fire_mark_all_points(
 	*,
 	parts: list[str],
@@ -1566,6 +1608,7 @@ def _fire_mark_all_points(
 	"""Send -MarkAllPoints (-slm); prefer relay when via_relay.
 
 	Keep ``no_wait=False`` for photostim: pulse DTR while this blocks (stim_fire).
+	For serial+DTR, call ``_script_wait`` first, then this with ``wait_ms=0``.
 	"""
 	if via_relay:
 		if relay is None:
@@ -1587,6 +1630,51 @@ def _fire_mark_all_points(
 		pl.send_command("-Silent", *tokens)
 
 
+def _load_mark_points(
+	*,
+	xml: str,
+	scope_xml: str | None,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+) -> None:
+	"""-LoadMarkPoints only (finish before starting the DTR arm window)."""
+	if via_relay:
+		if relay is None:
+			raise RuntimeError("via_relay set but relay client is not connected")
+		out = relay.load_mark_points(xml)
+		if not out.get("ok", False):
+			raise RuntimeError(f"relay load_mark_points failed: {out}")
+		return
+	if pl is None or not scope_xml:
+		raise RuntimeError("need PrairieLink + --scope-xml, or --via-relay")
+	pl.send_command("-LoadMarkPoints", scope_xml)
+
+
+def _mark_points_only(
+	*,
+	pl: PrairieLink | None,
+	relay: Any | None,
+	via_relay: bool,
+	no_wait: bool = False,
+	timeout: float = 180.0,
+) -> None:
+	"""-MarkPoints only (series already loaded)."""
+	if via_relay:
+		if relay is None:
+			raise RuntimeError("via_relay set but relay client is not connected")
+		out = relay.mark_points(no_wait=no_wait, timeout=timeout)
+		if not out.get("ok", False):
+			raise RuntimeError(f"relay mark_points failed: {out}")
+		return
+	if pl is None:
+		raise RuntimeError("need PrairieLink or --via-relay")
+	if no_wait:
+		pl.send_command("-Silent", "-NoWait", "-MarkPoints")
+	else:
+		pl.send_command("-Silent", "-MarkPoints")
+
+
 def _fire_mark_points(
 	*,
 	xml: str,
@@ -1599,26 +1687,15 @@ def _fire_mark_points(
 ) -> None:
 	"""Load + fire one series; prefer relay push when via_relay (no SMB).
 
-	``no_wait=False`` (default): block until DONE. Caller pulses DTR concurrently
-	when Trigger=serial (see ``stim_fire.run_while_pulsing_dtr``).
+	``no_wait=False`` (default): block until DONE. For serial+DTR prefer
+	``_load_mark_points`` then ``run_while_pulsing_dtr(_mark_points_only)``.
 	"""
-	if via_relay:
-		if relay is None:
-			raise RuntimeError("via_relay set but relay client is not connected")
-		out = relay.load_mark_points(xml)
-		if not out.get("ok", False):
-			raise RuntimeError(f"relay load_mark_points failed: {out}")
-		out = relay.mark_points(no_wait=no_wait, timeout=timeout)
-		if not out.get("ok", False):
-			raise RuntimeError(f"relay mark_points failed: {out}")
-		return
-	if pl is None or not scope_xml:
-		raise RuntimeError("need PrairieLink + --scope-xml, or --via-relay")
-	pl.send_command("-LoadMarkPoints", scope_xml)
-	if no_wait:
-		pl.send_command("-Silent", "-NoWait", "-MarkPoints")
-	else:
-		pl.send_command("-Silent", "-MarkPoints")
+	_load_mark_points(
+		xml=xml, scope_xml=scope_xml, pl=pl, relay=relay, via_relay=via_relay
+	)
+	_mark_points_only(
+		pl=pl, relay=relay, via_relay=via_relay, no_wait=no_wait, timeout=timeout
+	)
 
 
 def _collect_frames(relay, duration_s: float, poll_s: float) -> list[np.ndarray]:
@@ -1989,6 +2066,12 @@ def execute_session(
 			from prairie_live.ttl_serial import SerialTtl
 
 			ttl = SerialTtl(str(opt["serial"]))
+			print(
+				f"TTL: {opt['serial']} DTR → wire to PV Trig In 1 "
+				f"(width={float(opt.get('ttl_width') or 0.01):g}s). "
+				"If no burns: try trigger=none once to confirm laser/FOV, "
+				"then check COM + BNC."
+			)
 
 		relay_addr = opt.get("via_relay") or opt.get("relay")
 		if relay_addr and not opt.get("dry_run"):
