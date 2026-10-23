@@ -31,6 +31,7 @@ def build_set_tokens(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
+	spiral_size_fov: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
 ) -> list[str]:
@@ -40,6 +41,9 @@ def build_set_tokens(
 	Shape (2D + spiral + countable trigger):
 	  N False x0 y0 … xN-1 yN-1 duration_ms laser power True spiral_frac revs
 	  Trigger TriggerCount
+
+	``spiral_size_fov`` (0–1) wins when set — used so PV-saved galvo SpiralSize
+	matches the cyan overlay rings instead of only µm/fov_width_um.
 	"""
 	if not points:
 		raise ValueError("MarkAllPoints set needs at least one point")
@@ -52,8 +56,15 @@ def build_set_tokens(
 		"True" if use_3d else "False",
 	]
 	for pt in points:
-		parts.append(_fmt_num(pt["x"]))
-		parts.append(_fmt_num(pt["y"]))
+		# -slm X/Y are imaging FOV fractions 0–1 (not galvo volts).
+		x, y = float(pt["x"]), float(pt["y"])
+		if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+			raise ValueError(
+				f"MarkAllPoints point {pt.get('id')} has X/Y ({x:g},{y:g}) "
+				"outside FOV 0–1 — convert galvo→FOV before -slm"
+			)
+		parts.append(_fmt_num(x))
+		parts.append(_fmt_num(y))
 		if use_3d:
 			parts.append(_fmt_num(pt.get("z", 0)))
 
@@ -62,14 +73,17 @@ def build_set_tokens(
 	parts.append(_fmt_num(power))
 
 	if spiral:
-		if spiral_size_um is None:
-			raise ValueError("spiral=True requires spiral_size_um")
-		if fov_width_um is None:
-			raise ValueError(
-				"spiral=True requires fov_width_um in experiment.json "
-				"(to convert spiral_size_um → FOV fraction for -slm)"
-			)
-		frac = spiral_size_fov_frac(float(spiral_size_um), float(fov_width_um))
+		if spiral_size_fov not in (None, ""):
+			frac = min(max(float(spiral_size_fov), 0.0), 1.0)
+		else:
+			if spiral_size_um is None:
+				raise ValueError("spiral=True requires spiral_size_um or spiral_size_fov")
+			if fov_width_um is None:
+				raise ValueError(
+					"spiral=True requires fov_width_um in experiment.json "
+					"(to convert spiral_size_um → FOV fraction for -slm)"
+				)
+			frac = spiral_size_fov_frac(float(spiral_size_um), float(fov_width_um))
 		parts.extend(["True", _fmt_num(frac), str(int(spiral_revolutions))])
 
 	trig = str(trigger_selection or "None")
@@ -92,6 +106,7 @@ def build_mark_all_points_parts(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
+	spiral_size_fov: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
 ) -> list[str]:
@@ -106,6 +121,7 @@ def build_mark_all_points_parts(
 		spiral_size_um=spiral_size_um,
 		spiral_revolutions=spiral_revolutions,
 		fov_width_um=fov_width_um,
+		spiral_size_fov=spiral_size_fov,
 		trigger_selection=trigger_selection,
 		trigger_count=trigger_count,
 		delay_ms=0.0,
@@ -123,6 +139,7 @@ def pack_mark_all_points(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
+	spiral_size_fov: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
 	delay_ms: float = 0.0,
@@ -149,6 +166,7 @@ def pack_mark_all_points(
 				spiral_size_um=spiral_size_um,
 				spiral_revolutions=spiral_revolutions,
 				fov_width_um=fov_width_um,
+				spiral_size_fov=spiral_size_fov,
 				trigger_selection=trigger_selection,
 				trigger_count=trigger_count,
 			)

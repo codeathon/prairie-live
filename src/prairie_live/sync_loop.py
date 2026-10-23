@@ -897,12 +897,29 @@ def _run_slm_packed_batch(
 		+ float(inter_trial_s) * 1000.0
 		+ 250.0  # settle after burn before next wait-for-trigger
 	)
+	# One LiveScan + geometry read for the whole packed command (same FOV).
+	flat = [p for g in groups_pts for p in g]
+	fire_flat, spiral_fov = _slm_fire_points(
+		flat,
+		relay=relay,
+		pl=pl,
+		via_relay=via_relay,
+		slm_params=slm_params,
+		dry_run=dry_run,
+		log_prefix="  ",
+	)
+	fire_groups: list[list[dict]] = []
+	i = 0
+	for gpts in groups_pts:
+		n_g = len(gpts)
+		fire_groups.append(fire_flat[i : i + n_g])
+		i += n_g
 	# -slm wants UI UncagingLaserPower (160), not series XML fraction (0.4).
 	# trigger_count=1: one Trig In 1 edge releases each packed hologram/group.
 	slm_pwr = _slm_script_power(power, meta)
 	print(f"  SLM power (UI scale) → -slm {slm_pwr:g}")
 	slm_parts = pack_mark_all_points(
-		groups_pts,
+		fire_groups,
 		power=slm_pwr,
 		laser=slm_params["laser"],
 		duration_ms=slm_params["duration_ms"],
@@ -911,6 +928,7 @@ def _run_slm_packed_batch(
 		spiral_size_um=slm_params["spiral_size_um"],
 		spiral_revolutions=slm_params["spiral_revolutions"],
 		fov_width_um=slm_params["fov_width_um"],
+		spiral_size_fov=spiral_fov,
 		trigger_selection=trig_sel,
 		trigger_count=1,
 		delay_ms=delay_ms,
@@ -918,6 +936,7 @@ def _run_slm_packed_batch(
 	# Audit XML: one MarkPoint step per group (same order as packed -slm).
 	steps = []
 	group_map: list[dict] = []
+	groups_pts = fire_groups
 	for gi, gpts in enumerate(groups_pts):
 		gname = f"PL_t{trial_index_start + gi:04d}_g{gi + 1}"
 		steps.append(
@@ -1212,10 +1231,19 @@ def _run_slm_single_trial(
 	from prairie_live.mark_all_points import pack_mark_all_points
 
 	n_groups = max(int(n_groups), 1)
+	# Remap with live scan range so -slm X/Y match the cyan overlay rings.
+	fire_pts, spiral_fov = _slm_fire_points(
+		gpts,
+		relay=relay,
+		pl=pl,
+		via_relay=via_relay,
+		slm_params=slm_params,
+		dry_run=dry_run,
+	)
 	slm_pwr = _slm_script_power(power, meta)
 	print(f"  SLM power (UI scale) → -slm {slm_pwr:g}")
 	slm_parts = pack_mark_all_points(
-		[gpts],
+		[fire_pts],
 		power=slm_pwr,
 		laser=slm_params["laser"],
 		duration_ms=slm_params["duration_ms"],
@@ -1224,12 +1252,13 @@ def _run_slm_single_trial(
 		spiral_size_um=slm_params["spiral_size_um"],
 		spiral_revolutions=slm_params["spiral_revolutions"],
 		fov_width_um=slm_params["fov_width_um"],
+		spiral_size_fov=spiral_fov,
 		trigger_selection=trig_sel,
 		trigger_count=1,
 		delay_ms=0.0,
 	)
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
-	point_ids = [str(p["id"]) for p in gpts]
+	point_ids = [str(p["id"]) for p in fire_pts]
 	group_map = [
 		{
 			"trigger_index": gi,
@@ -1242,7 +1271,7 @@ def _run_slm_single_trial(
 		write_scope_xml(
 			[
 				build_group_step(
-					gpts,
+					fire_pts,
 					name=gname,
 					power=power,
 					meta=meta,
@@ -1281,6 +1310,8 @@ def _run_slm_single_trial(
 	want = _want_frames(
 		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
 	)
+	# Score/PNG rings use the same FOV fractions we sent to -slm.
+	gpts = fire_pts
 	row: dict[str, Any] = {
 		"trial_index": trial_index,
 		"iteration": it,
@@ -1688,27 +1719,78 @@ def _ensure_live_after_stim(
 	pl: PrairieLink | None,
 	via_relay: bool,
 	settle_s: float = 0.4,
+	label: str = "post-stim",
 ) -> None:
 	"""-MarkAllPoints / -Abort often kill LiveScan → black power-tile frames.
 
 	Restart Live and wait briefly so the relay grabber has non-zero FOV again.
+	Also used *before* SLM fire so ``currentScanAmplitude`` matches the overlay.
 	"""
 	if via_relay and relay is not None and hasattr(relay, "start_live"):
 		try:
 			out = relay.start_live()
-			print("  post-stim: -LiveScan (restore FOV for power tiles)")
+			print(f"  {label}: -LiveScan (FOV / scan range)")
 			if isinstance(out, dict) and out.get("ok") is False:
 				print(f"  WARNING: -LiveScan failed: {out}")
 		except Exception as exc:
-			print(f"  WARNING: -LiveScan after stim failed: {exc}")
+			print(f"  WARNING: -LiveScan ({label}) failed: {exc}")
 	elif pl is not None:
 		try:
 			pl.send_command("-LiveScan")
-			print("  post-stim: -LiveScan (restore FOV for power tiles)")
+			print(f"  {label}: -LiveScan (FOV / scan range)")
 		except Exception as exc:
-			print(f"  WARNING: -LiveScan after stim failed: {exc}")
+			print(f"  WARNING: -LiveScan ({label}) failed: {exc}")
 	if settle_s > 0:
 		time.sleep(float(settle_s))
+
+
+def _slm_fire_points(
+	gpts: list[dict],
+	*,
+	relay: Any | None,
+	pl: PrairieLink | None,
+	via_relay: bool,
+	slm_params: dict,
+	dry_run: bool,
+	log_prefix: str = "  ",
+) -> tuple[list[dict], float | None]:
+	"""LiveScan on → remap galvo→FOV with *current* amp/center for -slm.
+
+	Session-start FOV lock alone is not enough: it can run on a stale scan
+	range right after -Abort, so burns land on the FOV but miss the cyan rings.
+	"""
+	from prairie_live.scan_geometry import points_for_slm_fire
+
+	if dry_run or relay is None:
+		# Dry-run / no relay: keep whatever fractions the session lock produced.
+		return list(gpts), None
+	_ensure_live_after_stim(
+		relay=relay,
+		pl=pl,
+		via_relay=via_relay,
+		# Short settle: amp/center must match the live overlay before -slm.
+		settle_s=0.35,
+		label="pre-slm",
+	)
+	fire_pts, spiral_fov, note = points_for_slm_fire(
+		gpts,
+		relay,
+		spiral_size_um=slm_params.get("spiral_size_um"),
+		fov_width_um=slm_params.get("fov_width_um"),
+	)
+	print(f"{log_prefix}{note}")
+	for p in fire_pts[:5]:
+		gx, gy = p.get("x_galvo"), p.get("y_galvo")
+		if gx is not None and gy is not None:
+			print(
+				f"{log_prefix}  P{p['id']} galvo ({float(gx):.4f},{float(gy):.4f}) "
+				f"→ FOV ({float(p['x']):.4f},{float(p['y']):.4f})"
+			)
+		else:
+			print(
+				f"{log_prefix}  P{p['id']} FOV ({float(p['x']):.4f},{float(p['y']):.4f})"
+			)
+	return fire_pts, spiral_fov
 
 
 def _slm_script_power(power: float, meta: dict | None = None) -> float:
@@ -2252,9 +2334,19 @@ def execute_session(
 		# SLM (-MarkAllPoints) needs FOV 0–1. Series with PV-saved galvo XML must
 		# keep native X/Y/SpiralSize (FOV round-trip + experiment duration/revs
 		# has crashed PV spiral DAC — Int32 overflow).
+		# Store galvo on each point here; each -slm re-reads live amp/center so
+		# burns track the cyan overlay (session-start amp after Abort can be stale).
 		if not opt.get("dry_run") and relay is not None and stim_mode == "slm":
 			from prairie_live.scan_geometry import prepare_points_for_live_fov
 
+			# Extra settle so currentScanAmplitude matches the live FOV overlay.
+			_ensure_live_after_stim(
+				relay=relay,
+				pl=pl,
+				via_relay=via_relay,
+				settle_s=0.6,
+				label="pre-FOV-lock",
+			)
 			try:
 				points, map_note = prepare_points_for_live_fov(points, relay)
 				print(f"FOV lock: {map_note}")
@@ -2278,18 +2370,20 @@ def execute_session(
 					)
 				)
 				if n_oob:
-					print(
-						f"WARNING: {n_oob}/{len(points)} points are outside the live FOV "
-						"— they will not burn on the visible image. Pan/zoom so rings "
-						"sit inside the frame, or re-pick Mark Points on this FOV."
+					raise SystemExit(
+						f"{n_oob}/{len(points)} points are outside the live FOV — "
+						"SLM would burn off-image. Pan/zoom so rings sit inside the "
+						"frame, or re-pick Mark Points on this FOV."
 					)
+			except SystemExit:
+				raise
 			except Exception as exc:
-				print(f"WARNING: cannot lock points to live FOV ({exc})")
-				if oob:
-					print(
-						"Switching stim_mode → series (-LoadMarkPoints / -MarkPoints)."
-					)
-					stim_mode = "series"
+				# Do not silently fall back to series — UI still says Use SLM.
+				raise SystemExit(
+					f"cannot lock galvo Mark Points to live FOV for SLM ({exc}). "
+					"Check relay + LiveScan, then retry. "
+					"Or set stim_mode=series to fire native galvo XML."
+				) from exc
 		elif stim_mode == "series" and oob:
 			print(
 				f"series: firing {len(oob)} galvo points as-is (PV-saved X/Y/SpiralSize); "

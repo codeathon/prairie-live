@@ -101,6 +101,33 @@ def test_spiral_requires_fov():
 		)
 
 
+def test_spiral_size_fov_overrides_um():
+	# Galvo SpiralSize→FOV frac from fire-time geometry must win over µm defaults.
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}]
+	parts = build_mark_all_points_parts(
+		pts,
+		power=160,
+		spiral=True,
+		spiral_size_um=54.5,
+		fov_width_um=1136.7,
+		spiral_size_fov=0.022,
+		trigger_selection="None",
+	)
+	assert parts[parts.index("True") + 1] == "0.022"
+
+
+def test_rejects_galvo_coords_for_slm():
+	# Sending raw galvo volts as -slm FOV fractions misplaces burns.
+	pts = [{"id": "1", "x": -3.0, "y": -2.0}]
+	with pytest.raises(ValueError, match="outside FOV 0–1"):
+		build_mark_all_points_parts(
+			pts,
+			power=160,
+			spiral=False,
+			trigger_selection="None",
+		)
+
+
 def test_stim_params_from_meta():
 	meta = {
 		"uncaging_laser": "Monaco",
