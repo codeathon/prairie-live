@@ -1408,8 +1408,27 @@ def _run_series_trial(
 ) -> dict:
 	"""One group × power via -LoadMarkPoints / -MarkPoints."""
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
+	# FOV-locked pool (coord_space=fov) is 0–1; series XML needs live galvo.
+	fire_pts = gpts
+	if (
+		not dry_run
+		and relay is not None
+		and gpts
+		and any(p.get("coord_space") == "fov" for p in gpts)
+	):
+		from prairie_live.scan_geometry import points_to_galvo_for_series
+
+		fire_pts, fov_note = points_to_galvo_for_series(gpts, relay)
+		if trial_index == 0 or gi == 0:
+			print(f"  {fov_note}")
+			for p in fire_pts[:3]:
+				print(
+					f"    Point {p['id']}  FOV ({float(p.get('x_fov', 0)):.3f}, "
+					f"{float(p.get('y_fov', 0)):.3f}) → galvo "
+					f"({float(p['x']):.3f}, {float(p['y']):.3f})"
+				)
 	step = build_group_step(
-		gpts,
+		fire_pts,
 		name=gname,
 		power=power,
 		meta=meta,
@@ -1963,9 +1982,9 @@ def execute_session(
 	if stim_mode not in ("series", "slm"):
 		raise SystemExit(f"stim_mode must be 'series' or 'slm', got {stim_mode!r}")
 
-	# .gpl / PV-saved series often store galvo volts (outside 0–1). For slm we
-	# map them to FOV fractions via the live scan range after the relay connects
-	# (PV has no "save as FOV coords" export). series keeps native galvo X/Y.
+	# .gpl / PV-saved series often store galvo volts (outside 0–1). After the
+	# relay connects we lock all points to the live FOV (0–1) so burns match the
+	# cyan overlay; series converts FOV→galvo again at each fire.
 	oob = [
 		p
 		for p in points
@@ -1989,8 +2008,7 @@ def execute_session(
 	if oob:
 		print(
 			f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
-			"stim_mode=slm will map them to FOV via the live scan range; "
-			"series fires galvo coords as-is. Examples:"
+			"They will be locked to the live FOV (same as the cyan overlay) before fire."
 		)
 		for p in oob[:5]:
 			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
@@ -2101,26 +2119,45 @@ def execute_session(
 				+ ", ".join(str(n) for n in (clr.get("notes") or []))
 			)
 
-		# SLM needs 0–1 FOV; convert galvo XML using live scan geometry.
-		if stim_mode == "slm" and oob:
-			from prairie_live.scan_geometry import prepare_points_for_slm
+		# Lock points to the live FOV so burns match the cyan overlay (SLM and series).
+		if not opt.get("dry_run") and relay is not None:
+			from prairie_live.scan_geometry import prepare_points_for_live_fov
 
 			try:
-				points, map_note = prepare_points_for_slm(points, relay)
-				print(f"NOTE: {map_note}")
-				for p in points[:5]:
-					gx = p.get("x_galvo", p["x"])
-					gy = p.get("y_galvo", p["y"])
+				points, map_note = prepare_points_for_live_fov(points, relay)
+				print(f"FOV lock: {map_note}")
+				for p in points[:8]:
+					gx = p.get("x_galvo")
+					gy = p.get("y_galvo")
+					if gx is not None and gy is not None:
+						print(
+							f"  Point {p['id']}  galvo ({float(gx):.4f}, {float(gy):.4f}) "
+							f"→ FOV ({float(p['x']):.4f}, {float(p['y']):.4f})"
+						)
+					else:
+						print(
+							f"  Point {p['id']}  FOV ({float(p['x']):.4f}, {float(p['y']):.4f})"
+						)
+				n_oob = sum(
+					1
+					for p in points
+					if not (
+						0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0
+					)
+				)
+				if n_oob:
 					print(
-						f"  Point {p['id']}  galvo ({float(gx):.4f}, {float(gy):.4f}) "
-						f"→ FOV ({float(p['x']):.4f}, {float(p['y']):.4f})"
+						f"WARNING: {n_oob}/{len(points)} points are outside the live FOV "
+						"— they will not burn on the visible image. Pan/zoom so rings "
+						"sit inside the frame, or re-pick Mark Points on this FOV."
 					)
 			except Exception as exc:
-				print(
-					f"NOTE: cannot map galvo→FOV for -MarkAllPoints ({exc}). "
-					"Switching stim_mode → series (-LoadMarkPoints / -MarkPoints)."
-				)
-				stim_mode = "series"
+				print(f"WARNING: cannot lock points to live FOV ({exc})")
+				if stim_mode == "slm" and oob:
+					print(
+						"Switching stim_mode → series (-LoadMarkPoints / -MarkPoints)."
+					)
+					stim_mode = "series"
 
 		show = (
 			show_candidate_gui

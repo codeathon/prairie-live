@@ -62,6 +62,16 @@ def galvo_to_fraction(x: float, y: float, geom: dict[str, float]) -> tuple[float
 	)
 
 
+def fraction_to_galvo(fx: float, fy: float, geom: dict[str, float]) -> tuple[float, float]:
+	"""Image fraction → galvo voltage for the current scan window."""
+	ax = 2.0 * float(geom["amp_x"])
+	ay = 2.0 * float(geom["amp_y"])
+	return (
+		float(geom["ctr_x"]) + (float(fx) - 0.5) * ax,
+		float(geom["ctr_y"]) + (float(fy) - 0.5) * ay,
+	)
+
+
 def points_for_image(
 	points: list[dict] | None, geom: dict[str, float] | None
 ) -> list[dict]:
@@ -81,27 +91,34 @@ def points_for_image(
 		row["x"], row["y"] = fx, fy
 		row["x_galvo"] = float(p["x"])
 		row["y_galvo"] = float(p["y"])
+		row["coord_space"] = "fov"
 		out.append(row)
 	return out
 
 
-def prepare_points_for_slm(
+def prepare_points_for_live_fov(
 	points: list[dict],
 	relay: Any | None,
 ) -> tuple[list[dict], str]:
-	"""FOV-fraction copies for ``-MarkAllPoints`` (PV cannot save FOV coords).
+	"""Lock Mark Points to the live FOV (0–1), matching the cyan overlay.
 
-	Galvo-list XML is mapped via live ``currentScanAmplitude`` / ``Center``.
-	Raises ValueError when points are galvo-space but geometry is unavailable.
+	Galvo XML is mapped through live ``currentScanAmplitude`` / ``Center``.
+	Series later converts these fractions back to galvo at fire time so burns
+	land on the same spots the overlay shows — even after you pan/zoom.
 	"""
 	if not points:
 		return [], "no points"
 	if is_fraction_space(points):
-		return list(points), "points already in FOV fractions (0–1)"
+		out = []
+		for p in points:
+			row = dict(p)
+			row["coord_space"] = "fov"
+			out.append(row)
+		return out, "points already in FOV fractions (0–1); fire tracks live FOV"
 	if relay is None:
 		raise ValueError(
 			"galvo Mark Points need the relay (Live + scan range) to convert "
-			"to FOV fractions for -MarkAllPoints"
+			"to FOV fractions"
 		)
 	geom = fetch_scan_geometry(relay)
 	mapped = points_for_image(points, geom)
@@ -111,13 +128,63 @@ def prepare_points_for_slm(
 		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
 	)
 	note = (
-		f"mapped {len(mapped)} galvo points → FOV via scan "
+		f"mapped {len(mapped)} galvo points → live FOV via scan "
 		f"X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
 		f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}"
 	)
 	if n_out:
-		note += f" · {n_out} still outside 0–1 at this zoom"
+		note += f" · {n_out} still outside 0–1 at this zoom (will not burn on FOV)"
 	return mapped, note
+
+
+def prepare_points_for_slm(
+	points: list[dict],
+	relay: Any | None,
+) -> tuple[list[dict], str]:
+	"""Alias: ``-MarkAllPoints`` needs FOV fractions (same as live FOV lock)."""
+	return prepare_points_for_live_fov(points, relay)
+
+
+def points_to_galvo_for_series(
+	points: list[dict],
+	relay: Any | None,
+) -> tuple[list[dict], str]:
+	"""FOV-fraction points → galvo voltages for ``-LoadMarkPoints`` on the live FOV.
+
+	If points are still galvo-native, they are returned unchanged (legacy).
+	"""
+	if not points:
+		return [], "no points"
+	if not is_fraction_space(points) and not any(
+		p.get("coord_space") == "fov" for p in points
+	):
+		return list(points), "series using native galvo X/Y (not FOV-locked)"
+	if relay is None:
+		raise ValueError(
+			"FOV-locked series needs the relay to convert fractions → galvo "
+			"for the current scan window"
+		)
+	geom = fetch_scan_geometry(relay)
+	out: list[dict] = []
+	n_out = 0
+	for p in points:
+		row = dict(p)
+		fx, fy = float(p["x"]), float(p["y"])
+		if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
+			n_out += 1
+		gx, gy = fraction_to_galvo(fx, fy, geom)
+		row["x_fov"], row["y_fov"] = fx, fy
+		row["x"], row["y"] = gx, gy
+		row["coord_space"] = "galvo"
+		out.append(row)
+	note = (
+		f"series fire: FOV→galvo via scan "
+		f"X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
+		f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}"
+	)
+	if n_out:
+		note += f" · {n_out} FOV point(s) outside 0–1"
+	return out, note
 
 
 def overlay_points(

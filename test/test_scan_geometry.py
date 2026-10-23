@@ -61,6 +61,37 @@ def test_galvo_points_map_into_frame():
 	assert p1["r"] == pytest.approx(0.184901809118501 / 15.2 / 2, abs=1e-4)
 
 
+def test_fraction_galvo_roundtrip_tracks_live_fov():
+	from prairie_live.scan_geometry import (
+		fraction_to_galvo,
+		galvo_to_fraction,
+		prepare_points_for_live_fov,
+		points_to_galvo_for_series,
+	)
+
+	g = fetch_scan_geometry(FakeRelay(GEOM))
+	fx, fy = galvo_to_fraction(-3.25, 1.5, g)
+	gx, gy = fraction_to_galvo(fx, fy, g)
+	assert gx == pytest.approx(-3.25, abs=1e-6)
+	assert gy == pytest.approx(1.5, abs=1e-6)
+
+	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
+	fov_pts, note = prepare_points_for_live_fov(pts, FakeRelay(GEOM))
+	assert "live FOV" in note
+	assert all(p.get("coord_space") == "fov" for p in fov_pts)
+	# Pan the scan center; series must retarget galvo so burns stay on FOV spots.
+	pan = dict(GEOM)
+	pan[("currentScanCenter", "XAxis")] = "1.0"
+	fired, fire_note = points_to_galvo_for_series(fov_pts, FakeRelay(pan))
+	assert "FOV→galvo" in fire_note
+	assert fired[0]["x"] != pytest.approx(float(pts[0]["x"]), abs=0.01)
+	# Round-trip through the panned geom recovers the FOV fraction.
+	g2 = fetch_scan_geometry(FakeRelay(pan))
+	rx, ry = galvo_to_fraction(float(fired[0]["x"]), float(fired[0]["y"]), g2)
+	assert rx == pytest.approx(float(fov_pts[0]["x"]), abs=1e-5)
+	assert ry == pytest.approx(float(fov_pts[0]["y"]), abs=1e-5)
+
+
 def test_rig_scan_puts_all_picked_points_in_frame():
 	# PV 6.1 on the rig at zoom 1: amplitude 4.2035577285, center 0 on both axes.
 	rig = {
