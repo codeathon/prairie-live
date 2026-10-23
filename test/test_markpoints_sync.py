@@ -296,7 +296,8 @@ def test_via_relay_fires_without_scope_xml(tmp_path: Path):
 	assert relay.calls[1][0] == "mark"
 
 
-def test_gpl_slm_dry_run(tmp_path: Path):
+def test_gpl_slm_dry_run_apa(tmp_path: Path):
+	"""stim_mode=slm uses AllPointsAtOnce fat XML (not -MarkAllPoints)."""
 	steps = parse_mark_points(GPL_XML)
 	pts = extract_unique_points(steps)
 	meta = template_meta(steps)
@@ -334,32 +335,33 @@ def test_gpl_slm_dry_run(tmp_path: Path):
 			elite_frac=0.5,
 			dry_run=True,
 			stim_mode="slm",
-			slm_pack=True,
+			slm_pack=True,  # ignored — APA path only
 		)
 	finally:
 		log.close()
 	assert len(rows) == 2
 	assert all(r["stim_mode"] == "slm" for r in rows)
+	assert all(r.get("all_points_at_once") is True for r in rows)
 	assert all(len(r["point_ids"]) == 3 for r in rows)
-	assert "summary" in rows[0]
-	assert "slm_parts" not in rows[0]
-	assert "group_trigger_map" not in rows[0]
 	assert rows[0]["trigger_index"] == 0
 	assert rows[1]["trigger_index"] == 1
+	assert all(r["n_triggers"] == 2 for r in rows)
+	assert "group 1/2" in rows[0]["summary"]
+	assert scope.is_file()
+	xml = scope.read_text(encoding="utf-8")
+	# Fat layout with APA — not per-point PVSaved sequential XML.
+	assert "AllPointsAtOnce=\"True\"" in xml
+	assert "PVMarkPointSeriesElements" in xml
+	assert "PVSavedMarkPointSeriesElements" not in xml
 	packed = [
 		json.loads(ln)
 		for ln in log_path.read_text(encoding="utf-8").splitlines()
 		if json.loads(ln).get("phase") == "slm_packed"
 	]
-	assert len(packed) == 1
-	assert packed[0]["n_triggers"] == 2
-	assert packed[0]["slm_parts"][0] == "-MarkAllPoints"
-	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
-	assert scope.is_file()
-	assert "PVSavedMarkPointSeriesElements" in scope.read_text(encoding="utf-8")
+	assert packed == []
 
 
-def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
+def test_slm_via_relay_fires_all_points_at_once(tmp_path: Path):
 	steps = parse_mark_points(FAT_XML)
 	pts = extract_unique_points(steps)
 	meta = template_meta(steps)
@@ -400,16 +402,13 @@ def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
 	finally:
 		log.close()
 	assert len(rows) == 1
-	slm_calls = [c for c in relay.calls if c[0] == "slm"]
-	assert len(slm_calls) == 1
-	kind, parts, wait_ms, _no_wait, _timeout = slm_calls[0]
-	assert kind == "slm"
-	assert parts[0] == "-MarkAllPoints"
-	assert wait_ms == 22.1
-	# LiveScan restarted after -slm so power tiles are not black.
+	assert rows[0]["stim_mode"] == "slm"
+	assert rows[0].get("all_points_at_once") is True
+	# APA path uses -LoadMarkPoints / -MarkPoints (not -MarkAllPoints).
+	assert any(c[0] == "load" for c in relay.calls)
+	assert any(c[0] == "mark" for c in relay.calls)
+	assert not any(c[0] == "slm" for c in relay.calls)
 	assert any(c[0] == "live" for c in relay.calls)
-	# No series load/mark on SLM path.
-	assert all(c[0] != "load" for c in relay.calls if isinstance(c, tuple))
 
 
 class _FakeTtl:
@@ -420,8 +419,8 @@ class _FakeTtl:
 		self.pulses.append(width_s)
 
 
-def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
-	"""Serial SLM: pick group → arm -slm → one DTR → next group (never pack)."""
+def test_slm_serial_one_apa_and_one_dtr_per_group(tmp_path: Path):
+	"""Serial SLM: group → AllPointsAtOnce -lmp/-mp → one DTR → next group."""
 	steps = parse_mark_points(FAT_XML)
 	pts = extract_unique_points(steps)
 	meta = template_meta(steps)
@@ -459,55 +458,46 @@ def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
 			elite_frac=0.5,
 			dry_run=False,
 			stim_mode="slm",
-			slm_pack=True,  # ignored for serial — still one -slm per group
+			slm_pack=True,
 		)
 	finally:
 		log.close()
 	assert len(rows) == 2
-	slm_calls = [c for c in relay.calls if c[0] == "slm"]
-	assert len(slm_calls) == 2
+	assert not any(c[0] == "slm" for c in relay.calls)
+	assert sum(1 for c in relay.calls if c[0] == "load") == 2
+	assert sum(1 for c in relay.calls if c[0] == "mark") == 2
 	assert len(ttl.pulses) == 2
 	assert [r["trigger_index"] for r in rows] == [0, 1]
 	assert all(r["n_triggers"] == 2 for r in rows)
-	assert all(r.get("slm_pack") is False for r in rows)
+	assert all(r.get("all_points_at_once") is True for r in rows)
 	assert "group 1/2" in rows[0]["summary"]
 	assert "group 2/2" in rows[1]["summary"]
-	# pre-slm LiveScan (FOV amp) + post-stim LiveScan per group.
-	assert sum(1 for c in relay.calls if c[0] == "live") == 4
-	packed = [
-		json.loads(ln)
-		for ln in (tmp_path / "slm_serial.jsonl").read_text(encoding="utf-8").splitlines()
-		if json.loads(ln).get("phase") == "slm_packed"
-	]
-	assert packed == []
+	assert sum(1 for c in relay.calls if c[0] == "live") == 2
 
 
-def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
+def test_slm_apa_xml_has_all_group_points(tmp_path: Path):
+	"""Each SLM fire XML must list every point in the group (simultaneous)."""
 	steps = parse_mark_points(FAT_XML)
 	pts = extract_unique_points(steps)
 	meta = template_meta(steps)
 	meta["fov_width_um"] = 545.0
-	meta["spiral_size_um"] = "54.5"
-	meta["is_spiral"] = "True"
-	meta["initial_delay_ms"] = 0.0
-	log_path = tmp_path / "slm_single.jsonl"
-	log = JsonlLog(log_path)
+	scope = tmp_path / "apa.xml"
+	log = JsonlLog(tmp_path / "apa.jsonl")
 	relay = _FakeRelayMp()
-	ttl = _FakeTtl()
 	try:
 		rows = run_sync_loop(
 			points=pts,
 			meta=meta,
 			pl=None,
 			log=log,
-			scope_xml=None,
+			scope_xml=str(scope),
 			n_iterations=1,
-			n_groups=2,
+			n_groups=1,
 			group_size=3,
 			powers=[0.75],
 			seed=1,
-			trigger="serial",
-			ttl=ttl,
+			trigger="none",
+			ttl=None,
 			ttl_width_s=0.01,
 			inter_trial_s=0.0,
 			pad_ms=0.0,
@@ -521,37 +511,14 @@ def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
 			elite_frac=0.5,
 			dry_run=False,
 			stim_mode="slm",
-			slm_pack=False,
 		)
 	finally:
 		log.close()
-	# Two groups → two separate -slm commands; two DTR pulses.
-	assert len(rows) == 2
-	slm_calls = [c for c in relay.calls if c[0] == "slm"]
-	assert len(slm_calls) == 2
-	assert all(c[1][0] == "-MarkAllPoints" for c in slm_calls)
-	assert len(ttl.pulses) == 2
-	assert [r["trigger_index"] for r in rows] == [0, 1]
-	assert all(r["n_triggers"] == 2 for r in rows)
-	assert all(r.get("slm_pack") is False for r in rows)
-	# pre-slm LiveScan (FOV amp) + post-stim LiveScan per group.
-	assert sum(1 for c in relay.calls if c[0] == "live") == 4
-	singles = [
-		json.loads(ln)
-		for ln in log_path.read_text(encoding="utf-8").splitlines()
-		if json.loads(ln).get("phase") == "slm_single"
-	]
-	assert len(singles) == 2
-	assert singles[0]["n_triggers"] == 2
-	assert singles[0]["group_trigger_map"][0]["point_ids"] == rows[0]["point_ids"]
-	assert "group 1/2" in rows[0]["summary"]
-	assert "group 2/2" in rows[1]["summary"]
-	packed = [
-		json.loads(ln)
-		for ln in log_path.read_text(encoding="utf-8").splitlines()
-		if json.loads(ln).get("phase") == "slm_packed"
-	]
-	assert packed == []
+	assert len(rows) == 1
+	xml = scope.read_text(encoding="utf-8")
+	assert 'AllPointsAtOnce="True"' in xml
+	for pid in rows[0]["point_ids"]:
+		assert f'Index="{pid}"' in xml or f"Index=\"{pid}\"" in xml
 
 
 RIG_GPL = """<?xml version="1.0" encoding="utf-8"?>

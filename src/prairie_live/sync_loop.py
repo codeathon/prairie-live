@@ -382,26 +382,37 @@ def run_sync_loop(
 			iter_trials: list[dict] = []
 
 			if mode == "slm":
-				# Serial SLM: always one group → one -slm → one DTR (never pack).
-				use_pack = bool(slm_pack) and trigger != "serial"
-				if slm_pack and trigger == "serial":
-					print(
-						"NOTE: serial+slm uses one -slm per group "
-						"(packed multi-set disabled — one TTL per group)"
-					)
+				# Simultaneous group burns via AllPointsAtOnce (-lmp/-mp), not
+				# -MarkAllPoints. Galvo-saved XML + -slm FOV fractions misplaced
+				# burns on this rig (off the cyan rings / only a subset visible).
+				# APA uses the same galvo X/Y as series so the whole group lands
+				# on the overlay at once; one DTR per group when trigger=serial.
+				_ = slm_pack  # packed -MarkAllPoints retired; APA path only
+				print(
+					"stim_mode=slm → AllPointsAtOnce (-LoadMarkPoints/-MarkPoints) "
+					"per group (simultaneous multi-spot on galvo FOV)"
+				)
 				for power in powers:
 					if _stop():
 						print("session stopped")
 						break
-					if use_pack:
-						batch = _run_slm_packed_batch(
-							groups_pts=groups_pts,
+					for gi, gpts in enumerate(groups_pts):
+						if _stop():
+							print("session stopped")
+							break
+						print(
+							f"  group {gi + 1}/{len(groups_pts)}: simultaneous "
+							f"APA pts={[str(p['id']) for p in gpts]} power={power}"
+						)
+						row = _run_series_trial(
+							gpts=gpts,
 							point_pool=points,
+							gi=gi,
+							n_groups=len(groups_pts),
 							power=power,
 							it=it,
-							trial_index_start=trial_index,
+							trial_index=trial_index,
 							meta=meta,
-							slm_params=slm_params,
 							trig_sel=trig_sel,
 							trigger=trigger,
 							ttl=ttl,
@@ -424,51 +435,11 @@ def run_sync_loop(
 							visual_stim=visual_stim,
 							visual_cfg=vcfg,
 							rng=rng,
+							simultaneous=True,
 						)
-						iter_trials.extend(batch)
-						all_trials.extend(batch)
-						trial_index += len(batch)
-					else:
-						for gi, gpts in enumerate(groups_pts):
-							if _stop():
-								print("session stopped")
-								break
-							row = _run_slm_single_trial(
-								gpts=gpts,
-								point_pool=points,
-								gi=gi,
-								n_groups=len(groups_pts),
-								power=power,
-								it=it,
-								trial_index=trial_index,
-								meta=meta,
-								slm_params=slm_params,
-								trig_sel=trig_sel,
-								trigger=trigger,
-								ttl=ttl,
-								ttl_width_s=ttl_width_s,
-								inter_trial_s=inter_trial_s,
-								pad_ms=pad_ms,
-								pl=pl,
-								relay=relay,
-								via_relay=via_relay,
-								scope_xml=scope_xml,
-								log=log,
-								dry_run=dry_run,
-								mock_scores=mock_scores,
-								f0_s=f0_s,
-								f1_s=f1_s,
-								frame_poll_s=frame_poll_s,
-								disk_radius=disk_radius,
-								run_root=run_root,
-								on_trial=on_trial,
-								visual_stim=visual_stim,
-								visual_cfg=vcfg,
-								rng=rng,
-							)
-							iter_trials.append(row)
-							all_trials.append(row)
-							trial_index += 1
+						iter_trials.append(row)
+						all_trials.append(row)
+						trial_index += 1
 			else:
 				# Full FOV at each power (same order as SLM): every point × every power.
 				for power in powers:
@@ -1462,6 +1433,19 @@ def _run_slm_single_trial(
 	return row
 
 
+def _galvo_points_for_simultaneous(gpts: list[dict]) -> list[dict]:
+	"""Prefer stored galvo volts so AllPointsAtOnce matches the cyan overlay."""
+	out: list[dict] = []
+	for p in gpts:
+		row = dict(p)
+		gx, gy = p.get("x_galvo"), p.get("y_galvo")
+		if gx not in (None, "") and gy not in (None, ""):
+			row["x"], row["y"] = float(gx), float(gy)
+			row["coord_space"] = "galvo"
+		out.append(row)
+	return out
+
+
 def _run_series_trial(
 	*,
 	gpts: list[dict],
@@ -1493,12 +1477,42 @@ def _run_series_trial(
 	visual_stim: Any,
 	visual_cfg: Any,
 	rng: random.Random,
+	simultaneous: bool = False,
+	n_groups: int = 1,
 ) -> dict:
-	"""One group × power via -LoadMarkPoints / -MarkPoints."""
+	"""One group × power via -LoadMarkPoints / -MarkPoints.
+
+	simultaneous=True (stim_mode=slm): AllPointsAtOnce fat XML so every point
+	in the group burns together at native galvo positions (overlay-aligned).
+	"""
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
-	# FOV-locked pool (coord_space=fov) is 0–1; series XML needs live galvo.
 	fire_pts = gpts
-	if (
+	if simultaneous:
+		# Restore galvo from x_galvo when present; else map FOV→galvo for fire.
+		fire_pts = _galvo_points_for_simultaneous(gpts)
+		need_map = any(
+			p.get("coord_space") == "fov"
+			or (
+				0.0 <= float(p["x"]) <= 1.0
+				and 0.0 <= float(p["y"]) <= 1.0
+				and p.get("x_galvo") in (None, "")
+			)
+			for p in fire_pts
+		)
+		if need_map and not dry_run and relay is not None:
+			from prairie_live.scan_geometry import points_to_galvo_for_series
+
+			fire_pts, fov_note = points_to_galvo_for_series(
+				fire_pts,
+				relay,
+				fov_width_um=(
+					float(meta["fov_width_um"])
+					if meta.get("fov_width_um") not in (None, "")
+					else None
+				),
+			)
+			print(f"  {fov_note}")
+	elif (
 		not dry_run
 		and relay is not None
 		and gpts
@@ -1506,6 +1520,7 @@ def _run_series_trial(
 	):
 		from prairie_live.scan_geometry import points_to_galvo_for_series
 
+		# FOV-locked pool (coord_space=fov) is 0–1; series XML needs live galvo.
 		fire_pts, fov_note = points_to_galvo_for_series(
 			gpts,
 			relay,
@@ -1524,16 +1539,22 @@ def _run_series_trial(
 					f"({float(p['x']):.3f}, {float(p['y']):.3f}) "
 					f"spiral={p.get('spiral_size_fov') or '—'}"
 				)
-	# AllPointsAtOnce+spiral after -slm has crashed PV (Int32 DAC overflow).
 	series_meta = dict(meta)
-	series_meta["all_points_at_once"] = "False"
+	if simultaneous:
+		# Fat layout + APA: one MarkPointElement, all group Points at once.
+		# (pv_saved per-point XML fires sequentially — not a simultaneous group.)
+		series_meta["all_points_at_once"] = "True"
+		series_meta["pv_saved_format"] = False
+	else:
+		# Sequential series: APA+spiral after a prior -slm run has crashed PV.
+		series_meta["all_points_at_once"] = "False"
 	if trigger == "none":
 		series_meta["trigger_selection"] = "None"
 		series_meta["trigger_frequency"] = "None"
 		series_meta["trigger_identifier"] = "00000000-0000-0000-0000-000000000000"
 	# Keep file spiral timing when present — experiment 100ms/5 revs on a
 	# PV-saved 36ms/8 spiral has also tripped the spiral DAC.
-	if series_meta.get("pv_saved_format"):
+	if meta.get("pv_saved_format") or simultaneous:
 		for pt in fire_pts:
 			if pt.get("duration") not in (None, ""):
 				series_meta["duration"] = float(pt["duration"])
@@ -1565,7 +1586,8 @@ def _run_series_trial(
 		"power": power,
 		"trigger": trigger,
 		"trigger_selection": trig_sel,
-		"stim_mode": "series",
+		"stim_mode": "slm" if simultaneous else "series",
+		"all_points_at_once": bool(simultaneous),
 		"t_cmd": None,
 		"t_ttl": None,
 		"score": None,
@@ -1626,9 +1648,10 @@ def _run_series_trial(
 
 		# Timing: load done → -mp starts → arm_delay (PV enters FirstRepetition
 		# wait on the group's first point) → one DTR → join until group DONE.
+		how = "simultaneous APA" if simultaneous else "series"
 		print(
-			f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids} "
-			f"(1 DTR after arm, then wait ~{wait_s:.2f}s for group)"
+			f"  trial {trial_index}: -lmp/-mp {gname} ({how}) power={power} "
+			f"pts={point_ids} (1 DTR after arm, then wait ~{wait_s:.2f}s)"
 		)
 		run_while_pulsing_dtr(
 			_do_mp,
@@ -1654,7 +1677,11 @@ def _run_series_trial(
 			no_wait=False,
 			timeout=mp_timeout,
 		)
-		print(f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids}")
+		how = "simultaneous APA" if simultaneous else "series"
+		print(
+			f"  trial {trial_index}: -lmp/-mp {gname} ({how}) "
+			f"power={power} pts={point_ids}"
+		)
 		f0_b, f1_frames = _run_stim_epoch(
 			row,
 			trigger=trigger,
@@ -1677,8 +1704,15 @@ def _run_series_trial(
 		if not f0_frames:
 			f0_frames = f0_b
 
-	row["n_triggers"] = n_pulses
-	row["trigger_index"] = 0
+	if simultaneous:
+		# Log group i/N (same as former -slm single path).
+		row["trigger_index"] = gi
+		row["n_triggers"] = max(int(n_groups), 1)
+		# APA / Mark Points often drop LiveScan — restore FOV for power tiles.
+		_ensure_live_after_stim(relay=relay, pl=pl, via_relay=via_relay)
+	else:
+		row["n_triggers"] = n_pulses
+		row["trigger_index"] = 0
 
 	_finish_trial_frames(
 		row,
@@ -2208,40 +2242,22 @@ def execute_session(
 			f"reps={meta.get('repetitions')})"
 		)
 	if oob:
-		if stim_mode == "slm":
-			print(
-				f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
-				"They will be locked to the live FOV (same as the cyan overlay) before fire."
-			)
-		else:
-			print(
-				f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
-				"series keeps native X/Y/SpiralSize (no FOV remapping)."
-			)
+		print(
+			f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
+			f"{stim_mode} keeps native X/Y/SpiralSize (same as the cyan overlay)."
+		)
 		for p in oob[:5]:
 			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
 	if stim_mode == "slm":
-		# Spiral µm→FOV fraction needs optical FOV width (not in MarkPoints XML).
-		spiral_on = str(meta.get("is_spiral", "True")).lower() in ("true", "1", "yes")
-		if spiral_on and meta.get("fov_width_um") in (None, ""):
-			raise SystemExit(
-				"stim_mode=slm with spiral requires fov_width_um in experiment.json "
-				"(µm across the FOV; used to convert spiral_size_um → -slm fraction)"
-			)
-		pack = bool(opt.get("slm_pack", False)) and str(opt.get("trigger") or "") != "serial"
 		if str(opt.get("trigger") or "") == "serial":
 			print(
-				"stim_mode=slm + serial → each group: arm -slm → 1 DTR → burn → LiveScan"
-			)
-		elif pack:
-			print(
-				"stim_mode=slm slm_pack=true → one packed -MarkAllPoints per power "
-				"(DTR once per group; series XML if scope_xml set)"
+				"stim_mode=slm + serial → each group: AllPointsAtOnce "
+				"(-lmp/-mp) → 1 DTR → whole group burns together"
 			)
 		else:
 			print(
-				"stim_mode=slm → one -MarkAllPoints per group×power "
-				"(DTR once per group when trigger=serial)"
+				"stim_mode=slm → each group: AllPointsAtOnce (-lmp/-mp) "
+				"simultaneous multi-spot on galvo FOV"
 			)
 	if opt.get("inspect"):
 		zero = 0
@@ -2331,63 +2347,12 @@ def execute_session(
 				+ ", ".join(str(n) for n in (clr.get("notes") or []))
 			)
 
-		# SLM (-MarkAllPoints) needs FOV 0–1. Series with PV-saved galvo XML must
-		# keep native X/Y/SpiralSize (FOV round-trip + experiment duration/revs
-		# has crashed PV spiral DAC — Int32 overflow).
-		# Store galvo on each point here; each -slm re-reads live amp/center so
-		# burns track the cyan overlay (session-start amp after Abort can be stale).
-		if not opt.get("dry_run") and relay is not None and stim_mode == "slm":
-			from prairie_live.scan_geometry import prepare_points_for_live_fov
-
-			# Extra settle so currentScanAmplitude matches the live FOV overlay.
-			_ensure_live_after_stim(
-				relay=relay,
-				pl=pl,
-				via_relay=via_relay,
-				settle_s=0.6,
-				label="pre-FOV-lock",
-			)
-			try:
-				points, map_note = prepare_points_for_live_fov(points, relay)
-				print(f"FOV lock: {map_note}")
-				for p in points[:8]:
-					gx = p.get("x_galvo")
-					gy = p.get("y_galvo")
-					if gx is not None and gy is not None:
-						print(
-							f"  Point {p['id']}  galvo ({float(gx):.4f}, {float(gy):.4f}) "
-							f"→ FOV ({float(p['x']):.4f}, {float(p['y']):.4f})"
-						)
-					else:
-						print(
-							f"  Point {p['id']}  FOV ({float(p['x']):.4f}, {float(p['y']):.4f})"
-						)
-				n_oob = sum(
-					1
-					for p in points
-					if not (
-						0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0
-					)
-				)
-				if n_oob:
-					raise SystemExit(
-						f"{n_oob}/{len(points)} points are outside the live FOV — "
-						"SLM would burn off-image. Pan/zoom so rings sit inside the "
-						"frame, or re-pick Mark Points on this FOV."
-					)
-			except SystemExit:
-				raise
-			except Exception as exc:
-				# Do not silently fall back to series — UI still says Use SLM.
-				raise SystemExit(
-					f"cannot lock galvo Mark Points to live FOV for SLM ({exc}). "
-					"Check relay + LiveScan, then retry. "
-					"Or set stim_mode=series to fire native galvo XML."
-				) from exc
-		elif stim_mode == "series" and oob:
+		# SLM = AllPointsAtOnce at native galvo (same coords as working series).
+		# Do not FOV-lock / -MarkAllPoints here — that misplaced burns vs overlay.
+		if stim_mode in ("slm", "series") and oob:
 			print(
-				f"series: firing {len(oob)} galvo points as-is (PV-saved X/Y/SpiralSize); "
-				"no FOV remapping"
+				f"{stim_mode}: firing {len(oob)} galvo points as-is "
+				f"(PV-saved X/Y/SpiralSize); no FOV remapping"
 			)
 
 		show = (

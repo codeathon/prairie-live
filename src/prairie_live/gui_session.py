@@ -139,8 +139,7 @@ def apply_gui_overrides(
 		else n_groups_for_pool(n_points, GROUP_SIZE)
 	)
 	opt["iterations"] = max(int(opt.get("iterations") or 1), 1)
-	# One -slm per group (not packed). Packed multi-set + Trig In 1 on this
-	# rig finished in one flash and left LiveScan off (dark power tiles).
+	# SLM = AllPointsAtOnce per group (not -MarkAllPoints / not packed).
 	opt["slm_pack"] = False
 	opt["cover_all"] = True
 	if via_relay:
