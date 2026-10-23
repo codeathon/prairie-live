@@ -377,6 +377,9 @@ class Handler(BaseHTTPRequestHandler):
 				f"trigger={opt['trigger']}  visual={vis}  "
 				f"lead_ms={opt.get('visual_lead_ms')}  trials={n_t}"
 			)
+			STATE.append(
+				"clearing any leftover PV Mark Points / -slm from a prior run…"
+			)
 
 			def work() -> None:
 				from prairie_live.sync_loop import execute_session

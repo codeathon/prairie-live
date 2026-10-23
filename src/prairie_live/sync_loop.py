@@ -1871,6 +1871,18 @@ def execute_session(
 				password=str(opt["password"]),
 			)
 
+		# Prior Run (often stim_mode=slm) can leave -MarkAllPoints armed; the
+		# next series -MarkPoints then hits "another task already in progress"
+		# and/or E:\Markpoints folder dialogs. Clear once here, not per trial.
+		if not opt.get("dry_run"):
+			from prairie_live.pv_cleanup import clear_prior_stim_on_client
+
+			clr = clear_prior_stim_on_client(relay, pl)
+			print(
+				"session start: clear leftover PV stim → "
+				+ ", ".join(str(n) for n in (clr.get("notes") or []))
+			)
+
 		# SLM needs 0–1 FOV; convert galvo XML using live scan geometry.
 		if stim_mode == "slm" and oob:
 			from prairie_live.scan_geometry import prepare_points_for_slm

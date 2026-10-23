@@ -33,11 +33,21 @@ def test_empty_series_has_no_points():
 
 def test_abort_and_clear_stim_order():
 	c = FakeClient()
-	out = abort_and_clear_stim(c)
+	out = abort_and_clear_stim(c, settle_s=0.0)
 	assert out["ok"] is True
-	# Stop: Abort + Live only (no empty -lmp — that fought PV's E:\Markpoints save).
+	# Session start / Stop: Abort + Live (no per-trial Abort).
 	assert c.calls == ["abort", "live"]
 	assert out["notes"] == ["abort", "live"]
+
+
+def test_clear_prior_skips_fake_without_abort():
+	from prairie_live.pv_cleanup import clear_prior_stim_on_client
+
+	class NoAbort:
+		pass
+
+	out = clear_prior_stim_on_client(NoAbort(), None)
+	assert out["notes"] == ["skipped"]
 
 
 def test_relay_abort_clear_stim_command():

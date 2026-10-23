@@ -1,32 +1,30 @@
-"""Abort in-flight PV stim and clear leftover Mark Points state.
+"""Abort in-flight PV stim (session start + Stop — not between trials).
 
-Stop used to only set a Python flag, so a waiting -MarkAllPoints / -MarkPoints
-(Trig In 1) or a -LoadMarkPoints series could still fire from the PV GUI.
+A prior -slm / -MarkPoints with -NoWait can still be \"in progress\" when the
+next Run starts (e.g. SLM then series). Clear once at session start.
 """
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
-# Minimal series so -LoadMarkPoints replaces whatever our session last pushed.
+# Kept for tests / optional manual clear; Stop no longer loads this by default.
 EMPTY_MARK_POINTS_XML = """<?xml version="1.0" encoding="utf-8"?>
 <PVMarkPointSeriesElements Iterations="1" IterationDelay="0.00" CalcFunctMap="False" AllPointsAtOnce="False" Use3D="False">
 </PVMarkPointSeriesElements>
 """
 
 
-def abort_and_clear_stim(client: Any) -> dict[str, Any]:
+def abort_and_clear_stim(client: Any, *, settle_s: float = 0.35) -> dict[str, Any]:
 	"""
-	``client``: RelayClient or anything with abort / load_mark_points / start_live.
+	``client``: RelayClient or anything with abort / start_live.
 
-	Stop only — not between trials. Aborting every trial finalizes PV's Mark
-	Points save into E:\\Markpoints\\… and pops a delete-folder dialog.
+	1. -Silent -Abort — cancel armed -slm / -MarkPoints (and suppress boxes)
+	2. brief settle — let PV drop the prior task before the next -lmp/-mp
+	3. -LiveScan — Abort also kills Live; restore FOV for the relay grabber
 
-	1. -Silent -Abort — cancel armed mark-point / script work (no message box)
-	2. -LiveScan — Abort also kills Live; restore FOV for the relay grabber
-
-	We no longer -LoadMarkPoints an empty series here: that fought PV's save
-	path and was easy to confuse with cleanup errors.
+	Call at **session start** and on **Stop**, never between every trial.
 	"""
 	notes: list[str] = []
 	ok = True
@@ -41,16 +39,35 @@ def abort_and_clear_stim(client: Any) -> dict[str, Any]:
 		ok = False
 		notes.append(f"abort_err:{exc}")
 
+	if settle_s and settle_s > 0:
+		time.sleep(float(settle_s))
+		notes.append(f"settle_{settle_s:g}s")
+
 	try:
 		out = client.start_live()
 		notes.append("live")
 		if isinstance(out, dict) and out.get("ok") is False:
-			# Non-fatal: user can click Live in PV.
 			notes.append(f"live_fail:{out.get('error', out)}")
 	except Exception as exc:
 		notes.append(f"live_err:{exc}")
 
 	return {"ok": ok, "notes": notes}
+
+
+def clear_prior_stim_on_client(relay: Any | None, pl: Any | None) -> dict[str, Any]:
+	"""Best-effort session-start clear; no-op if client has no abort()."""
+	if relay is not None and hasattr(relay, "abort"):
+		return abort_and_clear_stim(relay)
+	if pl is not None and hasattr(pl, "send_command"):
+		# Direct PrairieLink (no RelayClient wrapper).
+		try:
+			pl.send_command("-Silent", "-Abort")
+			time.sleep(0.35)
+			pl.send_command("-LiveScan")
+			return {"ok": True, "notes": ["abort", "settle_0.35s", "live"]}
+		except Exception as exc:
+			return {"ok": False, "notes": [f"pl_err:{exc}"]}
+	return {"ok": True, "notes": ["skipped"]}
 
 
 def abort_and_clear_at(addr: str) -> dict[str, Any]:
