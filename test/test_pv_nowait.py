@@ -65,12 +65,55 @@ def test_run_while_pulsing_dtr_starts_mp_before_dtr():
 		n_pulses=1,
 		ttl_width_s=0.01,
 		arm_delay_s=0.05,
+		rescue_window_s=0.0,
 	)
 	assert out == "ok"
 	assert ttl.pulses == [0.01]
 	assert order == ["mp_enter", "mp_done"]
 	# Pulse after arm_delay, while Mark Points was still running.
 	assert ttl.times[0] - t0 >= 0.04
+
+
+def test_packed_slm_emits_exactly_one_dtr_per_group_no_rescue():
+	"""Extra edges would release the next packed hologram early."""
+	ttl = _FakeTtl()
+
+	def _slm() -> str:
+		# Longer than arm + all gaps + pulses — must not add rescue DTRs.
+		time.sleep(0.55)
+		return "ok"
+
+	out = run_while_pulsing_dtr(
+		_slm,
+		ttl=ttl,
+		n_pulses=3,
+		ttl_width_s=0.01,
+		gap_s=0.05,
+		arm_delay_s=0.05,
+		rescue_window_s=2.0,  # forced off when n_pulses > 1
+	)
+	assert out == "ok"
+	assert ttl.pulses == [0.01, 0.01, 0.01]
+
+
+def test_single_dtr_no_rescue_during_long_stim_dwell():
+	"""Thread stays alive while hologram burns — that is not a missed arm."""
+	ttl = _FakeTtl()
+
+	def _slm() -> str:
+		time.sleep(0.6)
+		return "ok"
+
+	out = run_while_pulsing_dtr(
+		_slm,
+		ttl=ttl,
+		n_pulses=1,
+		ttl_width_s=0.01,
+		arm_delay_s=0.05,
+		rescue_window_s=0.1,  # arm window ends ~0.15s; dwell continues
+	)
+	assert out == "ok"
+	assert ttl.pulses == [0.01]
 
 
 def test_slm_script_power_keeps_ui_scale():

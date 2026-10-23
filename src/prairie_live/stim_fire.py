@@ -1,16 +1,19 @@
-"""Fire Mark Points while pulsing DTR (no -NoWait).
+"""Fire Mark Points / -slm while pulsing DTR (no -NoWait).
 
 -NoWait made DONE return before PV was waiting on Trig In 1, so later DTR
 pulses never released the hologram/series — no burns.
 
-Order that works:
+Order that works (exactly the planned edges — typically one per group):
   1. Finish -LoadMarkPoints / -Wait *before* calling this helper.
   2. Start blocking -MarkPoints / -slm on a worker thread.
   3. After ``arm_delay_s``, pulse DTR (Trig In 1) on the main thread.
-  4. Join until PV returns DONE.
+  4. For multi-pulse (packed SLM): sleep ``gap_s``, then next planned pulse.
+  5. Optional short *arm-phase* rescue only if the first edge was early.
+  6. Join until PV returns DONE with **no** further DTR.
 
-Starting the DTR countdown before load/Wait made the rising edge arrive while
-PV was still loading — serial looked dead while trigger=none still burned.
+Rescue used to fire for the whole stim dwell (thread still alive while the
+hologram/series runs). That added extra Trig In 1 edges and broke
+\"one TTL per group\". Rescues now stop once the arming window ends.
 """
 
 from __future__ import annotations
@@ -28,17 +31,26 @@ def run_while_pulsing_dtr(
 	ttl_width_s: float = 0.01,
 	gap_s: float = 0.0,
 	arm_delay_s: float = 0.25,
+	rescue_window_s: float = 0.75,
+	join_timeout_s: float | None = None,
 	row: dict[str, Any] | None = None,
 	on_pulse: Callable[[int], None] | None = None,
 ) -> Any:
 	"""
-	Run blocking ``fn()`` (Mark Points / -slm) and pulse DTR after it has started.
+	Run blocking ``fn()`` and emit exactly ``n_pulses`` planned DTR edges.
 
 	``arm_delay_s``: pause after starting ``fn`` so PV can enter Wait-for-Trigger
-	before the first rising edge. Do not include load/Wait time here — finish
-	those before calling this helper.
+	before the first rising edge. Finish load/Wait before calling this helper.
+
+	``rescue_window_s``: after the *first* planned pulse, allow a few re-pokes
+	only until ``arm_delay_s + rescue_window_s`` from thread start — for a
+	missed first arm. Set 0 to disable (required for packed multi-group SLM,
+	where an extra edge would release the next group early).
 	"""
 	n_pulses = max(int(n_pulses), 1)
+	# Extra edges between packed sets would steal the next group's trigger.
+	if n_pulses > 1:
+		rescue_window_s = 0.0
 	errors: list[BaseException] = []
 	result: list[Any] = []
 
@@ -48,15 +60,20 @@ def run_while_pulsing_dtr(
 		except BaseException as exc:  # noqa: BLE001 — surface on join
 			errors.append(exc)
 
-	# Headroom for arm delay + all pulses + gaps + long series/SLM.
 	pulse_budget_s = (
 		max(float(arm_delay_s), 0.0)
 		+ n_pulses * max(float(ttl_width_s), 0.0)
 		+ max(n_pulses - 1, 0) * max(float(gap_s), 0.0)
+		+ max(float(rescue_window_s), 0.0)
 		+ 5.0
 	)
-	join_s = max(180.0, pulse_budget_s)
+	join_s = (
+		float(join_timeout_s)
+		if join_timeout_s is not None
+		else max(180.0, pulse_budget_s)
+	)
 
+	t0 = time.monotonic()
 	th = threading.Thread(target=_run_fn, name="mp-blocking", daemon=True)
 	th.start()
 	try:
@@ -73,15 +90,26 @@ def run_while_pulsing_dtr(
 				on_pulse(i)
 			if i < n_pulses - 1 and gap_s > 0:
 				time.sleep(float(gap_s))
-		# If the first edge was early (PV not armed yet), keep poking Trig In 1.
+		# Arm-phase rescue only (not during hologram/series dwell).
+		arm_deadline = t0 + max(float(arm_delay_s), 0.0) + max(
+			float(rescue_window_s), 0.0
+		)
 		rescues = 0
-		while th.is_alive() and not errors and rescues < 15:
-			time.sleep(0.35)
-			if not th.is_alive() or errors:
+		while (
+			th.is_alive()
+			and not errors
+			and rescues < 4
+			and time.monotonic() < arm_deadline
+		):
+			time.sleep(0.2)
+			if not th.is_alive() or errors or time.monotonic() >= arm_deadline:
 				break
 			ttl.pulse_dtr(float(ttl_width_s))
 			rescues += 1
-			print(f"  DTR rescue pulse {rescues} (Mark Points still waiting on Trig In 1)")
+			print(
+				f"  DTR rescue pulse {rescues} "
+				"(still waiting on Trig In 1 in arm window)"
+			)
 	finally:
 		th.join(timeout=join_s)
 

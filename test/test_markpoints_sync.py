@@ -443,11 +443,12 @@ def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
 		)
 	finally:
 		log.close()
-	# One packed -slm; two DTR pulses in group order.
+	# One packed -slm; exactly one DTR per group (no rescue extras).
 	assert len(relay.calls) == 1
 	assert relay.calls[0][0] == "slm"
 	assert len(ttl.pulses) == 2
 	assert [r["trigger_index"] for r in rows] == [0, 1]
+	assert all(r["n_triggers"] == 2 for r in rows)
 	assert "summary" in rows[0]
 	packed = [
 		json.loads(ln)
@@ -644,15 +645,70 @@ def test_pv_saved_serial_writes_trig_in_1_guid_not_null():
 	)
 	root = ET.fromstring(groups_to_xml([step]))
 	els = root.findall("PVMarkPointElement")
+	# One wait per group: first point only; later points free-run after that DTR.
 	assert els[0].get("TriggerSelection") == "Trig In 1"
 	assert els[0].get("TriggerFrequency") == "FirstRepetition"
 	assert els[0].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
 	assert els[0].get("TriggerIdentifier") != NO_TRIGGER_IDENTIFIER
-	# Match PV-saved XML: every point waits on Trig In 1 / FirstRepetition.
-	assert els[1].get("TriggerSelection") == "Trig In 1"
-	assert els[1].get("TriggerFrequency") == "FirstRepetition"
-	assert els[1].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
-	assert els[2].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
+	assert els[1].get("TriggerSelection") is None
+	assert els[1].get("TriggerFrequency") == "None"
+	assert els[1].get("TriggerIdentifier") == NO_TRIGGER_IDENTIFIER
+	assert els[2].get("TriggerFrequency") == "None"
+	assert els[2].get("TriggerIdentifier") == NO_TRIGGER_IDENTIFIER
+
+
+def test_series_serial_one_dtr_per_group(tmp_path: Path):
+	"""Serial series: one DTR per group trial, not one per point."""
+	from prairie_live.lab_defaults import (
+		DEFAULT_TRIGGER_FREQUENCY,
+		DEFAULT_TRIGGER_IDENTIFIER,
+		DEFAULT_TRIGGER_SELECTION,
+	)
+	from prairie_live.markpoints import load_mark_points_file
+
+	steps = load_mark_points_file("samples/MarkPoints_25_trig_in1.xml")
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["trigger_selection"] = DEFAULT_TRIGGER_SELECTION
+	meta["trigger_frequency"] = DEFAULT_TRIGGER_FREQUENCY
+	meta["trigger_identifier"] = DEFAULT_TRIGGER_IDENTIFIER
+	log = JsonlLog(tmp_path / "series_serial.jsonl")
+	relay = _FakeRelayMp()
+	ttl = _FakeTtl()
+	try:
+		rows = run_sync_loop(
+			points=pts[:6],
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=str(tmp_path / "trial.xml"),
+			n_iterations=1,
+			n_groups=2,
+			group_size=3,
+			powers=[160.0],
+			seed=1,
+			trigger="serial",
+			ttl=ttl,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+			stim_mode="series",
+			cover_all=False,
+		)
+	finally:
+		log.close()
+	assert len(rows) == 2
+	assert len(ttl.pulses) == 2
+	assert all(r["n_triggers"] == 1 for r in rows)
 
 
 def test_trigger_none_clears_file_trig_in_1_guid():

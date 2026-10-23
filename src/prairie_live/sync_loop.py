@@ -889,6 +889,7 @@ def _run_slm_packed_batch(
 		+ float(inter_trial_s) * 1000.0
 	)
 	# -slm wants UI UncagingLaserPower (160), not series XML fraction (0.4).
+	# trigger_count=1: one Trig In 1 edge releases each packed hologram/group.
 	slm_pwr = _slm_script_power(power, meta)
 	print(f"  SLM power (UI scale) → -slm {slm_pwr:g}")
 	slm_parts = pack_mark_all_points(
@@ -902,7 +903,7 @@ def _run_slm_packed_batch(
 		spiral_revolutions=slm_params["spiral_revolutions"],
 		fov_width_um=slm_params["fov_width_um"],
 		trigger_selection=trig_sel,
-		trigger_count=slm_params.get("trigger_count", 1),
+		trigger_count=1,
 		delay_ms=delay_ms,
 	)
 	# Audit XML: one MarkPoint step per group (same order as packed -slm).
@@ -1012,9 +1013,11 @@ def _run_slm_packed_batch(
 				f"pts={entry['point_ids']}"
 			)
 
+		# Timing: one planned DTR per group, spaced by PV Delay (gap_s).
+		# No rescue pulses — an extra edge would release the next group early.
 		print(
 			f"  packed -slm power={power} (-slm {slm_pwr:g}) n_groups={n} "
-			f"(DTR during wait, {n} triggers)"
+			f"(1 DTR/group, gap={gap_s:.3f}s)"
 		)
 		print("  pulse map:")
 		for e in group_map:
@@ -1028,6 +1031,9 @@ def _run_slm_packed_batch(
 			n_pulses=n,
 			ttl_width_s=ttl_width_s,
 			gap_s=gap_s if n > 1 else 0.0,
+			arm_delay_s=0.25,
+			rescue_window_s=0.0,
+			join_timeout_s=mp_timeout,
 			on_pulse=_on_pulse,
 		)
 	else:
@@ -1193,7 +1199,7 @@ def _run_slm_single_trial(
 		spiral_revolutions=slm_params["spiral_revolutions"],
 		fov_width_um=slm_params["fov_width_um"],
 		trigger_selection=trig_sel,
-		trigger_count=slm_params.get("trigger_count", 1),
+		trigger_count=1,
 		delay_ms=0.0,
 	)
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
@@ -1307,13 +1313,17 @@ def _run_slm_single_trial(
 
 		print(
 			f"  single -slm trial {trial_index}: {gname} "
-			f"power={power} (-slm {slm_pwr:g}) pts={point_ids} (DTR during wait)"
+			f"power={power} (-slm {slm_pwr:g}) pts={point_ids} "
+			f"(1 DTR after arm, then wait ~{wait_s:.2f}s)"
 		)
 		run_while_pulsing_dtr(
 			_do_slm,
 			ttl=ttl,
 			n_pulses=1,
 			ttl_width_s=ttl_width_s,
+			arm_delay_s=0.25,
+			rescue_window_s=0.75,
+			join_timeout_s=max(180.0, wait_s + 60.0),
 			row=row,
 			on_pulse=lambda _i: print(trigger_msg),
 		)
@@ -1491,24 +1501,10 @@ def _run_series_trial(
 	if scope_xml:
 		write_scope_xml(series, scope_xml)
 
-	# PV-saved XML: each point has FirstRepetition → one DTR per point.
-	per_point_trig = (
-		trigger == "serial"
-		and bool(meta.get("pv_saved_format"))
-		and str(meta.get("trigger_frequency") or "").lower()
-		not in ("none", "")
-	)
-	n_pulses = len(gpts) if per_point_trig and gpts else 1
-	reps = max(int(meta.get("repetitions", 1)), 1)
-	dur_s = float(meta.get("duration", 0) or 0) / 1000.0
-	inter_s = float(meta.get("inter_point_delay_ms") or meta.get("inter_point_delay") or 0)
-	if inter_s > 5:
-		inter_s = inter_s / 1000.0
-	between = max(dur_s * reps + inter_s, 0.0)
+	# One DTR per group trial (FirstRepetition only on the group's first point).
+	n_pulses = 1
 	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
-	if n_pulses > 1:
-		wait_s = max(between + pad_ms / 1000.0, 0.0)
-	mp_timeout = max(180.0, wait_s * n_pulses + 60.0)
+	mp_timeout = max(180.0, wait_s + 60.0)
 
 	want = _want_frames(
 		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
@@ -1552,17 +1548,23 @@ def _run_series_trial(
 				timeout=mp_timeout,
 			)
 
-		print(f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids} (DTR during wait)")
+		# Timing: load done → -mp starts → arm_delay (PV enters FirstRepetition
+		# wait on the group's first point) → one DTR → join until group DONE.
+		print(
+			f"  trial {trial_index}: -lmp/-mp {gname} power={power} pts={point_ids} "
+			f"(1 DTR after arm, then wait ~{wait_s:.2f}s for group)"
+		)
 		run_while_pulsing_dtr(
 			_do_mp,
 			ttl=ttl,
-			n_pulses=n_pulses,
+			n_pulses=1,
 			ttl_width_s=ttl_width_s,
-			gap_s=between if n_pulses > 1 else 0.0,
+			gap_s=0.0,
+			arm_delay_s=0.25,
+			rescue_window_s=1.5,
+			join_timeout_s=mp_timeout,
 			row=row,
-			on_pulse=lambda i: print(
-				f"{trig_msg}  (pulse {i}/{n_pulses - 1})" if n_pulses > 1 else trig_msg
-			),
+			on_pulse=lambda _i: print(trig_msg),
 		)
 		if want:
 			f1_frames = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
@@ -1594,7 +1596,7 @@ def _run_series_trial(
 			wait_s=wait_s,
 			trigger_msg=trig_msg,
 			n_pulses=n_pulses,
-			wait_between_pulses_s=between if n_pulses > 1 else 0.0,
+			wait_between_pulses_s=0.0,
 		)
 		if not f0_frames:
 			f0_frames = f0_b
