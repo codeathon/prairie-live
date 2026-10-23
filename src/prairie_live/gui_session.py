@@ -113,6 +113,13 @@ def apply_gui_overrides(
 	stim_mode: str | None = None,
 	trigger: str | None = None,
 	xml_fields: dict[str, Any] | None = None,
+	visual_enabled: bool | None = None,
+	visual_screen: int | None = None,
+	visual_refresh_hz: float | None = None,
+	visual_isi_s: float | None = None,
+	visual_lead_ms: float | None = None,
+	visual_grating_frames: int | None = None,
+	visual_dtr_frames: int | None = None,
 ) -> dict[str, Any]:
 	"""Lab defaults (not experiment.json) plus the form / XML fields."""
 	from prairie_live.lab_defaults import STIM_MODES, TRIGGERS, lab_defaults
@@ -149,6 +156,20 @@ def apply_gui_overrides(
 		if mode not in STIM_MODES:
 			raise ValueError(f"stim_mode must be one of {STIM_MODES}")
 		opt["stim_mode"] = mode
+	if visual_enabled is not None:
+		opt["visual_enabled"] = bool(visual_enabled)
+	if visual_screen is not None:
+		opt["visual_screen"] = max(int(visual_screen), 0)
+	if visual_refresh_hz is not None:
+		opt["visual_refresh_hz"] = float(visual_refresh_hz)
+	if visual_isi_s is not None:
+		opt["visual_isi_s"] = float(visual_isi_s)
+	if visual_lead_ms is not None:
+		opt["visual_lead_ms"] = float(visual_lead_ms)
+	if visual_grating_frames is not None:
+		opt["visual_grating_frames"] = max(int(visual_grating_frames), 1)
+	if visual_dtr_frames is not None:
+		opt["visual_dtr_frames"] = max(int(visual_dtr_frames), 1)
 	if xml_fields:
 		for key in (
 			"duration_ms",

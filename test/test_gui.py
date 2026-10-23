@@ -104,6 +104,37 @@ def test_gui_overrides_cover_pool():
 	assert opt["powers"] == [80.0, 140.0]
 	assert opt["repetitions"] == 2
 	assert opt["via_relay"] == "10.0.0.1:25100"
+	assert opt["visual_enabled"] is False
+
+
+def test_gui_overrides_psychopy_visual():
+	opt = apply_gui_overrides(
+		None,
+		series="samples/MarkPoints_8fov.xml",
+		powers=[40.0],
+		seed=0,
+		repetitions=1,
+		stim_dff_min=0.0,
+		n_points=8,
+		visual_enabled=True,
+		visual_screen=1,
+		visual_refresh_hz=120,
+		visual_isi_s=2.0,
+		visual_lead_ms=100,
+		visual_grating_frames=119,
+		visual_dtr_frames=6,
+	)
+	assert opt["visual_enabled"] is True
+	assert opt["visual_screen"] == 1
+	assert opt["visual_lead_ms"] == 100.0
+	assert opt["visual_grating_frames"] == 119
+	assert opt["visual_dtr_frames"] == 6
+	from prairie_live.visual_stim import visual_config_from_dict
+
+	vcfg = visual_config_from_dict(opt)
+	assert vcfg.enabled is True
+	assert vcfg.lead_ms == 100.0
+	assert vcfg.grating_frames == 119
 
 
 def test_board_highlights_changed_only_over_threshold():

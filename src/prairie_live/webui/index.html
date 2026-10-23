@@ -41,7 +41,40 @@
     <div class="row">
       <label>Serial <select id="serial"></select></label>
       <label>Stim mode <select id="stim_mode"></select></label>
-      <label title="serial: PV waits for the COM DTR pulse on PFI1. none: PV fires immediately.">Trigger <select id="trigger"></select></label>
+      <label title="serial: PV waits for the COM DTR pulse on Trig In 1. none: PV fires immediately.">Trigger <select id="trigger"></select></label>
+    </div>
+  </section>
+
+  <section class="card visual-card">
+    <h2>PsychoPy visual</h2>
+    <label class="check" title="Grating on analysis-PC screen; RTS during grating, DTR photostim after lead time">
+      <input id="visual_enabled" type="checkbox" />
+      Enable gratings + timed photostim
+    </label>
+    <p class="muted small">RTS = visual epoch · DTR → Trig In 1 at lead time (needs PsychoPy on this PC)</p>
+    <div id="visual_opts" class="visual-opts" hidden>
+      <div class="row">
+        <label title="PsychoPy screen index (0 = primary)">Screen
+          <input id="visual_screen" type="number" min="0" step="1" />
+        </label>
+        <label title="Display refresh rate used for frame timing">Refresh Hz
+          <input id="visual_refresh_hz" type="number" min="1" step="1" />
+        </label>
+        <label title="Quiet period before each grating">ISI s
+          <input id="visual_isi_s" type="number" min="0" step="0.1" />
+        </label>
+      </div>
+      <div class="row">
+        <label title="Delay from grating/RTS onset to DTR photostim pulse">Lead ms
+          <input id="visual_lead_ms" type="number" min="0" step="1" />
+        </label>
+        <label title="Grating length in display frames">Grating frames
+          <input id="visual_grating_frames" type="number" min="1" step="1" />
+        </label>
+        <label title="DTR high duration in display frames">DTR frames
+          <input id="visual_dtr_frames" type="number" min="1" step="1" />
+        </label>
+      </div>
     </div>
   </section>
 

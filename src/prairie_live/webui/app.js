@@ -285,6 +285,23 @@ async function tick() {
   }
 }
 
+function syncVisualOpts() {
+  const on = $("visual_enabled").checked;
+  $("visual_opts").hidden = !on;
+}
+
+function visualRunPayload() {
+  return {
+    visual_enabled: $("visual_enabled").checked,
+    visual_screen: $("visual_screen").value,
+    visual_refresh_hz: $("visual_refresh_hz").value,
+    visual_isi_s: $("visual_isi_s").value,
+    visual_lead_ms: $("visual_lead_ms").value,
+    visual_grating_frames: $("visual_grating_frames").value,
+    visual_dtr_frames: $("visual_dtr_frames").value,
+  };
+}
+
 async function boot() {
   const d = await jget("/api/defaults");
   $("via_relay").value = d.via_relay;
@@ -295,10 +312,19 @@ async function boot() {
   fillSelect($("serial"), d.com_ports, "device", (p) => `${p.device} — ${p.description}`, d.serial);
   fillSelect($("stim_mode"), d.stim_modes, null, null, d.stim_mode);
   fillSelect($("trigger"), d.triggers, null, null, d.trigger);
+  $("visual_enabled").checked = !!d.visual_enabled;
+  $("visual_screen").value = d.visual_screen;
+  $("visual_refresh_hz").value = d.visual_refresh_hz;
+  $("visual_isi_s").value = d.visual_isi_s;
+  $("visual_lead_ms").value = d.visual_lead_ms;
+  $("visual_grating_frames").value = d.visual_grating_frames;
+  $("visual_dtr_frames").value = d.visual_dtr_frames;
+  syncVisualOpts();
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
   $("powers").addEventListener("input", syncTypedPowers);
   $("xml_file").addEventListener("change", onXmlFile);
+  $("visual_enabled").addEventListener("change", syncVisualOpts);
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;
     applyMarksVisibility();
@@ -315,6 +341,7 @@ async function boot() {
       serial: $("serial").value,
       stim_mode: $("stim_mode").value,
       trigger: $("trigger").value,
+      ...visualRunPayload(),
     });
     if (!res.ok) $("save_status").textContent = res.error || "run failed";
   });
