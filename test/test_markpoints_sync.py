@@ -517,6 +517,8 @@ def test_slm_apa_xml_has_all_group_points(tmp_path: Path):
 	assert len(rows) == 1
 	xml = scope.read_text(encoding="utf-8")
 	assert 'AllPointsAtOnce="True"' in xml
+	# One hologram per TTL — file Repetitions=3 would stick waiting for more edges.
+	assert 'Repetitions="1"' in xml
 	for pid in rows[0]["point_ids"]:
 		assert f'Index="{pid}"' in xml or f"Index=\"{pid}\"" in xml
 

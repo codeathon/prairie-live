@@ -116,5 +116,10 @@ def run_while_pulsing_dtr(
 	if errors:
 		raise RuntimeError(f"Mark Points during DTR failed: {errors[0]}") from errors[0]
 	if th.is_alive():
-		raise RuntimeError("Mark Points still running after DTR pulses finished")
+		# Usually E:\Markpoints "file already present" modal or missed Trig In 1.
+		raise RuntimeError(
+			"Mark Points still running after DTR (timeout). "
+			"Dismiss any PrairieView Markpoints folder dialog, ensure "
+			"MarkPointsMetadata is off, then retry."
+		)
 	return result[0] if result else None

@@ -223,7 +223,20 @@ class PvScript:
 			pass
 		with open(disk, "w", encoding="utf-8") as f:
 			f.write(xml)
-		raw = self.send("-LoadMarkPoints", disk)
+		# -Silent: PV otherwise pops E:\Markpoints "already exists / file
+		# already present" and blocks the script port (stuck on first group).
+		try:
+			self.disable_mark_points_metadata()
+		except Exception:
+			pass
+		raw = self.send("-Silent", "-LoadMarkPoints", disk)
+		if _pv_file_dialog(raw) or _pv_task_busy(raw):
+			self.ensure_idle_for_stim()
+			try:
+				self.disable_mark_points_metadata()
+			except Exception:
+				pass
+			raw = self.send("-Silent", "-LoadMarkPoints", disk)
 		return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
 
 	def mark_points(self, *, no_wait: bool = False, timeout: float = 180.0) -> dict:
@@ -238,8 +251,12 @@ class PvScript:
 			raw = self.send("-Silent", "-NoWait", "-MarkPoints", timeout=timeout)
 		else:
 			raw = self.send("-Silent", "-MarkPoints", timeout=timeout)
-		if _pv_task_busy(raw):
+		if _pv_task_busy(raw) or _pv_file_dialog(raw):
 			self.ensure_idle_for_stim()
+			try:
+				self.disable_mark_points_metadata()
+			except Exception:
+				pass
 			if no_wait:
 				raw = self.send("-Silent", "-NoWait", "-MarkPoints", timeout=timeout)
 			else:
@@ -300,3 +317,15 @@ def _pv_task_busy(raw: str) -> bool:
 	"""PV replied that Mark Points / another acquisition is still running."""
 	t = str(raw or "").lower()
 	return "already in progress" in t or "another task" in t
+
+
+def _pv_file_dialog(raw: str) -> bool:
+	"""PV is blocked on an E:\\Markpoints replace / already-present dialog."""
+	t = str(raw or "").lower()
+	return (
+		"already present" in t
+		or "already exists" in t
+		or "directory already" in t
+		or "file already" in t
+		or "delete and continue" in t
+	)

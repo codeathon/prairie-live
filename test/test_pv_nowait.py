@@ -8,8 +8,17 @@ from __future__ import annotations
 
 import time
 
-from prairie_live.pv_script import _script_parts_wait_on_trigger
+from prairie_live.pv_script import (
+	_pv_file_dialog,
+	_script_parts_wait_on_trigger,
+)
 from prairie_live.stim_fire import run_while_pulsing_dtr
+
+
+def test_pv_file_dialog_detects_markpoints_folder_prompt():
+	assert _pv_file_dialog("File already present")
+	assert _pv_file_dialog("directory already exists — delete and continue?")
+	assert not _pv_file_dialog("DONE")
 
 
 def test_detect_trig_in_1():

@@ -88,11 +88,12 @@ def test_load_and_fire_mark_points_on_one_session(tmp_path):
 	assert (tmp_path / "trial.xml").read_text() == "<x/>"
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
 	# Block on -MarkPoints (no -NoWait): caller pulses DTR while DONE waits.
-	# No per-trial Abort — that pops E:\Markpoints dialogs.
-	assert r.pv.link.sent == [
-		(("-LoadMarkPoints", path), 60.0),
-		(("-Silent", "-MarkPoints"), 180.0),
-	]
+	# -Silent -LoadMarkPoints + MarkPointsMetadata=False avoid E:\Markpoints
+	# "file already present" dialogs that stuck APA on group 1.
+	cmds = [c[0] for c in r.pv.link.sent]
+	assert ("-MarkPointsMetadata", "False") in cmds
+	assert ("-Silent", "-LoadMarkPoints", path) in cmds
+	assert ("-Silent", "-MarkPoints") in cmds
 	assert r.pv.link.timeout == 10.0
 
 

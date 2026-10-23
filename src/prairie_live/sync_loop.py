@@ -404,39 +404,59 @@ def run_sync_loop(
 							f"  group {gi + 1}/{len(groups_pts)}: simultaneous "
 							f"APA pts={[str(p['id']) for p in gpts]} power={power}"
 						)
-						row = _run_series_trial(
-							gpts=gpts,
-							point_pool=points,
-							gi=gi,
-							n_groups=len(groups_pts),
-							power=power,
-							it=it,
-							trial_index=trial_index,
-							meta=meta,
-							trig_sel=trig_sel,
-							trigger=trigger,
-							ttl=ttl,
-							ttl_width_s=ttl_width_s,
-							inter_trial_s=inter_trial_s,
-							pad_ms=pad_ms,
-							pl=pl,
-							relay=relay,
-							via_relay=via_relay,
-							scope_xml=scope_xml,
-							log=log,
-							dry_run=dry_run,
-							mock_scores=mock_scores,
-							f0_s=f0_s,
-							f1_s=f1_s,
-							frame_poll_s=frame_poll_s,
-							disk_radius=disk_radius,
-							run_root=run_root,
-							on_trial=on_trial,
-							visual_stim=visual_stim,
-							visual_cfg=vcfg,
-							rng=rng,
-							simultaneous=True,
-						)
+						try:
+							row = _run_series_trial(
+								gpts=gpts,
+								point_pool=points,
+								gi=gi,
+								n_groups=len(groups_pts),
+								power=power,
+								it=it,
+								trial_index=trial_index,
+								meta=meta,
+								trig_sel=trig_sel,
+								trigger=trigger,
+								ttl=ttl,
+								ttl_width_s=ttl_width_s,
+								inter_trial_s=inter_trial_s,
+								pad_ms=pad_ms,
+								pl=pl,
+								relay=relay,
+								via_relay=via_relay,
+								scope_xml=scope_xml,
+								log=log,
+								dry_run=dry_run,
+								mock_scores=mock_scores,
+								f0_s=f0_s,
+								f1_s=f1_s,
+								frame_poll_s=frame_poll_s,
+								disk_radius=disk_radius,
+								run_root=run_root,
+								on_trial=on_trial,
+								visual_stim=visual_stim,
+								visual_cfg=vcfg,
+								rng=rng,
+								simultaneous=True,
+							)
+						except Exception as exc:
+							# E:\Markpoints dialog / missed Trig In 1 must not
+							# freeze the whole session on group 1.
+							print(
+								f"  WARNING: group {gi + 1}/{len(groups_pts)} "
+								f"failed ({exc}); clearing PV and continuing"
+							)
+							from prairie_live.pv_cleanup import abort_and_clear_stim
+
+							if relay is not None and hasattr(relay, "abort"):
+								abort_and_clear_stim(relay, settle_s=0.5)
+							elif pl is not None:
+								try:
+									pl.send_command("-Silent", "-Abort")
+									pl.send_command("-LiveScan")
+								except Exception:
+									pass
+							trial_index += 1
+							continue
 						iter_trials.append(row)
 						all_trials.append(row)
 						trial_index += 1
@@ -1545,6 +1565,9 @@ def _run_series_trial(
 		# (pv_saved per-point XML fires sequentially — not a simultaneous group.)
 		series_meta["all_points_at_once"] = "True"
 		series_meta["pv_saved_format"] = False
+		# One hologram per TTL. File Repetitions=3 + FirstRepetition can leave
+		# PV waiting on extra edges / MarkPoints folder dialogs → stuck on g1.
+		series_meta["repetitions"] = 1
 	else:
 		# Sequential series: APA+spiral after a prior -slm run has crashed PV.
 		series_meta["all_points_at_once"] = "False"
@@ -1593,7 +1616,7 @@ def _run_series_trial(
 		"score": None,
 		"score_kind": None,
 		"image_paths": None,
-		"repetitions": int(meta.get("repetitions", 1)),
+		"repetitions": int(series_meta.get("repetitions", meta.get("repetitions", 1))),
 	}
 	xml = groups_to_xml(series)
 	if scope_xml:
@@ -1602,7 +1625,10 @@ def _run_series_trial(
 	# One DTR per group trial (FirstRepetition only on the group's first point).
 	n_pulses = 1
 	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
-	mp_timeout = max(180.0, wait_s + 60.0)
+	# APA is short; don't sit 3+ minutes on an E:\Markpoints modal.
+	mp_timeout = (
+		max(45.0, wait_s + 20.0) if simultaneous else max(180.0, wait_s + 60.0)
+	)
 
 	want = _want_frames(
 		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
@@ -1892,7 +1918,8 @@ def _load_mark_points(
 		return
 	if pl is None or not scope_xml:
 		raise RuntimeError("need PrairieLink + --scope-xml, or --via-relay")
-	pl.send_command("-LoadMarkPoints", scope_xml)
+	# -Silent: avoid E:\Markpoints "file already present" modal on reload.
+	pl.send_command("-Silent", "-LoadMarkPoints", scope_xml)
 
 
 def _mark_points_only(
