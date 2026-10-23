@@ -245,6 +245,16 @@ class _FakeRelayMp:
 	def get_frame(self):
 		return None
 
+	def get_state(self, key, index=None):
+		# Live scan window for SLM fire-time galvo→FOV remap (matches overlay).
+		vals = {
+			("currentScanAmplitude", "XAxis"): "4.2",
+			("currentScanAmplitude", "YAxis"): "4.2",
+			("currentScanCenter", "XAxis"): "0",
+			("currentScanCenter", "YAxis"): "0",
+		}
+		return {"ok": True, "value": vals.get((key, index), "0")}
+
 
 def test_via_relay_fires_without_scope_xml(tmp_path: Path):
 	steps = parse_mark_points(FAT_XML)
@@ -462,7 +472,8 @@ def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
 	assert all(r.get("slm_pack") is False for r in rows)
 	assert "group 1/2" in rows[0]["summary"]
 	assert "group 2/2" in rows[1]["summary"]
-	assert sum(1 for c in relay.calls if c[0] == "live") == 2
+	# pre-slm LiveScan (FOV amp) + post-stim LiveScan per group.
+	assert sum(1 for c in relay.calls if c[0] == "live") == 4
 	packed = [
 		json.loads(ln)
 		for ln in (tmp_path / "slm_serial.jsonl").read_text(encoding="utf-8").splitlines()
@@ -523,7 +534,8 @@ def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
 	assert [r["trigger_index"] for r in rows] == [0, 1]
 	assert all(r["n_triggers"] == 2 for r in rows)
 	assert all(r.get("slm_pack") is False for r in rows)
-	assert sum(1 for c in relay.calls if c[0] == "live") == 2
+	# pre-slm LiveScan (FOV amp) + post-stim LiveScan per group.
+	assert sum(1 for c in relay.calls if c[0] == "live") == 4
 	singles = [
 		json.loads(ln)
 		for ln in log_path.read_text(encoding="utf-8").splitlines()

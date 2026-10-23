@@ -157,6 +157,122 @@ def prepare_points_for_slm(
 	return prepare_points_for_live_fov(points, relay)
 
 
+def _spiral_fov_frac_for_slm(
+	points: list[dict],
+	geom: dict[str, float],
+	*,
+	spiral_size_um: float | None = None,
+	fov_width_um: float | None = None,
+) -> float | None:
+	"""Spiral diameter as FOV fraction for ``-slm`` (matches overlay ring size).
+
+	Prefer PV-saved galvo ``SpiralSize`` / (2·|amp|) so burns match series size.
+	Fall back to spiral_size_um / fov_width_um when the file has no SpiralSize.
+	"""
+	ax = abs(2.0 * float(geom["amp_x"]))
+	if ax <= 0:
+		return None
+	for p in points:
+		space = str(p.get("spiral_space") or "")
+		raw = p.get("spiral_size_fov")
+		if raw in (None, ""):
+			raw = p.get("spiral_width")
+		if raw in (None, ""):
+			continue
+		s = float(raw)
+		if space == "fov" or (space != "galvo" and 0.0 < s <= 1.0):
+			return min(max(s, 0.0), 1.0)
+		# Galvo volts (PV-saved SpiralSize) → fraction of live FOV width.
+		return min(max(s / ax, 0.0), 1.0)
+	if spiral_size_um not in (None, "") and fov_width_um not in (None, ""):
+		return spiral_size_fov_frac_um(float(spiral_size_um), float(fov_width_um))
+	return None
+
+
+def spiral_size_fov_frac_um(size_um: float, fov_width_um: float) -> float:
+	"""µm spiral → FOV fraction; kept here so fire-time SLM shares one helper."""
+	fov = float(fov_width_um)
+	if fov <= 0:
+		raise ValueError(f"fov_width_um must be > 0, got {fov_width_um!r}")
+	return float(size_um) / fov
+
+
+def points_for_slm_fire(
+	points: list[dict],
+	relay: Any | None,
+	*,
+	spiral_size_um: float | None = None,
+	fov_width_um: float | None = None,
+) -> tuple[list[dict], float | None, str]:
+	"""Remap Mark Points → live FOV 0–1 for ``-MarkAllPoints`` at fire time.
+
+	Why fire-time (not only session-start): session start runs after -Abort, when
+	``currentScanAmplitude`` can still be stale. The cyan overlay polls geometry
+	with LiveScan on — if -slm used a different amp, burns sit on the FOV but
+	miss the rings (seen as a scale-toward-center offset).
+
+	Galvo XML: always convert from ``x_galvo``/``y_galvo`` (or native x/y) with
+	the *current* scan window. Already-FOV files keep x/y. Raises if any point
+	lands outside 0–1 (would burn off-image).
+	"""
+	if not points:
+		return [], None, "no points"
+	if relay is None:
+		raise ValueError("SLM fire needs the relay to read live scan amplitude/center")
+	geom = fetch_scan_geometry(relay)
+	out: list[dict] = []
+	n_from_galvo = 0
+	for p in points:
+		row = dict(p)
+		gx = p.get("x_galvo")
+		gy = p.get("y_galvo")
+		# Prefer stored galvo so a pan/zoom after session-start lock still tracks tissue.
+		if gx not in (None, "") and gy not in (None, ""):
+			fx, fy = galvo_to_fraction(float(gx), float(gy), geom)
+			row["x_galvo"], row["y_galvo"] = float(gx), float(gy)
+			n_from_galvo += 1
+		elif p.get("coord_space") == "fov" or (
+			0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0
+		):
+			fx, fy = float(p["x"]), float(p["y"])
+		else:
+			fx, fy = galvo_to_fraction(float(p["x"]), float(p["y"]), geom)
+			row["x_galvo"], row["y_galvo"] = float(p["x"]), float(p["y"])
+			n_from_galvo += 1
+		row["x"], row["y"] = fx, fy
+		row["coord_space"] = "fov"
+		out.append(row)
+	oob = [
+		p
+		for p in out
+		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
+	]
+	if oob:
+		sample = ", ".join(
+			f"P{p['id']}({float(p['x']):.3f},{float(p['y']):.3f})" for p in oob[:5]
+		)
+		raise ValueError(
+			f"{len(oob)}/{len(out)} SLM point(s) outside live FOV 0–1 "
+			f"(scan X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
+			f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}): {sample}. "
+			"Pan/zoom so overlay rings sit inside the frame, then re-run."
+		)
+	spiral_frac = _spiral_fov_frac_for_slm(
+		out,
+		geom,
+		spiral_size_um=spiral_size_um,
+		fov_width_um=fov_width_um,
+	)
+	note = (
+		f"SLM fire: {n_from_galvo}/{len(out)} from galvo → FOV via scan "
+		f"X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
+		f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}"
+	)
+	if spiral_frac is not None:
+		note += f" · spiral_fov={spiral_frac:.4g}"
+	return out, spiral_frac, note
+
+
 def _clamp_galvo(v: float, ctr: float, amp: float) -> float:
 	"""Keep galvo within the live scan ± a little margin (DAC Int32 overflow)."""
 	half = abs(float(amp))
