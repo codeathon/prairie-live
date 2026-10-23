@@ -41,6 +41,8 @@ def test_build_2d_spiral_trigger():
 	assert parts[9] == "0.75"
 	assert parts[10:13] == ["True", "0.1", "8"]
 	assert parts[13] == "Trig In 1"
+	# Countable trigger sources require Trigger Count (PV rejects without it).
+	assert parts[14] == "1"
 
 
 def test_pack_two_sets_delay_between():
@@ -61,16 +63,30 @@ def test_pack_two_sets_delay_between():
 		spiral_revolutions=8,
 		fov_width_um=545.0,
 		trigger_selection="Trig In 1",
+		trigger_count=1,
 		delay_ms=150.0,
 	)
 	assert parts[0] == "-MarkAllPoints"
-	# First set ends with Trig In 1 then Delay; second set ends with Trig In 1 (no Delay).
+	# First set: … Trig In 1, TriggerCount, Delay; last set: … Trig In 1, Count (no Delay).
 	assert parts.count("Trig In 1") == 2
 	assert "150" in parts
-	# Delay sits between the two Trigger tokens.
 	i0 = parts.index("Trig In 1")
-	assert parts[i0 + 1] == "150"
-	assert parts[-1] == "Trig In 1"
+	assert parts[i0 + 1] == "1"
+	assert parts[i0 + 2] == "150"
+	assert parts[-2:] == ["Trig In 1", "1"]
+
+
+def test_none_trigger_omits_count():
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}]
+	parts = build_mark_all_points_parts(
+		pts,
+		power=0.5,
+		spiral=False,
+		trigger_selection="None",
+	)
+	assert parts[-1] == "None"
+	# No Trigger Count token after None (only countable sources need it).
+	assert parts.count("None") == 1
 
 
 def test_spiral_requires_fov():
@@ -103,3 +119,4 @@ def test_stim_params_from_meta():
 	assert p["use_3d"] is False
 	assert p["fov_width_um"] == 500.0
 	assert p["initial_delay_ms"] == 22.1
+	assert p["trigger_count"] == 1

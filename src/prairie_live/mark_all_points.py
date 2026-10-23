@@ -32,12 +32,14 @@ def build_set_tokens(
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
+	trigger_count: int | str = 1,
 ) -> list[str]:
 	"""
 	One hologram block (no leading -MarkAllPoints, no trailing Delay).
 
-	Shape (2D + spiral + trigger):
-	  N False x0 y0 … xN-1 yN-1 duration_ms laser power True spiral_frac revs Trigger
+	Shape (2D + spiral + countable trigger):
+	  N False x0 y0 … xN-1 yN-1 duration_ms laser power True spiral_frac revs
+	  Trigger TriggerCount
 	"""
 	if not points:
 		raise ValueError("MarkAllPoints set needs at least one point")
@@ -70,7 +72,12 @@ def build_set_tokens(
 		frac = spiral_size_fov_frac(float(spiral_size_um), float(fov_width_um))
 		parts.extend(["True", _fmt_num(frac), str(int(spiral_revolutions))])
 
-	parts.append(str(trigger_selection or "None"))
+	trig = str(trigger_selection or "None")
+	parts.append(trig)
+	# PV Script: Trigger Count is required when the trigger source is countable
+	# (e.g. Trig In 1). Omitting it → "Missing parameter - Trigger Count…".
+	if trig.lower() not in ("none", ""):
+		parts.append(str(int(trigger_count)))
 	return parts
 
 
@@ -86,6 +93,7 @@ def build_mark_all_points_parts(
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
+	trigger_count: int | str = 1,
 ) -> list[str]:
 	"""Single-set -MarkAllPoints token list (compat wrapper around pack)."""
 	return pack_mark_all_points(
@@ -99,6 +107,7 @@ def build_mark_all_points_parts(
 		spiral_revolutions=spiral_revolutions,
 		fov_width_um=fov_width_um,
 		trigger_selection=trigger_selection,
+		trigger_count=trigger_count,
 		delay_ms=0.0,
 	)
 
@@ -115,13 +124,14 @@ def pack_mark_all_points(
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
+	trigger_count: int | str = 1,
 	delay_ms: float = 0.0,
 ) -> list[str]:
 	"""
 	Pack many simultaneous sets into one -slm command.
 
-	PV grammar: after each set's Trigger, append Delay ms except on the last
-	set. Software maps trigger pulse i → groups[i] (same order as packed).
+	PV grammar: after each set's Trigger[+Count], append Delay ms except on the
+	last set. Software maps trigger pulse i → groups[i] (same order as packed).
 	"""
 	if not groups:
 		raise ValueError("pack_mark_all_points needs at least one group")
@@ -140,6 +150,7 @@ def pack_mark_all_points(
 				spiral_revolutions=spiral_revolutions,
 				fov_width_um=fov_width_um,
 				trigger_selection=trigger_selection,
+				trigger_count=trigger_count,
 			)
 		)
 		# Omit Delay on the last repetition (PV requirement).
@@ -154,6 +165,11 @@ def stim_params_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
 	spiral = str(meta.get("is_spiral", "True")).lower() in ("true", "1", "yes")
 	fov = meta.get("fov_width_um")
 	size = meta.get("spiral_size_um")
+	tc = meta.get("trigger_count", 1)
+	try:
+		trigger_count = int(tc if tc not in (None, "") else 1)
+	except (TypeError, ValueError):
+		trigger_count = 1
 	return {
 		"laser": str(meta.get("uncaging_laser", "Monaco")),
 		"duration_ms": float(meta.get("duration", 16.92)),
@@ -165,6 +181,7 @@ def stim_params_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
 		"trigger_selection": str(
 			meta.get("trigger_selection", DEFAULT_TRIGGER_SELECTION)
 		),
+		"trigger_count": max(1, trigger_count),
 		"initial_delay_ms": float(meta.get("initial_delay_ms", 0) or 0),
 	}
 

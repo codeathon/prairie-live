@@ -872,6 +872,7 @@ def _run_slm_packed_batch(
 		spiral_revolutions=slm_params["spiral_revolutions"],
 		fov_width_um=slm_params["fov_width_um"],
 		trigger_selection=trig_sel,
+		trigger_count=slm_params.get("trigger_count", 1),
 		delay_ms=delay_ms,
 	)
 	# Audit XML: one MarkPoint step per group (same order as packed -slm).
@@ -1094,6 +1095,7 @@ def _run_slm_single_trial(
 		spiral_revolutions=slm_params["spiral_revolutions"],
 		fov_width_um=slm_params["fov_width_um"],
 		trigger_selection=trig_sel,
+		trigger_count=slm_params.get("trigger_count", 1),
 		delay_ms=0.0,
 	)
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
