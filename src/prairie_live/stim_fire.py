@@ -35,6 +35,7 @@ def run_while_pulsing_dtr(
 	join_timeout_s: float | None = None,
 	row: dict[str, Any] | None = None,
 	on_pulse: Callable[[int], None] | None = None,
+	on_stuck: Callable[[], None] | None = None,
 ) -> Any:
 	"""
 	Run blocking ``fn()`` and emit exactly ``n_pulses`` planned DTR edges.
@@ -114,12 +115,19 @@ def run_while_pulsing_dtr(
 		th.join(timeout=join_s)
 
 	if errors:
+		# Worker already dropped the script session / Abort'd on timeout.
 		raise RuntimeError(f"Mark Points during DTR failed: {errors[0]}") from errors[0]
 	if th.is_alive():
-		# Usually E:\Markpoints "file already present" modal or missed Trig In 1.
+		# Worker still blocked — Abort from here so leftover -mp cannot fire
+		# into a restarted PV after the operator kills the hang.
+		if on_stuck is not None:
+			try:
+				on_stuck()
+			except Exception as exc:
+				print(f"  on_stuck cleanup failed: {exc}")
 		raise RuntimeError(
 			"Mark Points still running after DTR (timeout). "
-			"Dismiss any PrairieView Markpoints folder dialog, ensure "
-			"MarkPointsMetadata is off, then retry."
+			"Dismiss any PrairieView Markpoints folder dialog, Stop the Run "
+			"(do not keep groups queued after restarting PV), then retry."
 		)
 	return result[0] if result else None

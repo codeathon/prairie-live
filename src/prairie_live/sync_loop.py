@@ -439,11 +439,13 @@ def run_sync_loop(
 								simultaneous=True,
 							)
 						except Exception as exc:
-							# E:\Markpoints dialog / missed Trig In 1 must not
-							# freeze the whole session on group 1.
+							# Dialog / timeout: Abort and STOP. Continuing to the
+							# next group queues leftover -lmp/-mp that keep firing
+							# after the operator restarts PV.
 							print(
-								f"  WARNING: group {gi + 1}/{len(groups_pts)} "
-								f"failed ({exc}); clearing PV and continuing"
+								f"  ERROR: group {gi + 1}/{len(groups_pts)} "
+								f"failed ({exc}); clearing PV and stopping session "
+								f"(no leftover groups)"
 							)
 							from prairie_live.pv_cleanup import abort_and_clear_stim
 
@@ -455,8 +457,8 @@ def run_sync_loop(
 									pl.send_command("-LiveScan")
 								except Exception:
 									pass
-							trial_index += 1
-							continue
+							# finally: closes visual_stim; do not queue more groups.
+							return all_trials
 						iter_trials.append(row)
 						all_trials.append(row)
 						trial_index += 1
@@ -1679,6 +1681,9 @@ def _run_series_trial(
 			f"  trial {trial_index}: -lmp/-mp {gname} ({how}) power={power} "
 			f"pts={point_ids} (1 DTR after arm, then wait ~{wait_s:.2f}s)"
 		)
+		# Join longer than mp_timeout so the worker can TimeoutError → drop
+		# script session → Abort before we declare "still running". That stops
+		# leftover -MarkPoints from surviving a PV restart.
 		run_while_pulsing_dtr(
 			_do_mp,
 			ttl=ttl,
@@ -1687,7 +1692,7 @@ def _run_series_trial(
 			gap_s=0.0,
 			arm_delay_s=0.25,
 			rescue_window_s=1.5,
-			join_timeout_s=mp_timeout,
+			join_timeout_s=mp_timeout + 20.0,
 			row=row,
 			on_pulse=lambda _i: print(trig_msg),
 		)

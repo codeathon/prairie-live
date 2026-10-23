@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from prairie_live.pv_script import (
 	_pv_file_dialog,
 	_script_parts_wait_on_trigger,
@@ -19,6 +21,73 @@ def test_pv_file_dialog_detects_markpoints_folder_prompt():
 	assert _pv_file_dialog("File already present")
 	assert _pv_file_dialog("directory already exists — delete and continue?")
 	assert not _pv_file_dialog("DONE")
+
+
+def test_mark_points_timeout_drops_session_and_aborts(monkeypatch):
+	"""Stuck -mp must not leave the script socket wedged for leftover groups."""
+	from prairie_live.pv_script import PvScript
+
+	pv = PvScript()
+	pv._started = True
+	pv._opened_at = -10.0
+	calls: list[tuple] = []
+
+	class _HangLink:
+		timeout = 10.0
+
+		def send_command(self, *parts):
+			calls.append(parts)
+			if parts[-1] == "-MarkPoints" or (
+				len(parts) >= 2 and parts[-1] == "-MarkPoints"
+			):
+				raise TimeoutError("PrairieLink timed out")
+			return "ACK\nDONE"
+
+		def close(self):
+			calls.append(("close",))
+
+	pv.link = _HangLink()
+	opened = []
+
+	def _open():
+		pv.link = _HangLink()
+		opened.append(1)
+
+	monkeypatch.setattr(pv, "_open", _open)
+	with pytest.raises(RuntimeError, match="timed out"):
+		pv.mark_points(timeout=1.0)
+	assert ("close",) in calls
+	assert opened  # recover reopened
+	assert any(p[:2] == ("-Silent", "-Abort") or p == ("-Silent", "-Abort") for p in calls)
+
+
+def test_mark_points_file_dialog_raises_without_second_fire():
+	"""Retrying -MarkPoints after 'File already present' queued leftover arms."""
+	from prairie_live.pv_script import PvScript
+
+	pv = PvScript()
+	pv._started = True
+	pv._opened_at = -10.0
+	sent: list[tuple] = []
+
+	class _DialogLink:
+		timeout = 10.0
+
+		def send_command(self, *parts):
+			sent.append(parts)
+			if "-MarkPoints" in parts:
+				return "ACK\nFile already present\nDONE"
+			return "ACK\nDONE"
+
+		def close(self):
+			pass
+
+	pv.link = _DialogLink()
+	with pytest.raises(RuntimeError, match="blocked"):
+		pv.mark_points(timeout=5.0)
+	# One -MarkPoints only — recover Abort/Live, never a second fire.
+	assert sum(1 for p in sent if "-MarkPoints" in p) == 1
+	assert any("-Abort" in p for p in sent)
 
 
 def test_detect_trig_in_1():

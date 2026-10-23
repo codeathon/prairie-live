@@ -475,6 +475,61 @@ def test_slm_serial_one_apa_and_one_dtr_per_group(tmp_path: Path):
 	assert sum(1 for c in relay.calls if c[0] == "live") == 2
 
 
+def test_slm_group_failure_stops_session_no_leftover_groups(tmp_path: Path):
+	"""After a hang/dialog, do not keep arming later groups (PV restart leftovers)."""
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 545.0
+	log = JsonlLog(tmp_path / "slm_stop.jsonl")
+
+	class _FailFirst(_FakeRelayMp):
+		def mark_points(self, *, no_wait=None, timeout=None):
+			self.calls.append(("mark", no_wait, timeout))
+			if sum(1 for c in self.calls if c[0] == "mark") == 1:
+				raise RuntimeError("MarkPoints timed out (File already present)")
+			return {"ok": True, "cmd": "mark_points", "no_wait": no_wait}
+
+		def abort(self):
+			self.calls.append(("abort",))
+			return {"ok": True, "cmd": "abort"}
+
+	relay = _FailFirst()
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=None,
+			n_iterations=1,
+			n_groups=2,
+			group_size=3,
+			powers=[0.75],
+			seed=1,
+			trigger="none",
+			ttl=None,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+			stim_mode="slm",
+		)
+	finally:
+		log.close()
+	assert rows == []
+	assert sum(1 for c in relay.calls if c[0] == "mark") == 1
+	assert any(c[0] == "abort" for c in relay.calls)
+
+
 def test_slm_apa_xml_has_all_group_points(tmp_path: Path):
 	"""Each SLM fire XML must list every point in the group (simultaneous)."""
 	steps = parse_mark_points(FAT_XML)
