@@ -83,7 +83,9 @@ def test_candidate_clear_is_selection_not_list():
 	)
 	assert "Clear selection" in html
 	assert "rankedSig" in js
+	assert "selectionCleared" in js
 	assert "do not re-select after the user hits Clear" in js
+	assert "green highlight" in html
 
 
 def test_com_ports_never_empty():

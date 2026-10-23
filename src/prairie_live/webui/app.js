@@ -3,6 +3,8 @@ const picked = new Set();
 let lastRanked = [];
 /** When ranked results change, seed ● on stimulated rows once. Clear selection must stay empty. */
 let rankedSig = "";
+/** After Clear selection: do not auto-reselect (keeps green row highlight off). */
+let selectionCleared = false;
 
 async function jget(url) {
   const r = await fetch(url);
@@ -250,16 +252,21 @@ function renderCandidates(ranked) {
     box.hidden = true;
     $("side").classList.remove("has-cands");
     rankedSig = "";
+    selectionCleared = false;
     return;
   }
   box.hidden = false;
   $("side").classList.add("has-cands");
-  const sig = lastRanked.map(rowKey).join("\0");
+  // Sorted so poll order cannot look like a new run and re-seed selection/green.
+  const sig = lastRanked.map(rowKey).slice().sort().join("\0");
   if (sig !== rankedSig) {
     // New run results only — do not re-select after the user hits Clear selection.
     rankedSig = sig;
+    selectionCleared = false;
     picked.clear();
     lastRanked.filter((r) => r.stimulated).forEach((r) => picked.add(rowKey(r)));
+  } else if (selectionCleared) {
+    picked.clear();
   }
   for (const r of lastRanked) {
     const tr = document.createElement("tr");
@@ -268,6 +275,7 @@ function renderCandidates(ranked) {
     if (picked.has(key)) tr.classList.add("picked");
     tr.innerHTML = `<td>${picked.has(key) ? "●" : "○"}</td><td>${r.id}</td><td>${pwr ?? "—"}</td><td>${r.dff == null ? "—" : Number(r.dff).toFixed(3)}</td><td>${r.tercile}</td>`;
     tr.addEventListener("click", () => {
+      selectionCleared = false;
       if (picked.has(key)) picked.delete(key);
       else picked.add(key);
       renderCandidates(lastRanked);
@@ -354,12 +362,14 @@ async function boot() {
   });
   $("stop").addEventListener("click", () => jpost("/api/stop", {}));
   $("sel_top").addEventListener("click", () => {
+    selectionCleared = false;
     picked.clear();
     lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(rowKey(r)));
     renderCandidates(lastRanked);
   });
   $("sel_clear").addEventListener("click", () => {
-    // Clear ● selection only — rows stay (ranking from the last run).
+    // Clear ● + green highlight; list/ranking stays. Poll must not re-seed.
+    selectionCleared = true;
     picked.clear();
     renderCandidates(lastRanked);
   });
