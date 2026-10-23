@@ -203,16 +203,54 @@ class PvScript:
 		raw = self.send("-LoadMarkPoints", disk)
 		return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
 
-	def mark_points(self) -> dict:
-		raw = self.send("-MarkPoints")
-		return {"ok": True, "cmd": "mark_points", "pv": raw}
+	def mark_points(self, *, no_wait: bool = False) -> dict:
+		# With Trig In 1, -MarkPoints blocks DONE until the trigger; we pulse
+		# DTR only after this returns — -NoWait breaks that deadlock.
+		if no_wait:
+			raw = self.send("-NoWait", "-MarkPoints")
+		else:
+			raw = self.send("-MarkPoints")
+		return {"ok": True, "cmd": "mark_points", "pv": raw, "no_wait": bool(no_wait)}
 
-	def mark_all_points(self, parts: list[str], *, wait_ms: float = 0.0) -> dict:
-		"""parts from build_mark_all_points_parts (starts with -MarkAllPoints)."""
+	def mark_all_points(
+		self,
+		parts: list[str],
+		*,
+		wait_ms: float = 0.0,
+		no_wait: bool | None = None,
+	) -> dict:
+		"""parts from build_mark_all_points_parts (starts with -MarkAllPoints).
+
+		When the hologram waits on a countable trigger (e.g. Trig In 1), PV does
+		not send DONE until that edge — but our DTR pulse runs *after* this call.
+		Default: prepend -NoWait whenever a trigger name is in ``parts``.
+		"""
 		if not parts:
 			raise ValueError("mark_all_points requires non-empty parts list")
+		tokens = [str(p) for p in parts]
+		if no_wait is None:
+			no_wait = _script_parts_wait_on_trigger(tokens)
 		if wait_ms and float(wait_ms) > 0:
 			# PV -Wait requires an integer millisecond count (rejects 22.100).
 			self.send("-Wait", str(int(round(float(wait_ms)))))
-		raw = self.send(*[str(p) for p in parts])
-		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts), "pv": raw}
+		if no_wait and tokens[0] not in ("-NoWait", "-nw"):
+			tokens = ["-NoWait", *tokens]
+		raw = self.send(*tokens)
+		return {
+			"ok": True,
+			"cmd": "mark_all_points",
+			"parts": list(parts),
+			"pv": raw,
+			"no_wait": bool(no_wait),
+		}
+
+
+def _script_parts_wait_on_trigger(parts: list[str]) -> bool:
+	"""True when -slm / -mp argv includes a countable trigger source name."""
+	for p in parts:
+		s = str(p).strip().lower()
+		if s in ("none", "", "false", "true"):
+			continue
+		if s.startswith("trig") or s.startswith("pfi"):
+			return True
+	return False

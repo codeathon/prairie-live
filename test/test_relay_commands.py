@@ -87,7 +87,11 @@ def test_load_and_fire_mark_points_on_one_session(tmp_path):
 	assert out["ok"] is True and out["path"] == path
 	assert (tmp_path / "trial.xml").read_text() == "<x/>"
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	assert r.pv.link.sent == [(("-LoadMarkPoints", path), 60.0), (("-MarkPoints",), 60.0)]
+	# Default no_wait: -NoWait so Trig In 1 series can get DTR after arming.
+	assert r.pv.link.sent == [
+		(("-LoadMarkPoints", path), 60.0),
+		(("-NoWait", "-MarkPoints"), 60.0),
+	]
 	assert r.pv.link.timeout == 10.0
 
 
@@ -112,7 +116,28 @@ def test_mark_all_points_waits_whole_ms_then_fires():
 	]
 	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1})
 	assert out["ok"] is True
-	assert _cmds(r) == [("-Wait", "22"), tuple(parts)]
+	# -NoWait so DONE returns before Trig In 1; DTR is pulsed after this call.
+	assert _cmds(r) == [("-Wait", "22"), ("-NoWait", *parts)]
+	assert out.get("no_wait") is True
+
+
+def test_mark_all_points_no_wait_false_when_trigger_none():
+	r = _relay()
+	parts = [
+		"-MarkAllPoints",
+		"1",
+		"False",
+		"0.1",
+		"0.2",
+		"10",
+		"Monaco",
+		"0.75",
+		"None",
+	]
+	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "no_wait": False})
+	assert out["ok"] is True
+	assert _cmds(r) == [tuple(parts)]
+	assert out.get("no_wait") is False
 
 
 def test_grab_one_stores_gi_frame():
@@ -234,7 +259,7 @@ def test_dropped_session_reconnects_and_names_the_command(monkeypatch, capsys):
 	assert opened == [1]
 	assert "during '-gts currentScanAmplitude XAxis'" in capsys.readouterr().out
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	assert _cmds(r) == [("-MarkPoints",)]
+	assert _cmds(r) == [("-NoWait", "-MarkPoints")]
 
 
 def test_prairie_link_raises_when_pv_closes_socket():

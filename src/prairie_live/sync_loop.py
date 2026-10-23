@@ -1422,22 +1422,34 @@ def _fire_mark_all_points(
 	pl: PrairieLink | None,
 	relay: Any | None,
 	via_relay: bool,
+	no_wait: bool | None = None,
 ) -> None:
-	"""Send -MarkAllPoints (-slm); prefer relay when via_relay."""
+	"""Send -MarkAllPoints (-slm); prefer relay when via_relay.
+
+	``no_wait`` defaults from trigger tokens in ``parts`` (Trig In 1 → True) so
+	DONE returns before we pulse DTR.
+	"""
 	if via_relay:
 		if relay is None:
 			raise RuntimeError("via_relay set but relay client is not connected")
-		out = relay.mark_all_points(parts, wait_ms=wait_ms)
+		out = relay.mark_all_points(parts, wait_ms=wait_ms, no_wait=no_wait)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay mark_all_points failed: {out}")
 		return
 	if pl is None:
 		raise RuntimeError("need PrairieLink or --via-relay for stim_mode=slm")
 	# TCP path: optional -Wait then -MarkAllPoints as separate commands.
+	from prairie_live.pv_script import _script_parts_wait_on_trigger
+
+	tokens = [str(p) for p in parts]
+	use_nw = _script_parts_wait_on_trigger(tokens) if no_wait is None else bool(no_wait)
 	if wait_ms and float(wait_ms) > 0:
 		# PV requires integer ms for -Wait.
 		pl.send_command("-Wait", str(int(round(float(wait_ms)))))
-	pl.send_command(*parts)
+	if use_nw:
+		pl.send_command("-NoWait", *tokens)
+	else:
+		pl.send_command(*tokens)
 
 
 def _fire_mark_points(
@@ -1447,22 +1459,30 @@ def _fire_mark_points(
 	pl: PrairieLink | None,
 	relay: Any | None,
 	via_relay: bool,
+	no_wait: bool = True,
 ) -> None:
-	"""Load + fire one series; prefer relay push when via_relay (no SMB)."""
+	"""Load + fire one series; prefer relay push when via_relay (no SMB).
+
+	Default ``no_wait=True``: series with Trig In 1 would otherwise block DONE
+	until DTR, which we only pulse after this returns.
+	"""
 	if via_relay:
 		if relay is None:
 			raise RuntimeError("via_relay set but relay client is not connected")
 		out = relay.load_mark_points(xml)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay load_mark_points failed: {out}")
-		out = relay.mark_points()
+		out = relay.mark_points(no_wait=no_wait)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay mark_points failed: {out}")
 		return
 	if pl is None or not scope_xml:
 		raise RuntimeError("need PrairieLink + --scope-xml, or --via-relay")
 	pl.send_command("-LoadMarkPoints", scope_xml)
-	pl.send_command("-MarkPoints")
+	if no_wait:
+		pl.send_command("-NoWait", "-MarkPoints")
+	else:
+		pl.send_command("-MarkPoints")
 
 
 def _collect_frames(relay, duration_s: float, poll_s: float) -> list[np.ndarray]:
