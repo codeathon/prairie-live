@@ -567,14 +567,18 @@ def _run_stim_epoch(
 	frame_poll_s: float,
 	wait_s: float,
 	trigger_msg: str = "",
+	n_pulses: int = 1,
+	wait_between_pulses_s: float = 0.0,
 ) -> tuple[list[np.ndarray], list[np.ndarray]]:
 	"""
 	Visual + TTL epoch: legacy RTS-held grating with DTR at visual_lead_ms.
 
-	When visual is off, preserves the original f0 → DTR → f1 sequence.
+	When visual is off: f0 → DTR (× n_pulses, matching per-point FirstRepetition
+	in a PV-saved series) → f1.
 	"""
 	f0_frames: list[np.ndarray] = []
 	f1_frames: list[np.ndarray] = []
+	n_pulses = max(int(n_pulses), 1)
 
 	if visual_cfg.enabled:
 		params = visual_stim.pick_trial(rng)
@@ -647,22 +651,35 @@ def _run_stim_epoch(
 	if want:
 		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
 
-	if trigger == "serial" and ttl is not None and not dry_run:
-		row["t_ttl"] = time.time()
-		row["t_ttl_mono"] = ttl.pulse_dtr(ttl_width_s)
-		if trigger_msg:
-			print(trigger_msg)
-	elif trigger == "none":
-		row["t_ttl"] = row.get("t_cmd")
-		if trigger_msg:
-			print(trigger_msg)
-	else:
-		row["t_ttl"] = time.time()
-		if trigger_msg:
-			print(trigger_msg)
+	gap = max(float(wait_between_pulses_s), 0.0)
+	for i in range(n_pulses):
+		msg = trigger_msg
+		if n_pulses > 1 and trigger_msg:
+			msg = f"{trigger_msg}  (pulse {i}/{n_pulses - 1})"
+		if trigger == "serial" and ttl is not None and not dry_run:
+			row["t_ttl"] = time.time()
+			t_mono = ttl.pulse_dtr(ttl_width_s)
+			if i == 0:
+				row["t_ttl_mono"] = t_mono
+			if msg:
+				print(msg)
+		elif trigger == "none":
+			row["t_ttl"] = row.get("t_cmd")
+			if msg and i == 0:
+				print(msg)
+		else:
+			row["t_ttl"] = time.time()
+			if msg and i == 0:
+				print(msg)
+		# Let this point finish before the next FirstRepetition wait.
+		if i < n_pulses - 1 and gap > 0:
+			if want and relay is not None:
+				f1_frames.extend(_collect_frames(relay, gap, frame_poll_s))
+			else:
+				time.sleep(gap)
 
 	if want:
-		f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+		f1_frames.extend(_collect_frames(relay, max(f1_s, wait_s), frame_poll_s))
 	elif wait_s > 0:
 		time.sleep(max(wait_s, 0.0))
 	return f0_frames, f1_frames
@@ -1302,7 +1319,31 @@ def _run_series_trial(
 	want = _want_frames(
 		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
 	)
+	# PV-saved XML: each point has FirstRepetition → one DTR per point.
+	per_point_trig = (
+		trigger == "serial"
+		and bool(meta.get("pv_saved_format"))
+		and str(meta.get("trigger_frequency") or "").lower()
+		not in ("none", "")
+	)
+	n_pulses = len(gpts) if per_point_trig and gpts else 1
+	reps = max(int(meta.get("repetitions", 1)), 1)
+	dur_s = float(meta.get("duration", 0) or 0) / 1000.0
+	inter_s = float(meta.get("inter_point_delay_ms") or meta.get("inter_point_delay") or 0)
+	# inter_point_delay may already be ms string from XML.
+	if inter_s > 5:
+		inter_s = inter_s / 1000.0
+	between = max(dur_s * reps + inter_s, 0.0)
+	# Last pulse still needs full series settle in wait_s.
 	wait_s = (estimate_series_ms(series) + pad_ms) / 1000.0
+	if n_pulses > 1:
+		wait_s = max(between + pad_ms / 1000.0, 0.0)
+
+	trig_msg = ""
+	if trigger == "serial":
+		trig_msg = f"  trigger: trial {trial_index} pts={point_ids}"
+	elif trigger == "none":
+		trig_msg = f"  [none] trial {trial_index} pts={point_ids}"
 
 	f0_frames, f1_frames = _run_stim_epoch(
 		row,
@@ -1319,7 +1360,12 @@ def _run_series_trial(
 		f1_s=f1_s,
 		frame_poll_s=frame_poll_s,
 		wait_s=wait_s,
+		trigger_msg=trig_msg,
+		n_pulses=n_pulses,
+		wait_between_pulses_s=between if n_pulses > 1 else 0.0,
 	)
+	row["n_triggers"] = n_pulses
+	row["trigger_index"] = 0
 
 	_finish_trial_frames(
 		row,

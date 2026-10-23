@@ -648,6 +648,8 @@ def test_pv_saved_serial_writes_trig_in_1_guid_not_null():
 	assert els[0].get("TriggerFrequency") == "FirstRepetition"
 	assert els[0].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
 	assert els[0].get("TriggerIdentifier") != NO_TRIGGER_IDENTIFIER
-	# Later points in the saved chain do not wait again.
-	assert els[1].get("TriggerIdentifier") == NO_TRIGGER_IDENTIFIER
-	assert els[1].get("TriggerSelection") is None
+	# Match PV-saved XML: every point waits on Trig In 1 / FirstRepetition.
+	assert els[1].get("TriggerSelection") == "Trig In 1"
+	assert els[1].get("TriggerFrequency") == "FirstRepetition"
+	assert els[1].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
+	assert els[2].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER

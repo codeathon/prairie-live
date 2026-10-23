@@ -505,9 +505,9 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 	"""
 	Write PV's own saved-series layout (PVSavedMarkPointSeriesElements).
 
-	Each point is its own PVMarkPointElement with X/Y inline, so a group fires
-	one point after another at full power — what PV does for a saved group.
-	Only the first step waits for a trigger.
+	Each point is its own PVMarkPointElement with X/Y inline. When a trigger
+	line is set, every point waits (FirstRepetition + Trig In 1 GUID) — same
+	as a PV UI export. Software must pulse DTR once per point.
 	"""
 	meta = groups[0] if groups else {}
 	root = ET.Element("PVSavedMarkPointSeriesElements")
@@ -518,6 +518,13 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 	for g in groups:
 		if not g.get("is_active", True):
 			continue
+		trig = str(g.get("trigger_selection", "None"))
+		freq = (
+			str(g.get("trigger_frequency", DEFAULT_TRIGGER_FREQUENCY))
+			if trig not in ("None", "none", "")
+			else "None"
+		)
+		tid = trigger_identifier_for(trig, g.get("trigger_identifier"))
 		for pt in g["points"]:
 			if not pt.get("is_active", True):
 				continue
@@ -525,22 +532,9 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 			el.set("Repetitions", str(g["repetitions"]))
 			el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
 			el.set("UncagingLaserPower", str(g.get("xml_power", g["laser_pwr"])))
-			# First point waits for Trig In 1; later points in the saved series
-			# chain without a new wait (same as PV's own export).
-			trig = str(g.get("trigger_selection", "None")) if first else "None"
-			freq = (
-				str(g.get("trigger_frequency", DEFAULT_TRIGGER_FREQUENCY))
-				if first and trig not in ("None", "none", "")
-				else "None"
-			)
 			el.set("TriggerFrequency", freq)
 			if trig not in ("None", "none", ""):
 				el.set("TriggerSelection", trig)
-			tid = (
-				trigger_identifier_for(trig, g.get("trigger_identifier"))
-				if first
-				else _NO_TRIGGER_ID
-			)
 			el.set("TriggerIdentifier", tid)
 			el.set("TriggerCount", str(g.get("trigger_count", "1")))
 			el.set("AsyncSyncFrequency", str(g.get("async_sync_frequency", "None")))
