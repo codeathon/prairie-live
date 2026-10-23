@@ -238,6 +238,10 @@ class _FakeRelayMp:
 		self.calls.append(("slm", list(parts), wait_ms, no_wait, timeout))
 		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts), "no_wait": no_wait}
 
+	def start_live(self):
+		self.calls.append(("live",))
+		return {"ok": True, "cmd": "live"}
+
 	def get_frame(self):
 		return None
 
@@ -320,6 +324,7 @@ def test_gpl_slm_dry_run(tmp_path: Path):
 			elite_frac=0.5,
 			dry_run=True,
 			stim_mode="slm",
+			slm_pack=True,
 		)
 	finally:
 		log.close()
@@ -385,11 +390,14 @@ def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
 	finally:
 		log.close()
 	assert len(rows) == 1
-	assert len(relay.calls) == 1
-	kind, parts, wait_ms, _no_wait, _timeout = relay.calls[0]
+	slm_calls = [c for c in relay.calls if c[0] == "slm"]
+	assert len(slm_calls) == 1
+	kind, parts, wait_ms, _no_wait, _timeout = slm_calls[0]
 	assert kind == "slm"
 	assert parts[0] == "-MarkAllPoints"
 	assert wait_ms == 22.1
+	# LiveScan restarted after -slm so power tiles are not black.
+	assert any(c[0] == "live" for c in relay.calls)
 	# No series load/mark on SLM path.
 	assert all(c[0] != "load" for c in relay.calls if isinstance(c, tuple))
 
@@ -402,7 +410,8 @@ class _FakeTtl:
 		self.pulses.append(width_s)
 
 
-def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
+def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
+	"""Serial SLM: pick group → arm -slm → one DTR → next group (never pack)."""
 	steps = parse_mark_points(FAT_XML)
 	pts = extract_unique_points(steps)
 	meta = template_meta(steps)
@@ -410,7 +419,7 @@ def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
 	meta["spiral_size_um"] = "54.5"
 	meta["is_spiral"] = "True"
 	meta["initial_delay_ms"] = 0.0
-	log = JsonlLog(tmp_path / "slm_pack.jsonl")
+	log = JsonlLog(tmp_path / "slm_serial.jsonl")
 	relay = _FakeRelayMp()
 	ttl = _FakeTtl()
 	try:
@@ -440,25 +449,26 @@ def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
 			elite_frac=0.5,
 			dry_run=False,
 			stim_mode="slm",
+			slm_pack=True,  # ignored for serial — still one -slm per group
 		)
 	finally:
 		log.close()
-	# One packed -slm; exactly one DTR per group (no rescue extras).
-	assert len(relay.calls) == 1
-	assert relay.calls[0][0] == "slm"
+	assert len(rows) == 2
+	slm_calls = [c for c in relay.calls if c[0] == "slm"]
+	assert len(slm_calls) == 2
 	assert len(ttl.pulses) == 2
 	assert [r["trigger_index"] for r in rows] == [0, 1]
 	assert all(r["n_triggers"] == 2 for r in rows)
-	assert "summary" in rows[0]
+	assert all(r.get("slm_pack") is False for r in rows)
+	assert "group 1/2" in rows[0]["summary"]
+	assert "group 2/2" in rows[1]["summary"]
+	assert sum(1 for c in relay.calls if c[0] == "live") == 2
 	packed = [
 		json.loads(ln)
-		for ln in (tmp_path / "slm_pack.jsonl").read_text(encoding="utf-8").splitlines()
+		for ln in (tmp_path / "slm_serial.jsonl").read_text(encoding="utf-8").splitlines()
 		if json.loads(ln).get("phase") == "slm_packed"
 	]
-	assert packed[0]["group_trigger_map"][0]["point_ids"] == rows[0]["point_ids"]
-	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
-	# Packed string contains two Trig In 1 tokens (one per set) + Delay between.
-	assert relay.calls[0][1].count("Trig In 1") == 2
+	assert packed == []
 
 
 def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
@@ -506,13 +516,14 @@ def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
 		log.close()
 	# Two groups → two separate -slm commands; two DTR pulses.
 	assert len(rows) == 2
-	assert len(relay.calls) == 2
-	assert all(c[0] == "slm" for c in relay.calls)
-	assert all(c[1][0] == "-MarkAllPoints" for c in relay.calls)
+	slm_calls = [c for c in relay.calls if c[0] == "slm"]
+	assert len(slm_calls) == 2
+	assert all(c[1][0] == "-MarkAllPoints" for c in slm_calls)
 	assert len(ttl.pulses) == 2
 	assert [r["trigger_index"] for r in rows] == [0, 1]
 	assert all(r["n_triggers"] == 2 for r in rows)
 	assert all(r.get("slm_pack") is False for r in rows)
+	assert sum(1 for c in relay.calls if c[0] == "live") == 2
 	singles = [
 		json.loads(ln)
 		for ln in log_path.read_text(encoding="utf-8").splitlines()

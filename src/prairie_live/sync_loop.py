@@ -4,10 +4,9 @@ Flow per mapping iteration
 --------------------------
 1. Build pseudo-random groups from the points pool (or score-biased groups).
 2. stim_mode=series: each (group × power) → -lmp/-mp + optional DTR.
-	stim_mode=slm, slm_pack=true (default): pack all groups into one
-   -MarkAllPoints string; send once; DTR once per group in pack order.
-   stim_mode=slm, slm_pack=false: one -MarkAllPoints per group (trigger_index
-   always 0); DTR once per trial.
+   stim_mode=slm + serial: one group at a time — arm -MarkAllPoints
+   (Trig In 1), one DTR, burn, restore LiveScan, next group.
+   Optional slm_pack=true packs groups (not used with serial / GUI).
 3. Aggregate per-point scores; next iteration reuses top responders plus
    random fill.
 """
@@ -254,7 +253,7 @@ def run_sync_loop(
 	elite_frac: float,
 	dry_run: bool,
 	stim_mode: str = "series",
-	slm_pack: bool = True,
+	slm_pack: bool = False,
 	images_dir: str | None = None,
 	visual_cfg: Any | None = None,
 	on_trial: Callable[[dict], None] | None = None,
@@ -383,11 +382,18 @@ def run_sync_loop(
 			iter_trials: list[dict] = []
 
 			if mode == "slm":
+				# Serial SLM: always one group → one -slm → one DTR (never pack).
+				use_pack = bool(slm_pack) and trigger != "serial"
+				if slm_pack and trigger == "serial":
+					print(
+						"NOTE: serial+slm uses one -slm per group "
+						"(packed multi-set disabled — one TTL per group)"
+					)
 				for power in powers:
 					if _stop():
 						print("session stopped")
 						break
-					if slm_pack:
+					if use_pack:
 						batch = _run_slm_packed_batch(
 							groups_pts=groups_pts,
 							point_pool=points,
@@ -985,6 +991,7 @@ def _run_slm_packed_batch(
 		and not visual_cfg.enabled
 	)
 	pulse_times: list[float] = []
+	f0_shared: list = []
 
 	if dry_run:
 		print(
@@ -1030,6 +1037,9 @@ def _run_slm_packed_batch(
 				f"    pulse {e['trigger_index']}/{n - 1}: "
 				f"{e['group_name']} points={e['point_ids']}"
 			)
+		# f0 while Live is still on — -slm often kills LiveScan.
+		if want:
+			f0_shared = _collect_frames(relay, f0_s, frame_poll_s)
 		run_while_pulsing_dtr(
 			_do_packed,
 			ttl=ttl,
@@ -1043,7 +1053,10 @@ def _run_slm_packed_batch(
 		)
 		if hasattr(ttl, "set_dtr"):
 			ttl.set_dtr(False)
+		_ensure_live_after_stim(relay=relay, pl=pl, via_relay=via_relay)
 	else:
+		if want and not dry_run:
+			f0_shared = _collect_frames(relay, f0_s, frame_poll_s)
 		_fire_mark_all_points(
 			parts=slm_parts,
 			wait_ms=float(slm_params.get("initial_delay_ms") or 0),
@@ -1060,8 +1073,13 @@ def _run_slm_packed_batch(
 				f"    pulse {e['trigger_index']}: "
 				f"{e['group_name']} points={e['point_ids']}"
 			)
+		if not dry_run:
+			_ensure_live_after_stim(relay=relay, pl=pl, via_relay=via_relay)
 
 	rows: list[dict] = []
+	f1_shared: list = []
+	if want and not dry_run:
+		f1_shared = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
 	for gi, gpts in enumerate(groups_pts):
 		entry = group_map[gi]
 		trial_index = trial_index_start + gi
@@ -1102,14 +1120,12 @@ def _run_slm_packed_batch(
 				f"pts={entry['point_ids']}"
 			)
 
-		f0_frames: list = []
-		f1_frames: list = []
+		f0_frames: list = list(f0_shared) if f0_shared else []
+		f1_frames: list = list(f1_shared) if f1_shared else []
 		if dtr_during_slm:
 			# DTRs already fired during -slm; do not pulse again.
 			if gi < len(pulse_times):
 				row["t_ttl"] = pulse_times[gi]
-			if want:
-				f1_frames = _collect_frames(relay, max(f1_s, 0.05), frame_poll_s)
 		else:
 			f0_frames, f1_frames = _run_stim_epoch(
 				row,
@@ -1326,11 +1342,11 @@ def _run_slm_single_trial(
 			)
 
 		print(
-			f"  single -slm trial {trial_index}: {gname} "
-			f"power={power} (-slm {slm_pwr:g}) pts={point_ids} "
-			f"(1 DTR group {gi}/{last}, then wait ~{wait_s:.2f}s)"
+			f"  group {gi + 1}/{n_groups}: arm -slm "
+			f"(Trig In 1) → 1 DTR → burn pts={point_ids} "
+			f"power={power:g} (~{wait_s:.2f}s)"
 		)
-		# No rescue: extra edges after the first burn stole later groups' waits.
+		# Exactly one planned DTR; no rescue edges (those stole later groups).
 		run_while_pulsing_dtr(
 			_do_slm,
 			ttl=ttl,
@@ -1340,14 +1356,18 @@ def _run_slm_single_trial(
 			rescue_window_s=0.0,
 			join_timeout_s=max(180.0, wait_s + 60.0),
 			row=row,
-			on_pulse=lambda _i: print(trigger_msg),
+			on_pulse=lambda _i: print(
+				f"  group {gi + 1}/{n_groups}: DTR pulsed → pts={point_ids}"
+			),
 		)
 		if hasattr(ttl, "set_dtr"):
 			ttl.set_dtr(False)
-		# Let PV drop the hologram before the next -slm arms Trig In 1.
-		time.sleep(max(float(inter_trial_s), 0.35))
+		# -slm stops LiveScan → black power tiles unless we restart first.
+		_ensure_live_after_stim(relay=relay, pl=pl, via_relay=via_relay)
 		if want:
-			f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
+			f1_frames = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
+		# Settle before the next group's -slm arms Trig In 1.
+		time.sleep(max(float(inter_trial_s), 0.35))
 	else:
 		_fire_mark_all_points(
 			parts=slm_parts,
@@ -1362,6 +1382,8 @@ def _run_slm_single_trial(
 			f"  single -slm trial {trial_index}: {gname} "
 			f"power={power} pts={point_ids}"
 		)
+		if not dry_run:
+			_ensure_live_after_stim(relay=relay, pl=pl, via_relay=via_relay)
 		f0_b, f1_frames = _run_stim_epoch(
 			row,
 			trigger=trigger,
@@ -1658,6 +1680,35 @@ def _pre_stim_delay(*, wait_ms: float, pl: PrairieLink | None, via_relay: bool) 
 		time.sleep(ms / 1000.0)
 		return
 	pl.send_command("-Wait", str(int(round(ms))))
+
+
+def _ensure_live_after_stim(
+	*,
+	relay: Any | None,
+	pl: PrairieLink | None,
+	via_relay: bool,
+	settle_s: float = 0.4,
+) -> None:
+	"""-MarkAllPoints / -Abort often kill LiveScan → black power-tile frames.
+
+	Restart Live and wait briefly so the relay grabber has non-zero FOV again.
+	"""
+	if via_relay and relay is not None and hasattr(relay, "start_live"):
+		try:
+			out = relay.start_live()
+			print("  post-stim: -LiveScan (restore FOV for power tiles)")
+			if isinstance(out, dict) and out.get("ok") is False:
+				print(f"  WARNING: -LiveScan failed: {out}")
+		except Exception as exc:
+			print(f"  WARNING: -LiveScan after stim failed: {exc}")
+	elif pl is not None:
+		try:
+			pl.send_command("-LiveScan")
+			print("  post-stim: -LiveScan (restore FOV for power tiles)")
+		except Exception as exc:
+			print(f"  WARNING: -LiveScan after stim failed: {exc}")
+	if settle_s > 0:
+		time.sleep(float(settle_s))
 
 
 def _slm_script_power(power: float, meta: dict | None = None) -> float:
@@ -1967,7 +2018,7 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("repetitions", 1)
 	opt.setdefault("stim_dff_min", 0.0)
 	opt.setdefault("stim_mode", "series")
-	opt.setdefault("slm_pack", True)
+	opt.setdefault("slm_pack", False)
 	opt.setdefault("visual_enabled", False)
 
 	execute_session(opt)
@@ -2006,7 +2057,7 @@ def execute_session(
 	opt.setdefault("repetitions", 1)
 	opt.setdefault("stim_dff_min", 0.0)
 	opt.setdefault("stim_mode", "series")
-	opt.setdefault("slm_pack", True)
+	opt.setdefault("slm_pack", False)
 	if "powers" in opt:
 		opt["powers"] = powers_to_list(opt["powers"])
 	else:
@@ -2095,16 +2146,20 @@ def execute_session(
 				"stim_mode=slm with spiral requires fov_width_um in experiment.json "
 				"(µm across the FOV; used to convert spiral_size_um → -slm fraction)"
 			)
-		pack = bool(opt.get("slm_pack", True))
-		if pack:
+		pack = bool(opt.get("slm_pack", False)) and str(opt.get("trigger") or "") != "serial"
+		if str(opt.get("trigger") or "") == "serial":
+			print(
+				"stim_mode=slm + serial → each group: arm -slm → 1 DTR → burn → LiveScan"
+			)
+		elif pack:
 			print(
 				"stim_mode=slm slm_pack=true → one packed -MarkAllPoints per power "
 				"(DTR once per group; series XML if scope_xml set)"
 			)
 		else:
 			print(
-				"stim_mode=slm slm_pack=false → one -MarkAllPoints per group×power "
-				"(DTR once per trial; trigger_index=0)"
+				"stim_mode=slm → one -MarkAllPoints per group×power "
+				"(DTR once per group when trigger=serial)"
 			)
 	if opt.get("inspect"):
 		zero = 0
@@ -2272,7 +2327,7 @@ def execute_session(
 			elite_frac=float(opt["elite_frac"]),
 			dry_run=bool(opt.get("dry_run")),
 			stim_mode=stim_mode,
-			slm_pack=bool(opt.get("slm_pack", True)),
+			slm_pack=bool(opt.get("slm_pack", False)),
 			images_dir=opt.get("images_dir"),
 			visual_cfg=opt,
 			stim_dff_min=float(opt.get("stim_dff_min") or 0.0),

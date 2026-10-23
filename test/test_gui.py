@@ -100,7 +100,7 @@ def test_gui_overrides_cover_pool():
 	assert opt["group_size"] == 3
 	assert opt["n_groups"] == 2
 	assert opt["cover_all"] is True
-	assert opt["slm_pack"] is True
+	assert opt["slm_pack"] is False
 	assert opt["powers"] == [80.0, 140.0]
 	assert opt["repetitions"] == 2
 	assert opt["via_relay"] == "10.0.0.1:25100"

@@ -139,10 +139,9 @@ def apply_gui_overrides(
 		else n_groups_for_pool(n_points, GROUP_SIZE)
 	)
 	opt["iterations"] = max(int(opt.get("iterations") or 1), 1)
-	# Packed -slm: one command, one Trig In 1 wait per group, DTR spaced by
-	# PV Delay. Separate -slm per group often only burned the first group
-	# (later waits were missed / stolen). Serial SLM always packs.
-	opt["slm_pack"] = True
+	# One -slm per group (not packed). Packed multi-set + Trig In 1 on this
+	# rig finished in one flash and left LiveScan off (dark power tiles).
+	opt["slm_pack"] = False
 	opt["cover_all"] = True
 	if via_relay:
 		opt["via_relay"] = via_relay
@@ -159,9 +158,6 @@ def apply_gui_overrides(
 		if mode not in STIM_MODES:
 			raise ValueError(f"stim_mode must be one of {STIM_MODES}")
 		opt["stim_mode"] = mode
-	# Keep packing whenever serial photostim is used (even if mode set later).
-	if str(opt.get("trigger") or "").lower() == "serial" and opt.get("stim_mode") == "slm":
-		opt["slm_pack"] = True
 	if visual_enabled is not None:
 		opt["visual_enabled"] = bool(visual_enabled)
 	if visual_screen is not None:
