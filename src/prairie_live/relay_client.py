@@ -69,6 +69,10 @@ class RelayClient:
 	def abort(self) -> dict:
 		return self._command({"cmd": "abort"})
 
+	def abort_clear_stim(self) -> dict:
+		"""Abort in-flight stim, load empty Mark Points series, restart LiveScan."""
+		return self._command({"cmd": "abort_clear_stim"})
+
 	def start_live(self) -> dict:
 		return self._command({"cmd": "live"})
 

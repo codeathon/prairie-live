@@ -332,8 +332,31 @@ def run_sync_loop(
 	if mode == "slm":
 		slm_params["trigger_selection"] = trig_sel
 
+	stopped = False
+
 	def _stop() -> bool:
-		return bool(should_stop and should_stop())
+		nonlocal stopped
+		if bool(should_stop and should_stop()):
+			stopped = True
+			return True
+		return False
+
+	def _abort_pv_on_stop() -> None:
+		"""Cancel armed -slm / -mp on the scope when the GUI hits Stop."""
+		if dry_run:
+			return
+		try:
+			from prairie_live.pv_cleanup import abort_and_clear_stim
+
+			if via_relay and relay is not None:
+				out = abort_and_clear_stim(relay)
+			elif pl is not None:
+				out = abort_and_clear_stim(pl)
+			else:
+				return
+			print("PV stop clear:", ", ".join(out.get("notes") or []))
+		except Exception as exc:
+			print(f"PV stop clear failed: {exc}")
 
 	try:
 		for it in range(n_iterations):
@@ -490,6 +513,8 @@ def run_sync_loop(
 			else:
 				print("  no scores this iteration — next groups stay random")
 	finally:
+		if stopped:
+			_abort_pv_on_stop()
 		visual_stim.close()
 
 	from prairie_live.candidate_view import maybe_show_candidates

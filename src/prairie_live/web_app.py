@@ -257,8 +257,29 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		if u.path == "/api/stop":
 			STATE.stop.set()
-			STATE.append("stop requested — finishing current trial")
-			_json(self, {"ok": True})
+			addr = str(
+				(STATE.opt or {}).get("via_relay")
+				or getattr(STATE.live, "addr", None)
+				or DEFAULT_RELAY
+			)
+			STATE.append(
+				"stop requested — Abort + clear Mark Points on PV, then finish trial"
+			)
+
+			def _pv_stop_cleanup() -> None:
+				try:
+					from prairie_live.pv_cleanup import abort_and_clear_at
+
+					out = abort_and_clear_at(addr)
+					notes = out.get("notes") or []
+					STATE.append(
+						"PV cleared: " + (", ".join(str(n) for n in notes) or str(out))
+					)
+				except Exception as exc:
+					STATE.append(f"PV clear failed: {exc}")
+
+			threading.Thread(target=_pv_stop_cleanup, daemon=True).start()
+			_json(self, {"ok": True, "relay": addr})
 			return
 		if u.path == "/api/save-candidates":
 			self._save(raw)

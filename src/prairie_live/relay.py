@@ -165,6 +165,11 @@ class Relay:
 			return pv.start_tseries()
 		if cmd == "abort":
 			return pv.abort()
+		if cmd == "abort_clear_stim":
+			# GUI Stop: kill armed Mark Points / -slm, replace series, restore Live.
+			from prairie_live.pv_cleanup import abort_and_clear_stim
+
+			return {"ok": True, "cmd": "abort_clear_stim", **abort_and_clear_stim(pv)}
 		if cmd == "live":
 			return pv.start_live()
 		if cmd == "get_state":
