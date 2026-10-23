@@ -25,6 +25,10 @@ def test_summary_and_ordered_row_drop_bulky():
 		"score": 0.0096,
 		"score_kind": "relay_disk_dff",
 		"stim_mode": "slm",
+		"trigger": "serial",
+		"trigger_selection": "PFI1",
+		"t_ttl": 1.0,
+		"t_ttl_mono": 2.0,
 		"slm_parts": ["-MarkAllPoints", "3"],
 		"group_trigger_map": [{"trigger_index": 0}],
 	}
@@ -32,11 +36,29 @@ def test_summary_and_ordered_row_drop_bulky():
 	assert "trial 4" in s
 	assert "points [1,4,8]" in s
 	assert "0.0096" in s
+	assert "trigger serial" in s
+	assert "line PFI1" in s
+	assert "DTR pulsed" in s
 	ordered = order_trial_row({**row, "phase": "done", "summary": s})
 	assert list(ordered.keys())[0] == "phase"
 	assert ordered["summary"] == s
 	assert "slm_parts" not in ordered
 	assert "group_trigger_map" not in ordered
+
+
+def test_summary_marks_dtr_skipped_when_no_timestamp():
+	s = format_trial_summary(
+		{
+			"trial_index": 1,
+			"point_ids": ["1"],
+			"power": 20,
+			"stim_mode": "slm",
+			"trigger": "serial",
+			"trigger_selection": "PFI1",
+		}
+	)
+	assert "DTR skipped" in s
+	assert "trigger none" not in s
 
 
 def test_write_trial_sidecars(tmp_path: Path):

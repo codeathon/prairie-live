@@ -62,6 +62,18 @@ def format_trial_summary(row: dict[str, Any]) -> str:
 	parts.append(f"points [{pts}]")
 	parts.append(f"power {power}")
 	parts.append(f"mode {mode}")
+	# GUI trial log only shows this summary — include TTL mode so DTR use is visible.
+	trig_mode = str(row.get("trigger") or "").lower()
+	if trig_mode:
+		parts.append(f"trigger {trig_mode}")
+	sel = row.get("trigger_selection")
+	if sel and trig_mode in ("serial", "wait"):
+		parts.append(f"line {sel}")
+	if trig_mode == "serial":
+		if row.get("t_ttl") is not None or row.get("t_ttl_mono") is not None:
+			parts.append("DTR pulsed")
+		else:
+			parts.append("DTR skipped")
 	vori = row.get("visual_ori_deg")
 	vcon = row.get("visual_contrast_pct")
 	if vori is not None and vcon is not None:
