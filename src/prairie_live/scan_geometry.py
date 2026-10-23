@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
+# Any: relay client with get_state (avoid importing relay_client here).
+
 _KEYS = (
 	("amp_x", "currentScanAmplitude", "XAxis"),
 	("amp_y", "currentScanAmplitude", "YAxis"),
@@ -81,6 +83,41 @@ def points_for_image(
 		row["y_galvo"] = float(p["y"])
 		out.append(row)
 	return out
+
+
+def prepare_points_for_slm(
+	points: list[dict],
+	relay: Any | None,
+) -> tuple[list[dict], str]:
+	"""FOV-fraction copies for ``-MarkAllPoints`` (PV cannot save FOV coords).
+
+	Galvo-list XML is mapped via live ``currentScanAmplitude`` / ``Center``.
+	Raises ValueError when points are galvo-space but geometry is unavailable.
+	"""
+	if not points:
+		return [], "no points"
+	if is_fraction_space(points):
+		return list(points), "points already in FOV fractions (0–1)"
+	if relay is None:
+		raise ValueError(
+			"galvo Mark Points need the relay (Live + scan range) to convert "
+			"to FOV fractions for -MarkAllPoints"
+		)
+	geom = fetch_scan_geometry(relay)
+	mapped = points_for_image(points, geom)
+	n_out = sum(
+		1
+		for p in mapped
+		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
+	)
+	note = (
+		f"mapped {len(mapped)} galvo points → FOV via scan "
+		f"X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
+		f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}"
+	)
+	if n_out:
+		note += f" · {n_out} still outside 0–1 at this zoom"
+	return mapped, note
 
 
 def overlay_points(

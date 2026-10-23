@@ -128,8 +128,38 @@ def test_points_for_image_maps_galvo_for_scoring():
 	assert out[0]["id"] == "7"
 	assert 0 < out[0]["x"] < 1 and 0 < out[0]["y"] < 1
 	assert out[0]["x_galvo"] == pts[0]["x"]
-	# Original list is unchanged (firing still uses galvo units).
+	# Original list is unchanged.
 	assert pts[0]["x"] == 0.70059295475
+
+
+def test_prepare_points_for_slm_maps_galvo_via_relay():
+	from prairie_live.scan_geometry import prepare_points_for_slm
+
+	class FakeRelay:
+		def get_state(self, key, index):
+			vals = {
+				("currentScanAmplitude", "XAxis"): 4.2,
+				("currentScanAmplitude", "YAxis"): 4.2,
+				("currentScanCenter", "XAxis"): 0.0,
+				("currentScanCenter", "YAxis"): 0.0,
+			}
+			return {"ok": True, "value": str(vals[(key, index)])}
+
+	pts = [{"id": "7", "x": 0.7, "y": -2.0}]
+	out, note = prepare_points_for_slm(pts, FakeRelay())
+	assert "mapped" in note
+	assert 0 < out[0]["x"] < 1 and 0 < out[0]["y"] < 1
+	assert out[0]["x_galvo"] == 0.7
+	# Already FOV → unchanged path.
+	fov = [{"id": "1", "x": 0.2, "y": 0.3}]
+	got, note2 = prepare_points_for_slm(fov, None)
+	assert "already" in note2
+	assert got[0]["x"] == 0.2
+	try:
+		prepare_points_for_slm(pts, None)
+		assert False, "expected ValueError without relay"
+	except ValueError as exc:
+		assert "relay" in str(exc).lower()
 
 
 def test_score_galvo_points_after_mapping():

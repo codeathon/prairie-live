@@ -1703,21 +1703,14 @@ def execute_session(
 	if stim_mode not in ("series", "slm"):
 		raise SystemExit(f"stim_mode must be 'series' or 'slm', got {stim_mode!r}")
 
-	# .gpl X/Y are often galvo-list coords outside imaging FOV 0–1. -slm treats
-	# them as FOV fractions and fires off-screen; use -lmp/-mp like the UI.
+	# .gpl / PV-saved series often store galvo volts (outside 0–1). For slm we
+	# map them to FOV fractions via the live scan range after the relay connects
+	# (PV has no "save as FOV coords" export). series keeps native galvo X/Y.
 	oob = [
 		p
 		for p in points
 		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
 	]
-	if stim_mode == "slm" and oob:
-		print(
-			f"NOTE: {len(oob)}/{len(points)} points have X/Y outside 0–1 "
-			"(typical of .gpl galvo lists). -MarkAllPoints would mis-read "
-			"those as FOV fractions. Switching stim_mode → series "
-			"(-LoadMarkPoints / -MarkPoints), one point at a time."
-		)
-		stim_mode = "series"
 	# .gpl Z is the absolute focus the points were drawn at, not an offset;
 	# Use3D with it can refocus the uncaging beam away from the sample.
 	if any(abs(float(p.get("z", 0))) > 1e-6 for p in points) and not opt.get("use_3d"):
@@ -1733,12 +1726,11 @@ def execute_session(
 		f"trigger={opt['trigger']}  stim_mode={stim_mode}  "
 		f"laser={meta.get('uncaging_laser')}  group_size={gs}"
 	)
-	# Galvo-list coords (typical of PV saved series). Firing uses them as-is;
-	# ΔF/F disks map them through currentScanAmplitude/Center before scoring.
 	if oob:
 		print(
 			f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
-			"ΔF/F scoring maps them onto the live FOV via PV scan range. Examples:"
+			"stim_mode=slm will map them to FOV via the live scan range; "
+			"series fires galvo coords as-is. Examples:"
 		)
 		for p in oob[:5]:
 			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
@@ -1830,6 +1822,27 @@ def execute_session(
 				port=int(opt["port"]),
 				password=str(opt["password"]),
 			)
+
+		# SLM needs 0–1 FOV; convert galvo XML using live scan geometry.
+		if stim_mode == "slm" and oob:
+			from prairie_live.scan_geometry import prepare_points_for_slm
+
+			try:
+				points, map_note = prepare_points_for_slm(points, relay)
+				print(f"NOTE: {map_note}")
+				for p in points[:5]:
+					gx = p.get("x_galvo", p["x"])
+					gy = p.get("y_galvo", p["y"])
+					print(
+						f"  Point {p['id']}  galvo ({float(gx):.4f}, {float(gy):.4f}) "
+						f"→ FOV ({float(p['x']):.4f}, {float(p['y']):.4f})"
+					)
+			except Exception as exc:
+				print(
+					f"NOTE: cannot map galvo→FOV for -MarkAllPoints ({exc}). "
+					"Switching stim_mode → series (-LoadMarkPoints / -MarkPoints)."
+				)
+				stim_mode = "series"
 
 		show = (
 			show_candidate_gui
