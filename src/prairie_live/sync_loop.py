@@ -1446,10 +1446,11 @@ def _fire_mark_all_points(
 	if wait_ms and float(wait_ms) > 0:
 		# PV requires integer ms for -Wait.
 		pl.send_command("-Wait", str(int(round(float(wait_ms)))))
+	# No per-trial -Abort here — that pops E:\Markpoints "delete folder?" dialogs.
 	if use_nw:
-		pl.send_command("-NoWait", *tokens)
+		pl.send_command("-Silent", "-NoWait", *tokens)
 	else:
-		pl.send_command(*tokens)
+		pl.send_command("-Silent", *tokens)
 
 
 def _fire_mark_points(
@@ -1480,9 +1481,9 @@ def _fire_mark_points(
 		raise RuntimeError("need PrairieLink + --scope-xml, or --via-relay")
 	pl.send_command("-LoadMarkPoints", scope_xml)
 	if no_wait:
-		pl.send_command("-NoWait", "-MarkPoints")
+		pl.send_command("-Silent", "-NoWait", "-MarkPoints")
 	else:
-		pl.send_command("-MarkPoints")
+		pl.send_command("-Silent", "-MarkPoints")
 
 
 def _collect_frames(relay, duration_s: float, poll_s: float) -> list[np.ndarray]:

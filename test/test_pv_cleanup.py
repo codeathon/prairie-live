@@ -35,17 +35,16 @@ def test_abort_and_clear_stim_order():
 	c = FakeClient()
 	out = abort_and_clear_stim(c)
 	assert out["ok"] is True
-	assert c.calls == ["abort", "load", "live"]
-	assert out["notes"] == ["abort", "clear_series", "live"]
+	# Stop: Abort + Live only (no empty -lmp — that fought PV's E:\Markpoints save).
+	assert c.calls == ["abort", "live"]
+	assert out["notes"] == ["abort", "live"]
 
 
 def test_relay_abort_clear_stim_command():
 	r = _relay()
-	# load_mark_points writes a temp file — use a FakeLink that allows send.
 	out = r.handle_command({"cmd": "abort_clear_stim"})
 	assert out["ok"] is True
 	assert out["cmd"] == "abort_clear_stim"
 	cmds = _cmds(r)
-	assert cmds[0] == ("-Abort",)
-	assert cmds[1][0] == "-LoadMarkPoints"
-	assert cmds[2] == ("-LiveScan",)
+	assert cmds[0] == ("-Silent", "-Abort")
+	assert cmds[1] == ("-LiveScan",)

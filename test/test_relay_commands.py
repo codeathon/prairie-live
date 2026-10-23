@@ -52,7 +52,7 @@ def test_live_tseries_abort_are_script_commands():
 	r = _relay()
 	for cmd in ("live", "tseries", "abort"):
 		assert r.handle_command({"cmd": cmd})["ok"] is True
-	assert _cmds(r) == [("-LiveScan",), ("-TSeries",), ("-Abort",)]
+	assert _cmds(r) == [("-LiveScan",), ("-TSeries",), ("-Silent", "-Abort")]
 
 
 def test_get_state_uses_gts():
@@ -87,10 +87,10 @@ def test_load_and_fire_mark_points_on_one_session(tmp_path):
 	assert out["ok"] is True and out["path"] == path
 	assert (tmp_path / "trial.xml").read_text() == "<x/>"
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	# Default no_wait: -NoWait so Trig In 1 series can get DTR after arming.
+	# -Silent -NoWait -MarkPoints (no per-trial Abort — that pops E:\Markpoints).
 	assert r.pv.link.sent == [
 		(("-LoadMarkPoints", path), 60.0),
-		(("-NoWait", "-MarkPoints"), 60.0),
+		(("-Silent", "-NoWait", "-MarkPoints"), 60.0),
 	]
 	assert r.pv.link.timeout == 10.0
 
@@ -116,8 +116,10 @@ def test_mark_all_points_waits_whole_ms_then_fires():
 	]
 	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1})
 	assert out["ok"] is True
-	# -NoWait so DONE returns before Trig In 1; DTR is pulsed after this call.
-	assert _cmds(r) == [("-Wait", "22"), ("-NoWait", *parts)]
+	assert _cmds(r) == [
+		("-Wait", "22"),
+		("-Silent", "-NoWait", *parts),
+	]
 	assert out.get("no_wait") is True
 
 
@@ -136,7 +138,7 @@ def test_mark_all_points_no_wait_false_when_trigger_none():
 	]
 	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "no_wait": False})
 	assert out["ok"] is True
-	assert _cmds(r) == [tuple(parts)]
+	assert _cmds(r) == [("-Silent", *parts)]
 	assert out.get("no_wait") is False
 
 
@@ -259,7 +261,7 @@ def test_dropped_session_reconnects_and_names_the_command(monkeypatch, capsys):
 	assert opened == [1]
 	assert "during '-gts currentScanAmplitude XAxis'" in capsys.readouterr().out
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	assert _cmds(r) == [("-NoWait", "-MarkPoints")]
+	assert _cmds(r) == [("-Silent", "-NoWait", "-MarkPoints")]
 
 
 def test_prairie_link_raises_when_pv_closes_socket():

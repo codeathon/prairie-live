@@ -19,9 +19,14 @@ def abort_and_clear_stim(client: Any) -> dict[str, Any]:
 	"""
 	``client``: RelayClient or anything with abort / load_mark_points / start_live.
 
-	1. -Abort — cancel scripts, mark-point experiments, and acquisitions in flight
-	2. -LoadMarkPoints empty series — drop leftover groups from the PV Mark Points UI
-	3. -LiveScan — Abort also kills Live; restore FOV for the relay grabber
+	Stop only — not between trials. Aborting every trial finalizes PV's Mark
+	Points save into E:\\Markpoints\\… and pops a delete-folder dialog.
+
+	1. -Silent -Abort — cancel armed mark-point / script work (no message box)
+	2. -LiveScan — Abort also kills Live; restore FOV for the relay grabber
+
+	We no longer -LoadMarkPoints an empty series here: that fought PV's save
+	path and was easy to confuse with cleanup errors.
 	"""
 	notes: list[str] = []
 	ok = True
@@ -35,16 +40,6 @@ def abort_and_clear_stim(client: Any) -> dict[str, Any]:
 	except Exception as exc:
 		ok = False
 		notes.append(f"abort_err:{exc}")
-
-	try:
-		out = client.load_mark_points(EMPTY_MARK_POINTS_XML)
-		notes.append("clear_series")
-		if isinstance(out, dict) and out.get("ok") is False:
-			ok = False
-			notes.append(f"clear_fail:{out.get('error', out)}")
-	except Exception as exc:
-		ok = False
-		notes.append(f"clear_err:{exc}")
 
 	try:
 		out = client.start_live()

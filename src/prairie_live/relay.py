@@ -89,6 +89,11 @@ class Relay:
 			) from e
 		h, w = self.pv.wh
 		print(f"PV script port {self.pv.host}:{self.pv.port}  FOV {int(w)}x{int(h)}")
+		try:
+			self.pv.disable_mark_points_metadata()
+			print("MarkPointsMetadata=False (no ad-hoc E:\\Markpoints spills)")
+		except Exception as e:
+			print(f"MarkPointsMetadata False failed ({e})")
 		if not self._grab_enabled:
 			print("grab OFF (default); pass --grab for live frames")
 			return

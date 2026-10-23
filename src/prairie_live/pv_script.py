@@ -153,12 +153,35 @@ class PvScript:
 		return {"ok": True, "cmd": "tseries"}
 
 	def abort(self) -> dict:
-		self.send("-Abort")
+		# -Silent: Abort mid-Mark-Points otherwise pops E:\\Markpoints
+		# "directory already exists — delete and continue?"
+		self.send("-Silent", "-Abort")
 		return {"ok": True, "cmd": "abort"}
 
 	def start_live(self) -> dict:
 		self.send("-LiveScan")
 		return {"ok": True, "cmd": "live"}
+
+	def disable_mark_points_metadata(self) -> dict:
+		"""Turn off ad-hoc Mark Points disk saves (persists in PV until changed)."""
+		raw = self.send("-MarkPointsMetadata", "False")
+		return {"ok": True, "cmd": "mark_points_metadata", "enabled": False, "pv": raw}
+
+	def ensure_idle_for_stim(self) -> None:
+		"""Last-resort clear when the next arm fails (do not call every trial).
+
+		Aborting after every -NoWait trial finalizes PV's Mark Points save into
+		E:\\Markpoints\\… and shows a delete-folder dialog. Prefer waiting for
+		the prior stim to finish; only Abort from Stop or a single retry.
+		"""
+		try:
+			self.send("-Silent", "-Abort")
+		except Exception as exc:
+			print(f"ensure_idle_for_stim -Abort: {exc}")
+		try:
+			self.send("-LiveScan")
+		except Exception as exc:
+			print(f"ensure_idle_for_stim -LiveScan: {exc}")
 
 	def get_state(
 		self, key: str, index: str | None = None, subindex: str | None = None
@@ -206,10 +229,17 @@ class PvScript:
 	def mark_points(self, *, no_wait: bool = False) -> dict:
 		# With Trig In 1, -MarkPoints blocks DONE until the trigger; we pulse
 		# DTR only after this returns — -NoWait breaks that deadlock.
+		# Do NOT -Abort before every trial (that causes E:\\Markpoints dialogs).
 		if no_wait:
-			raw = self.send("-NoWait", "-MarkPoints")
+			raw = self.send("-Silent", "-NoWait", "-MarkPoints")
 		else:
-			raw = self.send("-MarkPoints")
+			raw = self.send("-Silent", "-MarkPoints")
+		if _pv_task_busy(raw):
+			self.ensure_idle_for_stim()
+			if no_wait:
+				raw = self.send("-Silent", "-NoWait", "-MarkPoints")
+			else:
+				raw = self.send("-Silent", "-MarkPoints")
 		return {"ok": True, "cmd": "mark_points", "pv": raw, "no_wait": bool(no_wait)}
 
 	def mark_all_points(
@@ -233,9 +263,15 @@ class PvScript:
 		if wait_ms and float(wait_ms) > 0:
 			# PV -Wait requires an integer millisecond count (rejects 22.100).
 			self.send("-Wait", str(int(round(float(wait_ms)))))
-		if no_wait and tokens[0] not in ("-NoWait", "-nw"):
-			tokens = ["-NoWait", *tokens]
-		raw = self.send(*tokens)
+		send_toks = list(tokens)
+		if no_wait and send_toks[0] not in ("-NoWait", "-nw"):
+			send_toks = ["-NoWait", *send_toks]
+		if send_toks[0] not in ("-Silent", "-s"):
+			send_toks = ["-Silent", *send_toks]
+		raw = self.send(*send_toks)
+		if _pv_task_busy(raw):
+			self.ensure_idle_for_stim()
+			raw = self.send(*send_toks)
 		return {
 			"ok": True,
 			"cmd": "mark_all_points",
@@ -254,3 +290,9 @@ def _script_parts_wait_on_trigger(parts: list[str]) -> bool:
 		if s.startswith("trig") or s.startswith("pfi"):
 			return True
 	return False
+
+
+def _pv_task_busy(raw: str) -> bool:
+	"""PV replied that Mark Points / another acquisition is still running."""
+	t = str(raw or "").lower()
+	return "already in progress" in t or "another task" in t
