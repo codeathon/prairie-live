@@ -68,19 +68,28 @@ class LiveFeed:
 		from prairie_live.scan_geometry import fetch_scan_geometry
 
 		err = ""
+		geom = None
 		try:
 			geom = fetch_scan_geometry(client)
 		except Exception as exc:
-			geom, err = None, f"{type(exc).__name__}: {exc}"[:200]
+			err = f"{type(exc).__name__}: {exc}"[:200]
 		if err and "dropped the connection" in err:
-			# The read itself may be what PV rejects; don't keep knocking the session out.
-			err = f"{err} — scan range polling stopped; restart the GUI to retry"
+			# Don't keep hammering PV; keep last good geometry so MP overlay stays up.
+			err = f"{err} — scan range polling paused"
 		with self._lock:
-			self.geometry = geom
-			self.geometry_error = err
+			if geom is not None:
+				self.geometry = geom
+				self.geometry_error = ""
+			else:
+				# Keep prior amplitude/center — clearing it hides galvo Mark Points.
+				self.geometry_error = err
+				had = self.geometry is not None
+				if had and err:
+					self.geometry_error = f"{err} (using last scan range)"
 		if not err:
 			return 2.0
-		return None if "polling stopped" in err else 30.0
+		# Retry later even after a drop; permanent None wiped the overlay before.
+		return 30.0 if "polling paused" in err else 15.0
 
 	def png_bytes(self) -> bytes | None:
 		with self._lock:

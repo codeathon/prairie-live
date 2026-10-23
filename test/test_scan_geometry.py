@@ -104,7 +104,7 @@ def test_fraction_points_used_as_is():
 	assert out["points"][0]["fx"] == pytest.approx(pts[0]["x"], abs=1e-4)
 
 
-def test_live_feed_stops_polling_after_dropped_session():
+def test_live_feed_keeps_geometry_after_dropped_session():
 	from prairie_live.live_feed import LiveFeed
 
 	class Dropped:
@@ -112,8 +112,15 @@ def test_live_feed_stops_polling_after_dropped_session():
 			return {"ok": False, "error": "PrairieView dropped the connection during -gts (reset)"}
 
 	feed = LiveFeed("127.0.0.1:25100")
-	assert feed._poll_geometry(Dropped()) is None
-	assert "polling stopped" in feed.scan_geometry_error()
+	assert feed._poll_geometry(FakeRelay(GEOM)) == 2.0
+	geom_ok, _ = feed.scan_geometry()
+	assert geom_ok is not None
+	# A later drop must not wipe amplitude/center (that hid galvo MP overlays).
+	wait = feed._poll_geometry(Dropped())
+	assert wait == 30.0
+	assert "paused" in feed.scan_geometry_error() or "last scan" in feed.scan_geometry_error()
+	geom2, _ = feed.scan_geometry()
+	assert geom2 == geom_ok
 	assert feed._poll_geometry(FakeRelay(GEOM)) == 2.0
 	assert feed.scan_geometry_error() == ""
 
