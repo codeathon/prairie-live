@@ -117,8 +117,13 @@ def apply_stim_to_meta(meta: dict[str, Any], cfg: dict[str, Any]) -> dict[str, A
 	Overlay experiment stim fields onto Mark Points template meta.
 
 	Why: series XML may omit laser/spiral/2D; lab SLM defaults live in experiment.json.
+
+	PV-saved / .gpl series already carry dwell + spiral timing that PV's DAC
+	expects. Overwriting those with experiment.json (e.g. 100 ms / 5 revs on a
+	36 ms / 8-rev file) has crashed PrairieView with an Int32 spiral overflow.
 	"""
 	out = dict(meta)
+	pv_saved = bool(out.get("pv_saved_format"))
 	if cfg.get("laser") is not None:
 		out["uncaging_laser"] = str(cfg["laser"])
 	if cfg.get("use_3d") is not None:
@@ -127,17 +132,18 @@ def apply_stim_to_meta(meta: dict[str, Any], cfg: dict[str, Any]) -> dict[str, A
 		out["all_points_at_once"] = (
 			"True" if bool(cfg["all_points_at_once"]) else "False"
 		)
-	if cfg.get("spiral_revolutions") is not None:
+	if not pv_saved and cfg.get("spiral_revolutions") is not None:
 		out["spiral_revolutions"] = f'{float(cfg["spiral_revolutions"]):g}'
-	if cfg.get("duration_ms") is not None:
+	if not pv_saved and cfg.get("duration_ms") is not None:
 		out["duration"] = float(cfg["duration_ms"])
-	if cfg.get("repetitions") is not None:
+	# PV-saved series already set Repetitions on each PVMarkPointElement.
+	if not pv_saved and cfg.get("repetitions") is not None:
 		out["repetitions"] = max(int(cfg["repetitions"]), 1)
 	# PV writes InitialDelay/InterPointDelay in ms (22.1 / 10), same as its UI.
 	if cfg.get("initial_delay_ms") is not None:
 		out["initial_delay_ms"] = float(cfg["initial_delay_ms"])
 		out["initial_delay"] = f'{float(cfg["initial_delay_ms"]):g}'
-	if cfg.get("inter_point_delay_ms") is not None:
+	if not pv_saved and cfg.get("inter_point_delay_ms") is not None:
 		out["inter_point_delay_ms"] = float(cfg["inter_point_delay_ms"])
 		out["inter_point_delay"] = f'{float(cfg["inter_point_delay_ms"]):g}'
 	if cfg.get("trigger_selection") is not None:

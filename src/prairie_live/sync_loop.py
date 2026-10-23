@@ -319,6 +319,8 @@ def run_sync_loop(
 		trig_sel = "None"
 		meta["trigger_selection"] = "None"
 		meta["trigger_frequency"] = "None"
+		# File often still has Trig In 1's GUID — that + Frequency=None crashes PV.
+		meta["trigger_identifier"] = "00000000-0000-0000-0000-000000000000"
 	elif trigger in ("serial", "wait"):
 		# Intermediate XML / -slm tokens must use the Bruker BNC name + GUID.
 		trig_sel = normalize_trigger_selection(trig_sel) or DEFAULT_TRIGGER_SELECTION
@@ -1439,12 +1441,32 @@ def _run_series_trial(
 	# AllPointsAtOnce+spiral after -slm has crashed PV (Int32 DAC overflow).
 	series_meta = dict(meta)
 	series_meta["all_points_at_once"] = "False"
+	if trigger == "none":
+		series_meta["trigger_selection"] = "None"
+		series_meta["trigger_frequency"] = "None"
+		series_meta["trigger_identifier"] = "00000000-0000-0000-0000-000000000000"
+	# Keep file spiral timing when present — experiment 100ms/5 revs on a
+	# PV-saved 36ms/8 spiral has also tripped the spiral DAC.
+	if series_meta.get("pv_saved_format"):
+		for pt in fire_pts:
+			if pt.get("duration") not in (None, ""):
+				series_meta["duration"] = float(pt["duration"])
+				break
+		for pt in fire_pts:
+			if pt.get("spiral_revolutions") not in (None, ""):
+				series_meta["spiral_revolutions"] = str(pt["spiral_revolutions"])
+				break
+		for pt in fire_pts:
+			ipd = pt.get("inter_point_delay")
+			if ipd not in (None, ""):
+				series_meta["inter_point_delay"] = str(ipd)
+				break
 	step = build_group_step(
 		fire_pts,
 		name=gname,
 		power=power,
 		meta=series_meta,
-		trigger_selection=trig_sel,
+		trigger_selection=trig_sel if trigger != "none" else "None",
 	)
 	series = [step]
 	point_ids = [str(p["id"]) for p in gpts]
@@ -1976,16 +1998,18 @@ def execute_session(
 	steps = load_mark_points_file(series)
 	points = extract_unique_points(steps)
 	meta = apply_stim_to_meta(template_meta(steps), opt)
-	if opt.get("repetitions") is not None:
+	# PV-saved / .gpl: Repetitions + spiral dwell live in the Mark Points file.
+	# GUI/lab defaults must not rewrite them (that combo crashed PV spiral DAC).
+	if not meta.get("pv_saved_format") and opt.get("repetitions") is not None:
 		meta["repetitions"] = max(int(opt["repetitions"]), 1)
 	powers = opt["powers"]
 	src_kind = "gpl" if str(series).lower().endswith(".gpl") else "xml"
-	# Point spiral size from experiment when cloning pool points.
+	# Point spiral size from lab defaults only when the file omits SpiralSize.
 	if opt.get("spiral_size_um") is not None:
 		for pt in points:
 			if pt.get("spiral_size_fov") in (None, ""):
 				pt["spiral_size_um"] = str(opt["spiral_size_um"])
-	if opt.get("spiral") is not None:
+	if opt.get("spiral") is not None and not meta.get("pv_saved_format"):
 		for pt in points:
 			pt["is_spiral"] = "True" if bool(opt["spiral"]) else "False"
 
@@ -1993,9 +2017,9 @@ def execute_session(
 	if stim_mode not in ("series", "slm"):
 		raise SystemExit(f"stim_mode must be 'series' or 'slm', got {stim_mode!r}")
 
-	# .gpl / PV-saved series often store galvo volts (outside 0–1). After the
-	# relay connects we lock all points to the live FOV (0–1) so burns match the
-	# cyan overlay; series converts FOV→galvo again at each fire.
+	# .gpl / PV-saved series often store galvo volts (outside 0–1). SLM locks
+	# those to the live FOV (0–1) so burns match the cyan overlay; series keeps
+	# native X/Y/SpiralSize and does not remap.
 	oob = [
 		p
 		for p in points
@@ -2016,11 +2040,26 @@ def execute_session(
 		f"trigger={opt['trigger']}  stim_mode={stim_mode}  "
 		f"laser={meta.get('uncaging_laser')}  group_size={gs}"
 	)
-	if oob:
+	if meta.get("pv_saved_format"):
 		print(
-			f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
-			"They will be locked to the live FOV (same as the cyan overlay) before fire."
+			"Mark Points XML is source of truth for Duration / SpiralRevs / "
+			f"IPD / Repetitions "
+			f"(duration={meta.get('duration')} ms, "
+			f"revs={meta.get('spiral_revolutions')}, "
+			f"ipd={meta.get('inter_point_delay')}, "
+			f"reps={meta.get('repetitions')})"
 		)
+	if oob:
+		if stim_mode == "slm":
+			print(
+				f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
+				"They will be locked to the live FOV (same as the cyan overlay) before fire."
+			)
+		else:
+			print(
+				f"NOTE: {len(oob)}/{len(points)} points are in galvo units (outside 0–1). "
+				"series keeps native X/Y/SpiralSize (no FOV remapping)."
+			)
 		for p in oob[:5]:
 			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
 	if stim_mode == "slm":
@@ -2130,8 +2169,10 @@ def execute_session(
 				+ ", ".join(str(n) for n in (clr.get("notes") or []))
 			)
 
-		# Lock points to the live FOV so burns match the cyan overlay (SLM and series).
-		if not opt.get("dry_run") and relay is not None:
+		# SLM (-MarkAllPoints) needs FOV 0–1. Series with PV-saved galvo XML must
+		# keep native X/Y/SpiralSize (FOV round-trip + experiment duration/revs
+		# has crashed PV spiral DAC — Int32 overflow).
+		if not opt.get("dry_run") and relay is not None and stim_mode == "slm":
 			from prairie_live.scan_geometry import prepare_points_for_live_fov
 
 			try:
@@ -2164,11 +2205,16 @@ def execute_session(
 					)
 			except Exception as exc:
 				print(f"WARNING: cannot lock points to live FOV ({exc})")
-				if stim_mode == "slm" and oob:
+				if oob:
 					print(
 						"Switching stim_mode → series (-LoadMarkPoints / -MarkPoints)."
 					)
 					stim_mode = "series"
+		elif stim_mode == "series" and oob:
+			print(
+				f"series: firing {len(oob)} galvo points as-is (PV-saved X/Y/SpiralSize); "
+				"no FOV remapping"
+			)
 
 		show = (
 			show_candidate_gui

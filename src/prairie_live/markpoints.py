@@ -277,6 +277,11 @@ def extract_unique_points(steps: list[dict]) -> list[dict]:
 			# Carry spiral defaults so rewritten XML stays loadable.
 			for k, v in _SPIRAL_DEFAULTS.items():
 				row.setdefault(k, v)
+			# PV-saved series keep SpiralRevolutions on the step, not the point.
+			if row.get("spiral_revolutions") in (None, ""):
+				revs = step.get("spiral_revolutions")
+				if revs not in (None, ""):
+					row["spiral_revolutions"] = str(revs)
 			out.append(row)
 	if not out:
 		raise ValueError(

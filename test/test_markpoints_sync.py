@@ -653,3 +653,85 @@ def test_pv_saved_serial_writes_trig_in_1_guid_not_null():
 	assert els[1].get("TriggerFrequency") == "FirstRepetition"
 	assert els[1].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
 	assert els[2].get("TriggerIdentifier") == DEFAULT_TRIGGER_IDENTIFIER
+
+
+def test_trigger_none_clears_file_trig_in_1_guid():
+	"""Frequency=None + Trig In 1 GUID crashes PV spiral DAC on -LoadMarkPoints."""
+	from prairie_live.lab_defaults import (
+		DEFAULT_TRIGGER_IDENTIFIER,
+		NO_TRIGGER_IDENTIFIER,
+		trigger_identifier_for,
+	)
+
+	assert (
+		trigger_identifier_for("None", DEFAULT_TRIGGER_IDENTIFIER)
+		== NO_TRIGGER_IDENTIFIER
+	)
+	assert trigger_identifier_for("none", DEFAULT_TRIGGER_IDENTIFIER) == NO_TRIGGER_IDENTIFIER
+	assert trigger_identifier_for("", DEFAULT_TRIGGER_IDENTIFIER) == NO_TRIGGER_IDENTIFIER
+	assert (
+		trigger_identifier_for("Trig In 1", DEFAULT_TRIGGER_IDENTIFIER)
+		== DEFAULT_TRIGGER_IDENTIFIER
+	)
+
+
+def test_series_none_keeps_lab_25pt_file_spiral(tmp_path: Path):
+	"""Lab 25-pt FirstRepetition file + trigger=none must not rewrite spiral timing."""
+	import xml.etree.ElementTree as ET
+
+	import pytest
+
+	from prairie_live.experiment_config import apply_stim_to_meta
+	from prairie_live.lab_defaults import NO_TRIGGER_IDENTIFIER, lab_defaults
+	from prairie_live.markpoints import load_mark_points_file
+	from prairie_live.sync_loop import execute_session
+
+	steps = load_mark_points_file("samples/MarkPoints_25_trig_in1.xml")
+	pts = extract_unique_points(steps)
+	assert len(pts) == 25
+	assert pts[0].get("spiral_revolutions") == "8"
+	meta = apply_stim_to_meta(template_meta(steps), lab_defaults())
+	assert meta["duration"] == 36.0
+	assert meta["spiral_revolutions"] == "8"
+	assert str(meta["inter_point_delay"]) == "14"
+
+	scope = tmp_path / "trial.xml"
+	opt = lab_defaults()
+	opt.update(
+		series="samples/MarkPoints_25_trig_in1.xml",
+		powers=[160.0],
+		seed=0,
+		# Lab default reps=1 must not clobber the file's Repetitions=3.
+		repetitions=1,
+		stim_dff_min=0.0,
+		n_groups=1,
+		group_size=3,
+		cover_all=False,
+		stim_mode="series",
+		trigger="none",
+		dry_run=True,
+		scope_xml=str(scope),
+		via_relay=None,
+		mock_scores=True,
+		f0_s=0,
+		f1_s=0,
+		inter_trial=0,
+		log=str(tmp_path / "t.jsonl"),
+		images_dir=str(tmp_path / "img"),
+	)
+	execute_session(opt, show_candidate_gui=False)
+	root = ET.fromstring(scope.read_text(encoding="utf-8"))
+	assert root.tag == "PVSavedMarkPointSeriesElements"
+	els = root.findall("PVMarkPointElement")
+	assert len(els) == 3
+	assert {e.get("TriggerFrequency") for e in els} == {"None"}
+	assert {e.get("TriggerIdentifier") for e in els} == {NO_TRIGGER_IDENTIFIER}
+	assert all(e.get("TriggerSelection") is None for e in els)
+	assert {e.get("Repetitions") for e in els} == {"3"}
+	g0 = els[0].find("PVGalvoPointElement")
+	assert float(g0.get("Duration")) == 36.0
+	assert g0.get("SpiralRevolutions") == "8"
+	assert g0.get("InterPointDelay") == "14"
+	assert float(g0.get("SpiralSize")) == pytest.approx(0.184901809118501)
+	# Native galvo X/Y (not FOV-remapped into 0–1).
+	assert not (0.0 <= float(g0.get("X")) <= 1.0 and 0.0 <= float(g0.get("Y")) <= 1.0)
