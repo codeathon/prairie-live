@@ -62,6 +62,16 @@ def galvo_to_fraction(x: float, y: float, geom: dict[str, float]) -> tuple[float
 	)
 
 
+def fraction_to_galvo(fx: float, fy: float, geom: dict[str, float]) -> tuple[float, float]:
+	"""Image fraction → galvo voltage for the current scan window."""
+	ax = 2.0 * float(geom["amp_x"])
+	ay = 2.0 * float(geom["amp_y"])
+	return (
+		float(geom["ctr_x"]) + (float(fx) - 0.5) * ax,
+		float(geom["ctr_y"]) + (float(fy) - 0.5) * ay,
+	)
+
+
 def points_for_image(
 	points: list[dict] | None, geom: dict[str, float] | None
 ) -> list[dict]:
@@ -81,27 +91,46 @@ def points_for_image(
 		row["x"], row["y"] = fx, fy
 		row["x_galvo"] = float(p["x"])
 		row["y_galvo"] = float(p["y"])
+		row["coord_space"] = "fov"
+		# SpiralSize on PV-saved galvo XML is already galvo volts.
+		if row.get("spiral_size_fov") not in (None, "") or row.get("spiral_width") not in (
+			None,
+			"",
+		):
+			row["spiral_space"] = "galvo"
 		out.append(row)
 	return out
 
 
-def prepare_points_for_slm(
+def prepare_points_for_live_fov(
 	points: list[dict],
 	relay: Any | None,
 ) -> tuple[list[dict], str]:
-	"""FOV-fraction copies for ``-MarkAllPoints`` (PV cannot save FOV coords).
+	"""Lock Mark Points to the live FOV (0–1), matching the cyan overlay.
 
-	Galvo-list XML is mapped via live ``currentScanAmplitude`` / ``Center``.
-	Raises ValueError when points are galvo-space but geometry is unavailable.
+	Galvo XML is mapped through live ``currentScanAmplitude`` / ``Center``.
+	Series later converts these fractions back to galvo at fire time so burns
+	land on the same spots the overlay shows — even after you pan/zoom.
 	"""
 	if not points:
 		return [], "no points"
 	if is_fraction_space(points):
-		return list(points), "points already in FOV fractions (0–1)"
+		out = []
+		for p in points:
+			row = dict(p)
+			row["coord_space"] = "fov"
+			# SpiralWidth on FOV XMLs is a fraction of the FOV, not galvo volts.
+			if row.get("spiral_width") not in (None, "") or row.get("spiral_size_um") not in (
+				None,
+				"",
+			):
+				row["spiral_space"] = "fov"
+			out.append(row)
+		return out, "points already in FOV fractions (0–1); fire tracks live FOV"
 	if relay is None:
 		raise ValueError(
 			"galvo Mark Points need the relay (Live + scan range) to convert "
-			"to FOV fractions for -MarkAllPoints"
+			"to FOV fractions"
 		)
 	geom = fetch_scan_geometry(relay)
 	mapped = points_for_image(points, geom)
@@ -111,13 +140,239 @@ def prepare_points_for_slm(
 		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
 	)
 	note = (
-		f"mapped {len(mapped)} galvo points → FOV via scan "
+		f"mapped {len(mapped)} galvo points → live FOV via scan "
 		f"X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
 		f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}"
 	)
 	if n_out:
-		note += f" · {n_out} still outside 0–1 at this zoom"
+		note += f" · {n_out} still outside 0–1 at this zoom (will not burn on FOV)"
 	return mapped, note
+
+
+def prepare_points_for_slm(
+	points: list[dict],
+	relay: Any | None,
+) -> tuple[list[dict], str]:
+	"""Alias: ``-MarkAllPoints`` needs FOV fractions (same as live FOV lock)."""
+	return prepare_points_for_live_fov(points, relay)
+
+
+def _spiral_fov_frac_for_slm(
+	points: list[dict],
+	geom: dict[str, float],
+	*,
+	spiral_size_um: float | None = None,
+	fov_width_um: float | None = None,
+) -> float | None:
+	"""Spiral diameter as FOV fraction for ``-slm`` (matches overlay ring size).
+
+	Prefer PV-saved galvo ``SpiralSize`` / (2·|amp|) so burns match series size.
+	Fall back to spiral_size_um / fov_width_um when the file has no SpiralSize.
+	"""
+	ax = abs(2.0 * float(geom["amp_x"]))
+	if ax <= 0:
+		return None
+	for p in points:
+		space = str(p.get("spiral_space") or "")
+		raw = p.get("spiral_size_fov")
+		if raw in (None, ""):
+			raw = p.get("spiral_width")
+		if raw in (None, ""):
+			continue
+		s = float(raw)
+		if space == "fov" or (space != "galvo" and 0.0 < s <= 1.0):
+			return min(max(s, 0.0), 1.0)
+		# Galvo volts (PV-saved SpiralSize) → fraction of live FOV width.
+		return min(max(s / ax, 0.0), 1.0)
+	if spiral_size_um not in (None, "") and fov_width_um not in (None, ""):
+		return spiral_size_fov_frac_um(float(spiral_size_um), float(fov_width_um))
+	return None
+
+
+def spiral_size_fov_frac_um(size_um: float, fov_width_um: float) -> float:
+	"""µm spiral → FOV fraction; kept here so fire-time SLM shares one helper."""
+	fov = float(fov_width_um)
+	if fov <= 0:
+		raise ValueError(f"fov_width_um must be > 0, got {fov_width_um!r}")
+	return float(size_um) / fov
+
+
+def points_for_slm_fire(
+	points: list[dict],
+	relay: Any | None,
+	*,
+	spiral_size_um: float | None = None,
+	fov_width_um: float | None = None,
+) -> tuple[list[dict], float | None, str]:
+	"""Remap Mark Points → live FOV 0–1 for ``-MarkAllPoints`` at fire time.
+
+	Why fire-time (not only session-start): session start runs after -Abort, when
+	``currentScanAmplitude`` can still be stale. The cyan overlay polls geometry
+	with LiveScan on — if -slm used a different amp, burns sit on the FOV but
+	miss the rings (seen as a scale-toward-center offset).
+
+	Galvo XML: always convert from ``x_galvo``/``y_galvo`` (or native x/y) with
+	the *current* scan window. Already-FOV files keep x/y. Raises if any point
+	lands outside 0–1 (would burn off-image).
+	"""
+	if not points:
+		return [], None, "no points"
+	if relay is None:
+		raise ValueError("SLM fire needs the relay to read live scan amplitude/center")
+	geom = fetch_scan_geometry(relay)
+	out: list[dict] = []
+	n_from_galvo = 0
+	for p in points:
+		row = dict(p)
+		gx = p.get("x_galvo")
+		gy = p.get("y_galvo")
+		# Prefer stored galvo so a pan/zoom after session-start lock still tracks tissue.
+		if gx not in (None, "") and gy not in (None, ""):
+			fx, fy = galvo_to_fraction(float(gx), float(gy), geom)
+			row["x_galvo"], row["y_galvo"] = float(gx), float(gy)
+			n_from_galvo += 1
+		elif p.get("coord_space") == "fov" or (
+			0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0
+		):
+			fx, fy = float(p["x"]), float(p["y"])
+		else:
+			fx, fy = galvo_to_fraction(float(p["x"]), float(p["y"]), geom)
+			row["x_galvo"], row["y_galvo"] = float(p["x"]), float(p["y"])
+			n_from_galvo += 1
+		row["x"], row["y"] = fx, fy
+		row["coord_space"] = "fov"
+		out.append(row)
+	oob = [
+		p
+		for p in out
+		if not (0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0)
+	]
+	if oob:
+		sample = ", ".join(
+			f"P{p['id']}({float(p['x']):.3f},{float(p['y']):.3f})" for p in oob[:5]
+		)
+		raise ValueError(
+			f"{len(oob)}/{len(out)} SLM point(s) outside live FOV 0–1 "
+			f"(scan X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
+			f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}): {sample}. "
+			"Pan/zoom so overlay rings sit inside the frame, then re-run."
+		)
+	spiral_frac = _spiral_fov_frac_for_slm(
+		out,
+		geom,
+		spiral_size_um=spiral_size_um,
+		fov_width_um=fov_width_um,
+	)
+	note = (
+		f"SLM fire: {n_from_galvo}/{len(out)} from galvo → FOV via scan "
+		f"X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
+		f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}"
+	)
+	if spiral_frac is not None:
+		note += f" · spiral_fov={spiral_frac:.4g}"
+	return out, spiral_frac, note
+
+
+def _clamp_galvo(v: float, ctr: float, amp: float) -> float:
+	"""Keep galvo within the live scan ± a little margin (DAC Int32 overflow)."""
+	half = abs(float(amp))
+	lo, hi = float(ctr) - half * 1.05, float(ctr) + half * 1.05
+	# Absolute DAC rail ~±10 V on this class of scanners.
+	lo, hi = max(lo, -10.0), min(hi, 10.0)
+	return min(max(float(v), lo), hi)
+
+
+def _spiral_size_galvo(p: dict, geom: dict[str, float]) -> str | None:
+	"""SpiralSize for series XML must be galvo units, never µm."""
+	ax = abs(2.0 * float(geom["amp_x"]))
+	raw = p.get("spiral_size_fov")
+	if raw in (None, ""):
+		raw = p.get("spiral_width")
+	space = str(p.get("spiral_space") or "")
+	if raw not in (None, ""):
+		s = float(raw)
+		if space == "fov":
+			s = s * ax
+		elif space == "galvo":
+			pass
+		elif s > ax * 1.5:
+			# Looks like µm or a bad token — convert via optics if possible.
+			um = p.get("spiral_size_um")
+			fov_um = p.get("fov_width_um")
+			if um not in (None, "") and fov_um not in (None, ""):
+				s = (float(um) / float(fov_um)) * ax
+			else:
+				return None
+		s = min(max(s, 0.0), ax)
+		return f"{s:.6g}"
+	um = p.get("spiral_size_um")
+	fov_um = p.get("fov_width_um")
+	if um not in (None, "") and fov_um not in (None, ""):
+		s = min(max((float(um) / float(fov_um)) * ax, 0.0), ax)
+		return f"{s:.6g}"
+	return None
+
+
+def points_to_galvo_for_series(
+	points: list[dict],
+	relay: Any | None,
+	*,
+	fov_width_um: float | None = None,
+) -> tuple[list[dict], str]:
+	"""FOV-fraction points → galvo voltages for ``-LoadMarkPoints`` on the live FOV.
+
+	Also rewrites spiral size into galvo units and clamps X/Y so PV's spiral
+	DAC path cannot Int32-overflow (seen when switching SLM → series).
+	"""
+	if not points:
+		return [], "no points"
+	if not is_fraction_space(points) and not any(
+		p.get("coord_space") == "fov" for p in points
+	):
+		return list(points), "series using native galvo X/Y (not FOV-locked)"
+	if relay is None:
+		raise ValueError(
+			"FOV-locked series needs the relay to convert fractions → galvo "
+			"for the current scan window"
+		)
+	geom = fetch_scan_geometry(relay)
+	out: list[dict] = []
+	n_out = 0
+	for p in points:
+		row = dict(p)
+		if fov_width_um is not None:
+			row["fov_width_um"] = float(fov_width_um)
+		fx, fy = float(p["x"]), float(p["y"])
+		if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
+			n_out += 1
+		gx, gy = fraction_to_galvo(fx, fy, geom)
+		gx = _clamp_galvo(gx, geom["ctr_x"], geom["amp_x"])
+		gy = _clamp_galvo(gy, geom["ctr_y"], geom["amp_y"])
+		row["x_fov"], row["y_fov"] = fx, fy
+		row["x"], row["y"] = gx, gy
+		row["coord_space"] = "galvo"
+		# Drop µm SpiralSizeInMicrons on galvo XML — PV spiral DAC mis-reads it
+		# after an SLM run and can throw Int32 overflow.
+		row["spiral_size_um"] = ""
+		sg = _spiral_size_galvo(row, geom)
+		if sg is not None:
+			row["spiral_size_fov"] = sg
+			row["spiral_width"] = sg
+			row["spiral_height"] = sg
+			row["spiral_space"] = "galvo"
+		else:
+			row["spiral_size_fov"] = ""
+			row["spiral_width"] = ""
+			row["spiral_height"] = ""
+		out.append(row)
+	note = (
+		f"series fire: FOV→galvo via scan "
+		f"X {geom['ctr_x']:g}±{geom['amp_x']:g}, "
+		f"Y {geom['ctr_y']:g}±{geom['amp_y']:g}"
+	)
+	if n_out:
+		note += f" · {n_out} FOV point(s) outside 0–1"
+	return out, note
 
 
 def overlay_points(

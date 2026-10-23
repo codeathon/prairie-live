@@ -52,7 +52,7 @@ def test_live_tseries_abort_are_script_commands():
 	r = _relay()
 	for cmd in ("live", "tseries", "abort"):
 		assert r.handle_command({"cmd": cmd})["ok"] is True
-	assert _cmds(r) == [("-LiveScan",), ("-TSeries",), ("-Abort",)]
+	assert _cmds(r) == [("-LiveScan",), ("-TSeries",), ("-Silent", "-Abort")]
 
 
 def test_get_state_uses_gts():
@@ -87,7 +87,13 @@ def test_load_and_fire_mark_points_on_one_session(tmp_path):
 	assert out["ok"] is True and out["path"] == path
 	assert (tmp_path / "trial.xml").read_text() == "<x/>"
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	assert r.pv.link.sent == [(("-LoadMarkPoints", path), 60.0), (("-MarkPoints",), 60.0)]
+	# Block on -MarkPoints (no -NoWait): caller pulses DTR while DONE waits.
+	# -Silent -LoadMarkPoints + MarkPointsMetadata=False avoid E:\Markpoints
+	# "file already present" dialogs that stuck APA on group 1.
+	cmds = [c[0] for c in r.pv.link.sent]
+	assert ("-MarkPointsMetadata", "False") in cmds
+	assert ("-Silent", "-LoadMarkPoints", path) in cmds
+	assert ("-Silent", "-MarkPoints") in cmds
 	assert r.pv.link.timeout == 10.0
 
 
@@ -112,7 +118,30 @@ def test_mark_all_points_waits_whole_ms_then_fires():
 	]
 	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1})
 	assert out["ok"] is True
-	assert _cmds(r) == [("-Wait", "22"), tuple(parts)]
+	assert _cmds(r) == [
+		("-Wait", "22"),
+		("-Silent", *parts),
+	]
+	assert out.get("no_wait") is False
+
+
+def test_mark_all_points_no_wait_false_when_trigger_none():
+	r = _relay()
+	parts = [
+		"-MarkAllPoints",
+		"1",
+		"False",
+		"0.1",
+		"0.2",
+		"10",
+		"Monaco",
+		"0.75",
+		"None",
+	]
+	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "no_wait": False})
+	assert out["ok"] is True
+	assert _cmds(r) == [("-Silent", *parts)]
+	assert out.get("no_wait") is False
 
 
 def test_grab_one_stores_gi_frame():
@@ -234,7 +263,7 @@ def test_dropped_session_reconnects_and_names_the_command(monkeypatch, capsys):
 	assert opened == [1]
 	assert "during '-gts currentScanAmplitude XAxis'" in capsys.readouterr().out
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	assert _cmds(r) == [("-MarkPoints",)]
+	assert _cmds(r) == [("-Silent", "-MarkPoints")]
 
 
 def test_prairie_link_raises_when_pv_closes_socket():

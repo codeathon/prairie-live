@@ -277,6 +277,11 @@ def extract_unique_points(steps: list[dict]) -> list[dict]:
 			# Carry spiral defaults so rewritten XML stays loadable.
 			for k, v in _SPIRAL_DEFAULTS.items():
 				row.setdefault(k, v)
+			# PV-saved series keep SpiralRevolutions on the step, not the point.
+			if row.get("spiral_revolutions") in (None, ""):
+				revs = step.get("spiral_revolutions")
+				if revs not in (None, ""):
+					row["spiral_revolutions"] = str(revs)
 			out.append(row)
 	if not out:
 		raise ValueError(
@@ -505,9 +510,11 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 	"""
 	Write PV's own saved-series layout (PVSavedMarkPointSeriesElements).
 
-	Each point is its own PVMarkPointElement with X/Y inline. When a trigger
-	line is set, every point waits (FirstRepetition + Trig In 1 GUID) — same
-	as a PV UI export. Software must pulse DTR once per point.
+	Each point is its own PVMarkPointElement with X/Y inline. For serial
+	trigger, only the **first** point of each group waits on Trig In 1 /
+	FirstRepetition — one DTR releases the whole group; later points fire
+	with Frequency=None (null GUID). A PV UI export that tags every point
+	would need one pulse per point; mp-sync wants one pulse per group.
 	"""
 	meta = groups[0] if groups else {}
 	root = ET.Element("PVSavedMarkPointSeriesElements")
@@ -519,12 +526,15 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 		if not g.get("is_active", True):
 			continue
 		trig = str(g.get("trigger_selection", "None"))
+		want_trig = trig not in ("None", "none", "")
 		freq = (
 			str(g.get("trigger_frequency", DEFAULT_TRIGGER_FREQUENCY))
-			if trig not in ("None", "none", "")
+			if want_trig
 			else "None"
 		)
 		tid = trigger_identifier_for(trig, g.get("trigger_identifier"))
+		# One wait-for-trigger at the start of this group; rest free-run.
+		group_first = True
 		for pt in g["points"]:
 			if not pt.get("is_active", True):
 				continue
@@ -532,10 +542,13 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 			el.set("Repetitions", str(g["repetitions"]))
 			el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
 			el.set("UncagingLaserPower", str(g.get("xml_power", g["laser_pwr"])))
-			el.set("TriggerFrequency", freq)
-			if trig not in ("None", "none", ""):
+			if want_trig and group_first:
+				el.set("TriggerFrequency", freq)
 				el.set("TriggerSelection", trig)
-			el.set("TriggerIdentifier", tid)
+				el.set("TriggerIdentifier", tid)
+			else:
+				el.set("TriggerFrequency", "None")
+				el.set("TriggerIdentifier", _NO_TRIGGER_ID)
 			el.set("TriggerCount", str(g.get("trigger_count", "1")))
 			el.set("AsyncSyncFrequency", str(g.get("async_sync_frequency", "None")))
 			el.set("VoltageOutputCategoryName", str(g.get("voltage_output_category", "None")))
@@ -555,6 +568,7 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 			if size not in (None, ""):
 				galvo.set("SpiralSize", str(size))
 			first = False
+			group_first = False
 	return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 

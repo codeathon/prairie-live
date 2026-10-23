@@ -61,6 +61,37 @@ def test_galvo_points_map_into_frame():
 	assert p1["r"] == pytest.approx(0.184901809118501 / 15.2 / 2, abs=1e-4)
 
 
+def test_fraction_galvo_roundtrip_tracks_live_fov():
+	from prairie_live.scan_geometry import (
+		fraction_to_galvo,
+		galvo_to_fraction,
+		prepare_points_for_live_fov,
+		points_to_galvo_for_series,
+	)
+
+	g = fetch_scan_geometry(FakeRelay(GEOM))
+	fx, fy = galvo_to_fraction(-3.25, 1.5, g)
+	gx, gy = fraction_to_galvo(fx, fy, g)
+	assert gx == pytest.approx(-3.25, abs=1e-6)
+	assert gy == pytest.approx(1.5, abs=1e-6)
+
+	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
+	fov_pts, note = prepare_points_for_live_fov(pts, FakeRelay(GEOM))
+	assert "live FOV" in note
+	assert all(p.get("coord_space") == "fov" for p in fov_pts)
+	# Pan the scan center; series must retarget galvo so burns stay on FOV spots.
+	pan = dict(GEOM)
+	pan[("currentScanCenter", "XAxis")] = "1.0"
+	fired, fire_note = points_to_galvo_for_series(fov_pts, FakeRelay(pan))
+	assert "FOV→galvo" in fire_note
+	assert fired[0]["x"] != pytest.approx(float(pts[0]["x"]), abs=0.01)
+	# Round-trip through the panned geom recovers the FOV fraction.
+	g2 = fetch_scan_geometry(FakeRelay(pan))
+	rx, ry = galvo_to_fraction(float(fired[0]["x"]), float(fired[0]["y"]), g2)
+	assert rx == pytest.approx(float(fov_pts[0]["x"]), abs=1e-5)
+	assert ry == pytest.approx(float(fov_pts[0]["y"]), abs=1e-5)
+
+
 def test_rig_scan_puts_all_picked_points_in_frame():
 	# PV 6.1 on the rig at zoom 1: amplitude 4.2035577285, center 0 on both axes.
 	rig = {
@@ -167,6 +198,61 @@ def test_prepare_points_for_slm_maps_galvo_via_relay():
 		assert False, "expected ValueError without relay"
 	except ValueError as exc:
 		assert "relay" in str(exc).lower()
+
+
+def test_points_for_slm_fire_remaps_galvo_with_live_amp():
+	"""Burns must use the *current* scan amp (overlay), not a stale session lock."""
+	from prairie_live.scan_geometry import (
+		galvo_to_fraction,
+		points_for_slm_fire,
+		prepare_points_for_live_fov,
+	)
+
+	# Session start locked with amp=6 (stale after Abort); live overlay is amp=4.2.
+	stale = {
+		("currentScanAmplitude", "XAxis"): "6.0",
+		("currentScanAmplitude", "YAxis"): "6.0",
+		("currentScanCenter", "XAxis"): "0",
+		("currentScanCenter", "YAxis"): "0",
+	}
+	live = {
+		("currentScanAmplitude", "XAxis"): "4.2035577285",
+		("currentScanAmplitude", "YAxis"): "4.2035577285",
+		("currentScanCenter", "XAxis"): "0",
+		("currentScanCenter", "YAxis"): "0",
+	}
+	raw = extract_unique_points(load_mark_points_file("samples/MarkPoints_25_trig_in1.xml"))
+	locked, _ = prepare_points_for_live_fov(raw, FakeRelay(stale))
+	# Stale lock puts P11 closer to center than the live overlay.
+	p11 = next(p for p in locked if str(p["id"]) == "11")
+	stale_fx = float(p11["x"])
+	live_fx, live_fy = galvo_to_fraction(
+		float(p11["x_galvo"]), float(p11["y_galvo"]), fetch_scan_geometry(FakeRelay(live))
+	)
+	assert stale_fx != pytest.approx(live_fx, abs=1e-3)
+
+	fire, spiral, note = points_for_slm_fire(
+		[p11], FakeRelay(live), spiral_size_um=54.5, fov_width_um=1136.7
+	)
+	assert "SLM fire" in note
+	assert float(fire[0]["x"]) == pytest.approx(live_fx, abs=1e-5)
+	assert float(fire[0]["y"]) == pytest.approx(live_fy, abs=1e-5)
+	# PV-saved SpiralSize 0.185 galvo → FOV frac via 2*|amp|.
+	assert spiral == pytest.approx(0.184901809118501 / (2 * 4.2035577285), abs=1e-5)
+
+
+def test_points_for_slm_fire_rejects_oob():
+	from prairie_live.scan_geometry import points_for_slm_fire
+
+	tiny = {
+		("currentScanAmplitude", "XAxis"): "1.0",
+		("currentScanAmplitude", "YAxis"): "1.0",
+		("currentScanCenter", "XAxis"): "0",
+		("currentScanCenter", "YAxis"): "0",
+	}
+	pts = [{"id": "1", "x": -3.0, "y": -3.0, "x_galvo": -3.0, "y_galvo": -3.0}]
+	with pytest.raises(ValueError, match="outside live FOV"):
+		points_for_slm_fire(pts, FakeRelay(tiny))
 
 
 def test_score_galvo_points_after_mapping():

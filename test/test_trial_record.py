@@ -34,6 +34,7 @@ def test_summary_and_ordered_row_drop_bulky():
 	}
 	s = format_trial_summary(row)
 	assert "trial 4" in s
+	assert "group 5/5" in s
 	assert "points [1,4,8]" in s
 	assert "0.0096" in s
 	assert "trigger serial" in s

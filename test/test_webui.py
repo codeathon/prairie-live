@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import socket
 import threading
+from pathlib import Path
 
 from prairie_live.com_ports import list_com_ports
 from prairie_live.gui_session import apply_gui_overrides
@@ -51,6 +52,40 @@ def test_apply_overrides_without_json():
 	assert opt["trigger_selection"] == "Trig In 1"
 	assert opt["cover_all"] is True
 	assert opt["n_groups"] == 2
+	assert opt["visual_enabled"] is False
+
+
+def test_webui_exposes_psychopy_controls():
+	html = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/index.html").read_text(
+		encoding="utf-8"
+	)
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	assert 'id="visual_enabled"' in html
+	assert 'id="visual_lead_ms"' in html
+	assert "visual_enabled" in js
+	assert "visualRunPayload" in js
+	from prairie_live.web_app import _body_bool, _body_float, _body_int
+
+	assert _body_bool({"visual_enabled": True}, "visual_enabled") is True
+	assert _body_bool({"visual_enabled": "false"}, "visual_enabled") is False
+	assert _body_int({"visual_screen": "1"}, "visual_screen") == 1
+	assert _body_float({"visual_lead_ms": "100"}, "visual_lead_ms") == 100.0
+
+
+def test_candidate_clear_is_selection_not_list():
+	html = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/index.html").read_text(
+		encoding="utf-8"
+	)
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	assert "Clear selection" in html
+	assert "rankedSig" in js
+	assert "selectionCleared" in js
+	assert "do not re-select after the user hits Clear" in js
+	assert "green highlight" in html
 
 
 def test_com_ports_never_empty():

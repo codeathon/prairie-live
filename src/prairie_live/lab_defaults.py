@@ -34,13 +34,21 @@ def normalize_trigger_selection(name: str | None) -> str:
 
 
 def trigger_identifier_for(selection: str | None, explicit: str | None = None) -> str:
-	"""GUID for PVSaved XML. Prefer an ID from the loaded file; else lab Trig In 1."""
-	ex = str(explicit or "").strip()
-	if ex and ex != NO_TRIGGER_IDENTIFIER:
-		return ex
+	"""GUID for PVSaved XML.
+
+	Selection wins: trigger=none / TriggerSelection=None must use the null GUID
+	even if the loaded file still carries a Trig In 1 identifier (that combo
+	has crashed PV's spiral DAC on -LoadMarkPoints).
+	"""
+	sel_raw = str(selection or "").strip()
+	if sel_raw in ("None", "none", ""):
+		return NO_TRIGGER_IDENTIFIER
 	sel = normalize_trigger_selection(selection)
 	if sel in ("None", "none", ""):
 		return NO_TRIGGER_IDENTIFIER
+	ex = str(explicit or "").strip()
+	if ex and ex != NO_TRIGGER_IDENTIFIER:
+		return ex
 	return DEFAULT_TRIGGER_IDENTIFIER
 
 

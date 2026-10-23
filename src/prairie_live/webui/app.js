@@ -1,6 +1,10 @@
 const $ = (id) => document.getElementById(id);
 const picked = new Set();
 let lastRanked = [];
+/** When ranked results change, seed ● on stimulated rows once. Clear selection must stay empty. */
+let rankedSig = "";
+/** After Clear selection: do not auto-reselect (keeps green row highlight off). */
+let selectionCleared = false;
 
 async function jget(url) {
   const r = await fetch(url);
@@ -247,12 +251,22 @@ function renderCandidates(ranked) {
   if (!lastRanked.length) {
     box.hidden = true;
     $("side").classList.remove("has-cands");
+    rankedSig = "";
+    selectionCleared = false;
     return;
   }
   box.hidden = false;
   $("side").classList.add("has-cands");
-  if (!picked.size) {
+  // Sorted so poll order cannot look like a new run and re-seed selection/green.
+  const sig = lastRanked.map(rowKey).slice().sort().join("\0");
+  if (sig !== rankedSig) {
+    // New run results only — do not re-select after the user hits Clear selection.
+    rankedSig = sig;
+    selectionCleared = false;
+    picked.clear();
     lastRanked.filter((r) => r.stimulated).forEach((r) => picked.add(rowKey(r)));
+  } else if (selectionCleared) {
+    picked.clear();
   }
   for (const r of lastRanked) {
     const tr = document.createElement("tr");
@@ -261,6 +275,7 @@ function renderCandidates(ranked) {
     if (picked.has(key)) tr.classList.add("picked");
     tr.innerHTML = `<td>${picked.has(key) ? "●" : "○"}</td><td>${r.id}</td><td>${pwr ?? "—"}</td><td>${r.dff == null ? "—" : Number(r.dff).toFixed(3)}</td><td>${r.tercile}</td>`;
     tr.addEventListener("click", () => {
+      selectionCleared = false;
       if (picked.has(key)) picked.delete(key);
       else picked.add(key);
       renderCandidates(lastRanked);
@@ -285,6 +300,23 @@ async function tick() {
   }
 }
 
+function syncVisualOpts() {
+  const on = $("visual_enabled").checked;
+  $("visual_opts").hidden = !on;
+}
+
+function visualRunPayload() {
+  return {
+    visual_enabled: $("visual_enabled").checked,
+    visual_screen: $("visual_screen").value,
+    visual_refresh_hz: $("visual_refresh_hz").value,
+    visual_isi_s: $("visual_isi_s").value,
+    visual_lead_ms: $("visual_lead_ms").value,
+    visual_grating_frames: $("visual_grating_frames").value,
+    visual_dtr_frames: $("visual_dtr_frames").value,
+  };
+}
+
 async function boot() {
   const d = await jget("/api/defaults");
   $("via_relay").value = d.via_relay;
@@ -295,10 +327,19 @@ async function boot() {
   fillSelect($("serial"), d.com_ports, "device", (p) => `${p.device} — ${p.description}`, d.serial);
   fillSelect($("stim_mode"), d.stim_modes, null, null, d.stim_mode);
   fillSelect($("trigger"), d.triggers, null, null, d.trigger);
+  $("visual_enabled").checked = !!d.visual_enabled;
+  $("visual_screen").value = d.visual_screen;
+  $("visual_refresh_hz").value = d.visual_refresh_hz;
+  $("visual_isi_s").value = d.visual_isi_s;
+  $("visual_lead_ms").value = d.visual_lead_ms;
+  $("visual_grating_frames").value = d.visual_grating_frames;
+  $("visual_dtr_frames").value = d.visual_dtr_frames;
+  syncVisualOpts();
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
   $("powers").addEventListener("input", syncTypedPowers);
   $("xml_file").addEventListener("change", onXmlFile);
+  $("visual_enabled").addEventListener("change", syncVisualOpts);
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;
     applyMarksVisibility();
@@ -315,16 +356,20 @@ async function boot() {
       serial: $("serial").value,
       stim_mode: $("stim_mode").value,
       trigger: $("trigger").value,
+      ...visualRunPayload(),
     });
     if (!res.ok) $("save_status").textContent = res.error || "run failed";
   });
   $("stop").addEventListener("click", () => jpost("/api/stop", {}));
   $("sel_top").addEventListener("click", () => {
+    selectionCleared = false;
     picked.clear();
     lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(rowKey(r)));
     renderCandidates(lastRanked);
   });
   $("sel_clear").addEventListener("click", () => {
+    // Clear ● + green highlight; list/ranking stays. Poll must not re-seed.
+    selectionCleared = true;
     picked.clear();
     renderCandidates(lastRanked);
   });

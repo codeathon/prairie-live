@@ -78,6 +78,29 @@ def _file(handler: BaseHTTPRequestHandler, path: Path, ctype: str) -> None:
 	handler.wfile.write(data)
 
 
+def _body_bool(body: dict[str, Any], key: str) -> bool | None:
+	if key not in body:
+		return None
+	val = body[key]
+	if isinstance(val, bool):
+		return val
+	if val in (None, ""):
+		return None
+	return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _body_int(body: dict[str, Any], key: str) -> int | None:
+	if key not in body or body[key] in (None, ""):
+		return None
+	return int(body[key])
+
+
+def _body_float(body: dict[str, Any], key: str) -> float | None:
+	if key not in body or body[key] in (None, ""):
+		return None
+	return float(body[key])
+
+
 class Handler(BaseHTTPRequestHandler):
 	def log_message(self, fmt: str, *args) -> None:
 		print(f"webui {self.address_string()} {fmt % args}")
@@ -110,6 +133,13 @@ class Handler(BaseHTTPRequestHandler):
 					"seed": d["seed"],
 					"repetitions": d["repetitions"],
 					"stim_dff_min": d["stim_dff_min"],
+					"visual_enabled": bool(d.get("visual_enabled", False)),
+					"visual_screen": int(d.get("visual_screen", 1)),
+					"visual_refresh_hz": float(d.get("visual_refresh_hz", 120)),
+					"visual_isi_s": float(d.get("visual_isi_s", 2.0)),
+					"visual_lead_ms": float(d.get("visual_lead_ms", 100)),
+					"visual_grating_frames": int(d.get("visual_grating_frames", 119)),
+					"visual_dtr_frames": int(d.get("visual_dtr_frames", 6)),
 					"com_ports": ports,
 					"relay": probe_relay(DEFAULT_RELAY),
 				},
@@ -227,8 +257,29 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		if u.path == "/api/stop":
 			STATE.stop.set()
-			STATE.append("stop requested — finishing current trial")
-			_json(self, {"ok": True})
+			addr = str(
+				(STATE.opt or {}).get("via_relay")
+				or getattr(STATE.live, "addr", None)
+				or DEFAULT_RELAY
+			)
+			STATE.append(
+				"stop requested — Abort + clear Mark Points on PV, then finish trial"
+			)
+
+			def _pv_stop_cleanup() -> None:
+				try:
+					from prairie_live.pv_cleanup import abort_and_clear_at
+
+					out = abort_and_clear_at(addr)
+					notes = out.get("notes") or []
+					STATE.append(
+						"PV cleared: " + (", ".join(str(n) for n in notes) or str(out))
+					)
+				except Exception as exc:
+					STATE.append(f"PV clear failed: {exc}")
+
+			threading.Thread(target=_pv_stop_cleanup, daemon=True).start()
+			_json(self, {"ok": True, "relay": addr})
 			return
 		if u.path == "/api/save-candidates":
 			self._save(raw)
@@ -298,6 +349,13 @@ class Handler(BaseHTTPRequestHandler):
 				stim_mode=body.get("stim_mode") or "slm",
 				trigger=body.get("trigger") or "serial",
 				xml_fields=fields,
+				visual_enabled=_body_bool(body, "visual_enabled"),
+				visual_screen=_body_int(body, "visual_screen"),
+				visual_refresh_hz=_body_float(body, "visual_refresh_hz"),
+				visual_isi_s=_body_float(body, "visual_isi_s"),
+				visual_lead_ms=_body_float(body, "visual_lead_ms"),
+				visual_grating_frames=_body_int(body, "visual_grating_frames"),
+				visual_dtr_frames=_body_int(body, "visual_dtr_frames"),
 			)
 			n_t = planned_trial_count(len(pts), powers, n_groups=int(opt["n_groups"]))
 			STATE.stop.clear()
@@ -311,11 +369,16 @@ class Handler(BaseHTTPRequestHandler):
 			STATE.n_trials = n_t
 			STATE.boards = {}
 			STATE.live.set_addr(str(opt.get("via_relay") or DEFAULT_RELAY))
+			vis = "on" if opt.get("visual_enabled") else "off"
 			STATE.append(
 				f"start  {len(pts)} pts  groups={opt['n_groups']}  "
 				f"every point at each of {powers}  relay={opt['via_relay']}  "
 				f"COM={opt['serial']}  mode={opt['stim_mode']}  "
-				f"trigger={opt['trigger']}  trials={n_t}"
+				f"trigger={opt['trigger']}  visual={vis}  "
+				f"lead_ms={opt.get('visual_lead_ms')}  trials={n_t}"
+			)
+			STATE.append(
+				"clearing any leftover PV Mark Points / -slm from a prior run…"
 			)
 
 			def work() -> None:

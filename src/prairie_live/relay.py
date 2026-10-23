@@ -89,6 +89,11 @@ class Relay:
 			) from e
 		h, w = self.pv.wh
 		print(f"PV script port {self.pv.host}:{self.pv.port}  FOV {int(w)}x{int(h)}")
+		try:
+			self.pv.disable_mark_points_metadata()
+			print("MarkPointsMetadata=False (no ad-hoc E:\\Markpoints spills)")
+		except Exception as e:
+			print(f"MarkPointsMetadata False failed ({e})")
 		if not self._grab_enabled:
 			print("grab OFF (default); pass --grab for live frames")
 			return
@@ -165,6 +170,11 @@ class Relay:
 			return pv.start_tseries()
 		if cmd == "abort":
 			return pv.abort()
+		if cmd == "abort_clear_stim":
+			# GUI Stop: kill armed Mark Points / -slm, replace series, restore Live.
+			from prairie_live.pv_cleanup import abort_and_clear_stim
+
+			return {"ok": True, "cmd": "abort_clear_stim", **abort_and_clear_stim(pv)}
 		if cmd == "live":
 			return pv.start_live()
 		if cmd == "get_state":
@@ -181,15 +191,27 @@ class Relay:
 		if cmd == "mark_points":
 			self._n_fired += 1
 			t0 = time.monotonic()
-			out = pv.mark_points()
+			no_wait = bool(payload["no_wait"]) if "no_wait" in payload else False
+			timeout = float(payload.get("timeout") or 180.0)
+			out = pv.mark_points(no_wait=no_wait, timeout=timeout)
 			dt = (time.monotonic() - t0) * 1000.0
-			print(f"mark_points #{self._n_fired} DONE in {dt:.0f} ms")
+			print(f"mark_points #{self._n_fired} DONE in {dt:.0f} ms no_wait={out.get('no_wait')}")
 			return out
 		if cmd == "mark_all_points":
 			parts = payload.get("parts") or []
 			if not isinstance(parts, list) or not parts:
 				raise ValueError("mark_all_points requires non-empty parts list")
-			return pv.mark_all_points(parts, wait_ms=float(payload.get("wait_ms") or 0.0))
+			kw: dict = {
+				"wait_ms": float(payload.get("wait_ms") or 0.0),
+				"timeout": float(payload.get("timeout") or 180.0),
+				"no_wait": bool(payload["no_wait"]) if "no_wait" in payload else False,
+			}
+			out = pv.mark_all_points(parts, **kw)
+			print(
+				f"mark_all_points DONE no_wait={out.get('no_wait')} "
+				f"parts0={parts[0] if parts else None}"
+			)
+			return out
 		return {"ok": False, "error": f"unknown cmd {cmd}"}
 
 
