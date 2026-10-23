@@ -30,7 +30,7 @@ from prairie_live.sync_loop import (
 FAT_XML = """<?xml version="1.1"?>
 <PVMarkPointSeriesElements Use3D="True" AllPointsAtOnce="True" Iterations="1" IterationDelay="0.00">
   <PVMarkPointElement Repetitions="1" UncagingLaser="Uncaging" UncagingLaserPower="0.75"
-    TriggerSelection="PFI1" TriggerFrequency="None" TriggerCount="1"
+    TriggerSelection="Trig In 1" TriggerFrequency="None" TriggerCount="1"
     AsyncSyncFrequency="None" VoltageOutputCategoryName="None"
     VoltageRecCategoryName="None" parameterSet="CurrentSettings">
     <PVGalvoPointElement InitialDelay="0.00" InterPointDelay="0.01" Duration="10"
@@ -456,8 +456,8 @@ def test_slm_packed_maps_trigger_index_to_group(tmp_path: Path):
 	]
 	assert packed[0]["group_trigger_map"][0]["point_ids"] == rows[0]["point_ids"]
 	assert packed[0]["group_trigger_map"][1]["point_ids"] == rows[1]["point_ids"]
-	# Packed string contains two PFI1 tokens (one per set) + Delay between.
-	assert relay.calls[0][1].count("PFI1") == 2
+	# Packed string contains two Trig In 1 tokens (one per set) + Delay between.
+	assert relay.calls[0][1].count("Trig In 1") == 2
 
 
 def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):

@@ -26,7 +26,7 @@ def test_summary_and_ordered_row_drop_bulky():
 		"score_kind": "relay_disk_dff",
 		"stim_mode": "slm",
 		"trigger": "serial",
-		"trigger_selection": "PFI1",
+		"trigger_selection": "Trig In 1",
 		"t_ttl": 1.0,
 		"t_ttl_mono": 2.0,
 		"slm_parts": ["-MarkAllPoints", "3"],
@@ -37,7 +37,7 @@ def test_summary_and_ordered_row_drop_bulky():
 	assert "points [1,4,8]" in s
 	assert "0.0096" in s
 	assert "trigger serial" in s
-	assert "line PFI1" in s
+	assert "line Trig In 1" in s
 	assert "DTR pulsed" in s
 	ordered = order_trial_row({**row, "phase": "done", "summary": s})
 	assert list(ordered.keys())[0] == "phase"
@@ -54,7 +54,7 @@ def test_summary_marks_dtr_skipped_when_no_timestamp():
 			"power": 20,
 			"stim_mode": "slm",
 			"trigger": "serial",
-			"trigger_selection": "PFI1",
+			"trigger_selection": "Trig In 1",
 		}
 	)
 	assert "DTR skipped" in s
@@ -72,7 +72,7 @@ def test_write_trial_sidecars(tmp_path: Path):
 		"stim_mode": "slm",
 		"group_name": "PL_t0000_g1",
 		"trigger": "none",
-		"trigger_selection": "PFI1",
+		"trigger_selection": "Trig In 1",
 	}
 	row["summary"] = format_trial_summary(row)
 	paths = write_trial_sidecars(row, tmp_path / "t0000")
@@ -144,7 +144,7 @@ def test_jsonl_writes_readable_txt(tmp_path: Path):
 				"score_kind": "mock",
 				"stim_mode": "slm",
 				"trigger": "none",
-				"trigger_selection": "PFI1",
+				"trigger_selection": "Trig In 1",
 				"summary": "trial 0 · points [1,2,3]",
 			}
 		)

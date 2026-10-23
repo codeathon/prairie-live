@@ -115,7 +115,7 @@ def test_apply_stim_to_meta():
 	assert out["repetitions"] == 4
 	assert float(out["initial_delay"]) == pytest.approx(22.1)
 	assert float(out["inter_point_delay"]) == pytest.approx(10.0)
-	assert out["trigger_selection"] == "PFI1"
+	assert out["trigger_selection"] == "Trig In 1"
 	assert out["stim_mode"] == "slm"
 
 

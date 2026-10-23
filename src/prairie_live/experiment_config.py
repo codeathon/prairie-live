@@ -141,7 +141,11 @@ def apply_stim_to_meta(meta: dict[str, Any], cfg: dict[str, Any]) -> dict[str, A
 		out["inter_point_delay_ms"] = float(cfg["inter_point_delay_ms"])
 		out["inter_point_delay"] = f'{float(cfg["inter_point_delay_ms"]):g}'
 	if cfg.get("trigger_selection") is not None:
-		out["trigger_selection"] = str(cfg["trigger_selection"])
+		from prairie_live.lab_defaults import normalize_trigger_selection
+
+		out["trigger_selection"] = normalize_trigger_selection(
+			str(cfg["trigger_selection"])
+		)
 	# Spiral on/off + size µm are applied when building -slm args / point attrs.
 	if cfg.get("spiral") is not None:
 		out["is_spiral"] = "True" if bool(cfg["spiral"]) else "False"

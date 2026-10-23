@@ -2,12 +2,14 @@
 
 Official help: simultaneous SLM multi-spot (or mask). Not an \"enable SLM\" flag.
 Multiple hologram sets may be packed into one command; each set can wait on
-PFI1, with Delay ms between sets (omit Delay on the last).
+Trig In 1, with Delay ms between sets (omit Delay on the last).
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from prairie_live.lab_defaults import DEFAULT_TRIGGER_SELECTION
 
 
 def spiral_size_fov_frac(size_um: float, fov_width_um: float) -> float:
@@ -29,7 +31,7 @@ def build_set_tokens(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
-	trigger_selection: str = "PFI1",
+	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 ) -> list[str]:
 	"""
 	One hologram block (no leading -MarkAllPoints, no trailing Delay).
@@ -83,7 +85,7 @@ def build_mark_all_points_parts(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
-	trigger_selection: str = "PFI1",
+	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 ) -> list[str]:
 	"""Single-set -MarkAllPoints token list (compat wrapper around pack)."""
 	return pack_mark_all_points(
@@ -112,7 +114,7 @@ def pack_mark_all_points(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
-	trigger_selection: str = "PFI1",
+	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	delay_ms: float = 0.0,
 ) -> list[str]:
 	"""
@@ -160,7 +162,9 @@ def stim_params_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
 		"spiral_size_um": float(size) if size not in (None, "") else None,
 		"spiral_revolutions": int(float(meta.get("spiral_revolutions", 8))),
 		"fov_width_um": float(fov) if fov not in (None, "") else None,
-		"trigger_selection": str(meta.get("trigger_selection", "PFI1")),
+		"trigger_selection": str(
+			meta.get("trigger_selection", DEFAULT_TRIGGER_SELECTION)
+		),
 		"initial_delay_ms": float(meta.get("initial_delay_ms", 0) or 0),
 	}
 

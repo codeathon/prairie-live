@@ -276,7 +276,7 @@ def run_sync_loop(
 
 	trigger:
 	  none   — TriggerSelection=None; fires immediately; log t_cmd
-	  serial — PFI1 (or meta); arm then DTR pulse
+	  serial — Trig In 1 (or meta); arm then DTR pulse
 	  wait   — same as serial but no DTR (external TTL)
 
 	via_relay:
@@ -307,12 +307,17 @@ def run_sync_loop(
 		run_root = make_run_dir(images_dir)
 		print(f"trial images → {run_root}")
 
+	from prairie_live.lab_defaults import (
+		DEFAULT_TRIGGER_SELECTION,
+		normalize_trigger_selection,
+	)
+
 	trig_sel = str(meta.get("trigger_selection", "None"))
 	if trigger == "none":
 		trig_sel = "None"
-	elif trigger in ("serial", "wait") and trig_sel in ("", "None", "none"):
-		# Series / SLM wait for hardware; default PFI1 matches PackIO wiring.
-		trig_sel = "PFI1"
+	elif trigger in ("serial", "wait"):
+		# Intermediate XML / -slm tokens must use the Bruker BNC name.
+		trig_sel = normalize_trigger_selection(trig_sel) or DEFAULT_TRIGGER_SELECTION
 	if mode == "slm":
 		slm_params["trigger_selection"] = trig_sel
 
@@ -821,7 +826,7 @@ def _run_slm_packed_batch(
 	from prairie_live.mark_all_points import pack_mark_all_points
 
 	n = len(groups_pts)
-	# PV Delay between packed sets: cover stim + pad so next PFI1 is accepted
+	# PV Delay between packed sets: cover stim + pad so next Trig In 1 is accepted
 	# only after the prior hologram finishes (software also sleeps per pulse).
 	delay_ms = (
 		float(slm_params.get("duration_ms") or 0)
