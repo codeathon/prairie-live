@@ -510,8 +510,8 @@ def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
 	assert all(c[0] == "slm" for c in relay.calls)
 	assert all(c[1][0] == "-MarkAllPoints" for c in relay.calls)
 	assert len(ttl.pulses) == 2
-	assert all(r["trigger_index"] == 0 for r in rows)
-	assert all(r["n_triggers"] == 1 for r in rows)
+	assert [r["trigger_index"] for r in rows] == [0, 1]
+	assert all(r["n_triggers"] == 2 for r in rows)
 	assert all(r.get("slm_pack") is False for r in rows)
 	singles = [
 		json.loads(ln)
@@ -519,8 +519,10 @@ def test_slm_single_fires_one_mark_all_points_per_group(tmp_path: Path):
 		if json.loads(ln).get("phase") == "slm_single"
 	]
 	assert len(singles) == 2
-	assert singles[0]["n_triggers"] == 1
+	assert singles[0]["n_triggers"] == 2
 	assert singles[0]["group_trigger_map"][0]["point_ids"] == rows[0]["point_ids"]
+	assert "group 1/2" in rows[0]["summary"]
+	assert "group 2/2" in rows[1]["summary"]
 	packed = [
 		json.loads(ln)
 		for ln in log_path.read_text(encoding="utf-8").splitlines()

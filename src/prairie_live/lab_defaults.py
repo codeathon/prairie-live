@@ -59,7 +59,7 @@ def lab_defaults() -> dict[str, Any]:
 		"trigger": "serial",
 		"trigger_selection": DEFAULT_TRIGGER_SELECTION,
 		"stim_mode": DEFAULT_STIM_MODE,
-		"slm_pack": False,
+		"slm_pack": True,
 		"cover_all": True,
 		"password": "0000",
 		"host": "127.0.0.1",

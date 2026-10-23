@@ -431,6 +431,7 @@ def run_sync_loop(
 								gpts=gpts,
 								point_pool=points,
 								gi=gi,
+								n_groups=len(groups_pts),
 								power=power,
 								it=it,
 								trial_index=trial_index,
@@ -881,12 +882,14 @@ def _run_slm_packed_batch(
 	from prairie_live.mark_all_points import pack_mark_all_points
 
 	n = len(groups_pts)
-	# PV Delay between packed sets: cover stim + pad so next Trig In 1 is accepted
-	# only after the prior hologram finishes (software also sleeps per pulse).
+	# PV Delay between packed sets: must cover the hologram + a settle so the
+	# next Trig In 1 wait is armed before the next DTR (too-short Delay → only
+	# the first group burns). Software sleeps the same gap between pulses.
 	delay_ms = (
 		float(slm_params.get("duration_ms") or 0)
 		+ float(pad_ms)
 		+ float(inter_trial_s) * 1000.0
+		+ 250.0  # settle after burn before next wait-for-trigger
 	)
 	# -slm wants UI UncagingLaserPower (160), not series XML fraction (0.4).
 	# trigger_count=1: one Trig In 1 edge releases each packed hologram/group.
@@ -1015,14 +1018,16 @@ def _run_slm_packed_batch(
 
 		# Timing: one planned DTR per group, spaced by PV Delay (gap_s).
 		# No rescue pulses — an extra edge would release the next group early.
+		if hasattr(ttl, "set_dtr"):
+			ttl.set_dtr(False)
 		print(
 			f"  packed -slm power={power} (-slm {slm_pwr:g}) n_groups={n} "
-			f"(1 DTR/group, gap={gap_s:.3f}s)"
+			f"(1 DTR/group, gap={gap_s:.3f}s, Delay={delay_ms:.0f}ms)"
 		)
 		print("  pulse map:")
 		for e in group_map:
 			print(
-				f"    pulse {e['trigger_index']}: "
+				f"    pulse {e['trigger_index']}/{n - 1}: "
 				f"{e['group_name']} points={e['point_ids']}"
 			)
 		run_while_pulsing_dtr(
@@ -1031,11 +1036,13 @@ def _run_slm_packed_batch(
 			n_pulses=n,
 			ttl_width_s=ttl_width_s,
 			gap_s=gap_s if n > 1 else 0.0,
-			arm_delay_s=0.25,
+			arm_delay_s=0.4,
 			rescue_window_s=0.0,
 			join_timeout_s=mp_timeout,
 			on_pulse=_on_pulse,
 		)
+		if hasattr(ttl, "set_dtr"):
+			ttl.set_dtr(False)
 	else:
 		_fire_mark_all_points(
 			parts=slm_parts,
@@ -1151,6 +1158,7 @@ def _run_slm_single_trial(
 	gpts: list[dict],
 	point_pool: list[dict],
 	gi: int,
+	n_groups: int = 1,
 	power: float,
 	it: int,
 	trial_index: int,
@@ -1182,10 +1190,12 @@ def _run_slm_single_trial(
 	"""
 	One group × power via its own -MarkAllPoints (-slm); one TTL pulse.
 
-	trigger_index is always 0 (single packed set per command).
+	``trigger_index`` / ``n_triggers`` are the group index among this power's
+	groups (so logs show pulse 0/1, 1/1 — not 0/0 for every trial).
 	"""
 	from prairie_live.mark_all_points import pack_mark_all_points
 
+	n_groups = max(int(n_groups), 1)
 	slm_pwr = _slm_script_power(power, meta)
 	print(f"  SLM power (UI scale) → -slm {slm_pwr:g}")
 	slm_parts = pack_mark_all_points(
@@ -1206,7 +1216,7 @@ def _run_slm_single_trial(
 	point_ids = [str(p["id"]) for p in gpts]
 	group_map = [
 		{
-			"trigger_index": 0,
+			"trigger_index": gi,
 			"group_index": gi,
 			"group_name": gname,
 			"point_ids": point_ids,
@@ -1239,7 +1249,7 @@ def _run_slm_single_trial(
 			"power": power,
 			"stim_mode": "slm",
 			"slm_pack": False,
-			"n_triggers": 1,
+			"n_triggers": n_groups,
 			"group_trigger_map": group_map,
 			"slm_parts": slm_parts,
 			"t_cmd": t_cmd,
@@ -1259,8 +1269,8 @@ def _run_slm_single_trial(
 		"trial_index": trial_index,
 		"iteration": it,
 		"group_index": gi,
-		"trigger_index": 0,
-		"n_triggers": 1,
+		"trigger_index": gi,
+		"n_triggers": n_groups,
 		"group_name": gname,
 		"point_ids": point_ids,
 		"power": power,
@@ -1277,12 +1287,13 @@ def _run_slm_single_trial(
 	}
 	log.write({**row, "phase": "armed"})
 
+	last = max(n_groups - 1, 0)
 	if trigger == "serial":
-		trigger_msg = f"  trigger 0/0: trial {trial_index} pts={point_ids}"
+		trigger_msg = f"  trigger {gi}/{last}: trial {trial_index} pts={point_ids}"
 	elif trigger == "none":
 		trigger_msg = f"  [none] trial {trial_index} pts={point_ids}"
 	else:
-		trigger_msg = f"  wait trigger 0/0: trial {trial_index} pts={point_ids}"
+		trigger_msg = f"  wait trigger {gi}/{last}: trial {trial_index} pts={point_ids}"
 
 	f0_frames: list = []
 	f1_frames: list = []
@@ -1297,6 +1308,9 @@ def _run_slm_single_trial(
 	elif trigger == "serial" and ttl is not None and not visual_cfg.enabled:
 		from prairie_live.stim_fire import run_while_pulsing_dtr
 
+		# Idle-low before arm so the next rising edge is clean.
+		if hasattr(ttl, "set_dtr"):
+			ttl.set_dtr(False)
 		init_ms = float(slm_params.get("initial_delay_ms") or 0)
 		_pre_stim_delay(wait_ms=init_ms, pl=pl, via_relay=via_relay)
 
@@ -1314,19 +1328,24 @@ def _run_slm_single_trial(
 		print(
 			f"  single -slm trial {trial_index}: {gname} "
 			f"power={power} (-slm {slm_pwr:g}) pts={point_ids} "
-			f"(1 DTR after arm, then wait ~{wait_s:.2f}s)"
+			f"(1 DTR group {gi}/{last}, then wait ~{wait_s:.2f}s)"
 		)
+		# No rescue: extra edges after the first burn stole later groups' waits.
 		run_while_pulsing_dtr(
 			_do_slm,
 			ttl=ttl,
 			n_pulses=1,
 			ttl_width_s=ttl_width_s,
-			arm_delay_s=0.25,
-			rescue_window_s=0.75,
+			arm_delay_s=0.4,
+			rescue_window_s=0.0,
 			join_timeout_s=max(180.0, wait_s + 60.0),
 			row=row,
 			on_pulse=lambda _i: print(trigger_msg),
 		)
+		if hasattr(ttl, "set_dtr"):
+			ttl.set_dtr(False)
+		# Let PV drop the hologram before the next -slm arms Trig In 1.
+		time.sleep(max(float(inter_trial_s), 0.35))
 		if want:
 			f1_frames = _collect_frames(relay, max(f1_s, wait_s), frame_poll_s)
 	else:
@@ -1381,7 +1400,11 @@ def _run_slm_single_trial(
 	_finalize_trial_log(row, log=log, run_root=run_root)
 	if on_trial:
 		on_trial(row)
-	if inter_trial_s > 0:
+	# Serial path already settled after DTR; avoid a second full inter_trial wait.
+	serial_settled = (
+		trigger == "serial" and ttl is not None and not dry_run and not visual_cfg.enabled
+	)
+	if inter_trial_s > 0 and not serial_settled:
 		time.sleep(inter_trial_s)
 	return row
 
