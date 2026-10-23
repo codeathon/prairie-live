@@ -35,9 +35,9 @@ def test_abort_and_clear_stim_order():
 	c = FakeClient()
 	out = abort_and_clear_stim(c, settle_s=0.0)
 	assert out["ok"] is True
-	# Session start / Stop: Abort + Live (no per-trial Abort).
-	assert c.calls == ["abort", "live"]
-	assert out["notes"] == ["abort", "live"]
+	# Double Abort after settle clears leftover -slm before series.
+	assert c.calls == ["abort", "abort", "live"]
+	assert out["notes"] == ["abort", "abort2", "live"]
 
 
 def test_clear_prior_skips_fake_without_abort():
@@ -57,4 +57,5 @@ def test_relay_abort_clear_stim_command():
 	assert out["cmd"] == "abort_clear_stim"
 	cmds = _cmds(r)
 	assert cmds[0] == ("-Silent", "-Abort")
-	assert cmds[1] == ("-LiveScan",)
+	assert cmds[1] == ("-Silent", "-Abort")
+	assert cmds[2] == ("-LiveScan",)

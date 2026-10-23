@@ -73,8 +73,9 @@ def test_run_while_pulsing_dtr_starts_mp_before_dtr():
 	assert ttl.times[0] - t0 >= 0.04
 
 
-def test_slm_script_power_ui_to_fraction():
+def test_slm_script_power_keeps_ui_scale():
 	from prairie_live.sync_loop import _slm_script_power
 
-	assert _slm_script_power(160.0, {}) == 0.4
+	# -slm wants UI UncagingLaserPower, not series XML ÷400.
+	assert _slm_script_power(160.0, {}) == 160.0
 	assert _slm_script_power(0.75, {}) == 0.75

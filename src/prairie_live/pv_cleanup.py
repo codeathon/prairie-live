@@ -16,12 +16,13 @@ EMPTY_MARK_POINTS_XML = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
-def abort_and_clear_stim(client: Any, *, settle_s: float = 0.35) -> dict[str, Any]:
+def abort_and_clear_stim(client: Any, *, settle_s: float = 0.6) -> dict[str, Any]:
 	"""
 	``client``: RelayClient or anything with abort / start_live.
 
 	1. -Silent -Abort — cancel armed -slm / -MarkPoints (and suppress boxes)
-	2. brief settle — let PV drop the prior task before the next -lmp/-mp
+	2. settle — let PV drop SLM spiral waveforms before series -lmp
+	   (too short a settle after -slm → Critical Error Int32 in spiral DAC)
 	3. -LiveScan — Abort also kills Live; restore FOV for the relay grabber
 
 	Call at **session start** and on **Stop**, never between every trial.
@@ -42,6 +43,16 @@ def abort_and_clear_stim(client: Any, *, settle_s: float = 0.35) -> dict[str, An
 	if settle_s and settle_s > 0:
 		time.sleep(float(settle_s))
 		notes.append(f"settle_{settle_s:g}s")
+
+	# Second Abort after settle — clears leftover -MarkAllPoints more reliably.
+	try:
+		out = client.abort()
+		notes.append("abort2")
+		if isinstance(out, dict) and out.get("ok") is False:
+			notes.append(f"abort2_fail:{out.get('error', out)}")
+	except Exception as exc:
+		notes.append(f"abort2_err:{exc}")
+	time.sleep(0.2)
 
 	try:
 		out = client.start_live()

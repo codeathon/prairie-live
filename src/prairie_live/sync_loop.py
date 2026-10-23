@@ -886,9 +886,9 @@ def _run_slm_packed_batch(
 		+ float(pad_ms)
 		+ float(inter_trial_s) * 1000.0
 	)
-	# -slm wants the same 0–1 fraction series writes as UncagingLaserPower.
+	# -slm wants UI UncagingLaserPower (160), not series XML fraction (0.4).
 	slm_pwr = _slm_script_power(power, meta)
-	print(f"  SLM power UI {float(power):g} → -slm {slm_pwr:g}")
+	print(f"  SLM power (UI scale) → -slm {slm_pwr:g}")
 	slm_parts = pack_mark_all_points(
 		groups_pts,
 		power=slm_pwr,
@@ -1179,7 +1179,7 @@ def _run_slm_single_trial(
 	from prairie_live.mark_all_points import pack_mark_all_points
 
 	slm_pwr = _slm_script_power(power, meta)
-	print(f"  SLM power UI {float(power):g} → -slm {slm_pwr:g}")
+	print(f"  SLM power (UI scale) → -slm {slm_pwr:g}")
 	slm_parts = pack_mark_all_points(
 		[gpts],
 		power=slm_pwr,
@@ -1418,20 +1418,32 @@ def _run_series_trial(
 	):
 		from prairie_live.scan_geometry import points_to_galvo_for_series
 
-		fire_pts, fov_note = points_to_galvo_for_series(gpts, relay)
+		fire_pts, fov_note = points_to_galvo_for_series(
+			gpts,
+			relay,
+			fov_width_um=(
+				float(meta["fov_width_um"])
+				if meta.get("fov_width_um") not in (None, "")
+				else None
+			),
+		)
 		if trial_index == 0 or gi == 0:
 			print(f"  {fov_note}")
 			for p in fire_pts[:3]:
 				print(
 					f"    Point {p['id']}  FOV ({float(p.get('x_fov', 0)):.3f}, "
 					f"{float(p.get('y_fov', 0)):.3f}) → galvo "
-					f"({float(p['x']):.3f}, {float(p['y']):.3f})"
+					f"({float(p['x']):.3f}, {float(p['y']):.3f}) "
+					f"spiral={p.get('spiral_size_fov') or '—'}"
 				)
+	# AllPointsAtOnce+spiral after -slm has crashed PV (Int32 DAC overflow).
+	series_meta = dict(meta)
+	series_meta["all_points_at_once"] = "False"
 	step = build_group_step(
 		fire_pts,
 		name=gname,
 		power=power,
-		meta=meta,
+		meta=series_meta,
 		trigger_selection=trig_sel,
 	)
 	series = [step]
@@ -1601,17 +1613,16 @@ def _pre_stim_delay(*, wait_ms: float, pl: PrairieLink | None, via_relay: bool) 
 	pl.send_command("-Wait", str(int(round(ms))))
 
 
-def _slm_script_power(power: float, meta: dict) -> float:
-	"""UI UncagingLaserPower (e.g. 160) → -MarkAllPoints fraction (0.4).
+def _slm_script_power(power: float, meta: dict | None = None) -> float:
+	"""Power token for ``-MarkAllPoints``.
 
-	Values already in (0, 1] are left as script fractions (tests / advanced).
+	PV's script ``-slm`` takes the same UI UncagingLaserPower scale as the Mark
+	Points window (e.g. 160), *not* the 0–1 fraction written into series XML
+	(``UncagingLaserPower="0.4"``). Sending the fraction made SLM look like it
+	ran with no visible burns.
 	"""
-	from prairie_live.markpoints import xml_power
-
-	p = float(power)
-	if 0.0 < p <= 1.0:
-		return p
-	return float(xml_power(p, meta))
+	del meta  # series XML scale only — kept for call-site compatibility
+	return float(power)
 
 
 def _fire_mark_all_points(

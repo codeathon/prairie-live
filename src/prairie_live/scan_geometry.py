@@ -92,6 +92,12 @@ def points_for_image(
 		row["x_galvo"] = float(p["x"])
 		row["y_galvo"] = float(p["y"])
 		row["coord_space"] = "fov"
+		# SpiralSize on PV-saved galvo XML is already galvo volts.
+		if row.get("spiral_size_fov") not in (None, "") or row.get("spiral_width") not in (
+			None,
+			"",
+		):
+			row["spiral_space"] = "galvo"
 		out.append(row)
 	return out
 
@@ -113,6 +119,12 @@ def prepare_points_for_live_fov(
 		for p in points:
 			row = dict(p)
 			row["coord_space"] = "fov"
+			# SpiralWidth on FOV XMLs is a fraction of the FOV, not galvo volts.
+			if row.get("spiral_width") not in (None, "") or row.get("spiral_size_um") not in (
+				None,
+				"",
+			):
+				row["spiral_space"] = "fov"
 			out.append(row)
 		return out, "points already in FOV fractions (0–1); fire tracks live FOV"
 	if relay is None:
@@ -145,13 +157,56 @@ def prepare_points_for_slm(
 	return prepare_points_for_live_fov(points, relay)
 
 
+def _clamp_galvo(v: float, ctr: float, amp: float) -> float:
+	"""Keep galvo within the live scan ± a little margin (DAC Int32 overflow)."""
+	half = abs(float(amp))
+	lo, hi = float(ctr) - half * 1.05, float(ctr) + half * 1.05
+	# Absolute DAC rail ~±10 V on this class of scanners.
+	lo, hi = max(lo, -10.0), min(hi, 10.0)
+	return min(max(float(v), lo), hi)
+
+
+def _spiral_size_galvo(p: dict, geom: dict[str, float]) -> str | None:
+	"""SpiralSize for series XML must be galvo units, never µm."""
+	ax = abs(2.0 * float(geom["amp_x"]))
+	raw = p.get("spiral_size_fov")
+	if raw in (None, ""):
+		raw = p.get("spiral_width")
+	space = str(p.get("spiral_space") or "")
+	if raw not in (None, ""):
+		s = float(raw)
+		if space == "fov":
+			s = s * ax
+		elif space == "galvo":
+			pass
+		elif s > ax * 1.5:
+			# Looks like µm or a bad token — convert via optics if possible.
+			um = p.get("spiral_size_um")
+			fov_um = p.get("fov_width_um")
+			if um not in (None, "") and fov_um not in (None, ""):
+				s = (float(um) / float(fov_um)) * ax
+			else:
+				return None
+		s = min(max(s, 0.0), ax)
+		return f"{s:.6g}"
+	um = p.get("spiral_size_um")
+	fov_um = p.get("fov_width_um")
+	if um not in (None, "") and fov_um not in (None, ""):
+		s = min(max((float(um) / float(fov_um)) * ax, 0.0), ax)
+		return f"{s:.6g}"
+	return None
+
+
 def points_to_galvo_for_series(
 	points: list[dict],
 	relay: Any | None,
+	*,
+	fov_width_um: float | None = None,
 ) -> tuple[list[dict], str]:
 	"""FOV-fraction points → galvo voltages for ``-LoadMarkPoints`` on the live FOV.
 
-	If points are still galvo-native, they are returned unchanged (legacy).
+	Also rewrites spiral size into galvo units and clamps X/Y so PV's spiral
+	DAC path cannot Int32-overflow (seen when switching SLM → series).
 	"""
 	if not points:
 		return [], "no points"
@@ -169,13 +224,30 @@ def points_to_galvo_for_series(
 	n_out = 0
 	for p in points:
 		row = dict(p)
+		if fov_width_um is not None:
+			row["fov_width_um"] = float(fov_width_um)
 		fx, fy = float(p["x"]), float(p["y"])
 		if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
 			n_out += 1
 		gx, gy = fraction_to_galvo(fx, fy, geom)
+		gx = _clamp_galvo(gx, geom["ctr_x"], geom["amp_x"])
+		gy = _clamp_galvo(gy, geom["ctr_y"], geom["amp_y"])
 		row["x_fov"], row["y_fov"] = fx, fy
 		row["x"], row["y"] = gx, gy
 		row["coord_space"] = "galvo"
+		# Drop µm SpiralSizeInMicrons on galvo XML — PV spiral DAC mis-reads it
+		# after an SLM run and can throw Int32 overflow.
+		row["spiral_size_um"] = ""
+		sg = _spiral_size_galvo(row, geom)
+		if sg is not None:
+			row["spiral_size_fov"] = sg
+			row["spiral_width"] = sg
+			row["spiral_height"] = sg
+			row["spiral_space"] = "galvo"
+		else:
+			row["spiral_size_fov"] = ""
+			row["spiral_width"] = ""
+			row["spiral_height"] = ""
 		out.append(row)
 	note = (
 		f"series fire: FOV→galvo via scan "
