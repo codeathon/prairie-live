@@ -284,10 +284,31 @@ function renderCandidates(ranked) {
   }
 }
 
+let lastLogText = "";
+
+function logHasSelection() {
+  const el = $("log");
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
+  return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+}
+
+function renderLog(lines) {
+  const el = $("log");
+  const text = (lines || []).join("\n");
+  // Do not rewrite while the user is selecting — that kills copy/paste.
+  if (logHasSelection()) return;
+  if (text === lastLogText) return;
+  const pinBottom =
+    el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  el.textContent = text;
+  lastLogText = text;
+  if (pinBottom) el.scrollTop = el.scrollHeight;
+}
+
 async function tick() {
   const st = await jget("/api/status");
-  $("log").textContent = (st.log || []).join("\n");
-  $("log").scrollTop = $("log").scrollHeight;
+  renderLog(st.log || []);
   $("run").disabled = !!st.running;
   $("stop").disabled = !st.running;
   if (st.has_candidates) renderCandidates(st.ranked);
@@ -345,6 +366,24 @@ async function boot() {
     applyMarksVisibility();
   });
   applyMarksVisibility();
+  $("log_copy").addEventListener("click", async () => {
+    const text = $("log").textContent || "";
+    try {
+      await navigator.clipboard.writeText(text);
+      $("log_copy").textContent = "Copied";
+      setTimeout(() => {
+        $("log_copy").textContent = "Copy";
+      }, 1200);
+    } catch (_) {
+      // Fallback when clipboard API is blocked.
+      const r = document.createRange();
+      r.selectNodeContents($("log"));
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      $("log_copy").textContent = "Select all — Ctrl+C";
+    }
+  });
   $("run").addEventListener("click", async () => {
     const res = await jpost("/api/run", {
       series: $("xml_path").textContent,

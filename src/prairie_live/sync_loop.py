@@ -1385,6 +1385,9 @@ def _run_slm_single_trial(
 		init_ms = float(slm_params.get("initial_delay_ms") or 0)
 		_pre_stim_delay(wait_ms=init_ms, pl=pl, via_relay=via_relay)
 
+		# Keep Mark Points UI from sitting frozen on Trig In 1 for minutes.
+		slm_timeout = max(45.0, wait_s + arm_s + rescue_s + 15.0)
+
 		def _do_slm() -> None:
 			_fire_mark_all_points(
 				parts=slm_parts,
@@ -1393,11 +1396,15 @@ def _run_slm_single_trial(
 				relay=relay,
 				via_relay=via_relay,
 				no_wait=False,
-				timeout=max(120.0, wait_s + arm_s + rescue_s + 30.0),
+				timeout=slm_timeout,
 			)
 
 		def _unstick() -> None:
-			# Timeout path only — Abort clears a hung -slm so Live can restart.
+			# Timeout path — Abort or Mark Points "Run" stays greyed out forever.
+			print(
+				f"  group {gi + 1}/{n_groups}: -slm still armed after DTR — "
+				"Abort (unstick Mark Points GUI)"
+			)
 			try:
 				if via_relay and relay is not None and hasattr(relay, "abort"):
 					relay.abort()
@@ -1411,6 +1418,7 @@ def _run_slm_single_trial(
 			f"(Live off · first DTR @ {arm_s:g}s · rescue {rescue_s:g}s) "
 			f"pts={point_ids} power={power:g} trig={trig_sel!r}"
 		)
+		print(f"  -slm argv: {' '.join(slm_parts)}")
 		# Always restore Live — hang/timeout used to leave Live off forever.
 		try:
 			run_while_pulsing_dtr(
@@ -1421,7 +1429,7 @@ def _run_slm_single_trial(
 				arm_delay_s=arm_s,
 				rescue_window_s=rescue_s,
 				rescue_gap_s=0.5,
-				join_timeout_s=max(90.0, wait_s + arm_s + rescue_s + 30.0),
+				join_timeout_s=slm_timeout + 10.0,
 				row=row,
 				on_pulse=lambda _i: print(
 					f"  group {gi + 1}/{n_groups}: DTR pulsed → pts={point_ids}"

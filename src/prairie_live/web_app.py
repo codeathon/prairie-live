@@ -382,12 +382,30 @@ class Handler(BaseHTTPRequestHandler):
 			)
 
 			def work() -> None:
+				import builtins
+				import sys
+
+				from prairie_live.pv_cleanup import abort_and_clear_at
 				from prairie_live.sync_loop import execute_session
 
 				# LiveFeed must not -LiveScan on during -slm (PV 6.1 race →
 				# DONE before DTR). Sync loop owns Live off/on per group.
 				STATE.live.hold_for_stim(True)
 				STATE.append("live FOV paused for stim (no LiveScan on until Run ends)")
+				# Tee stim prints into the Trial log so Copy works for DTR/Live lines.
+				_real_print = builtins.print
+
+				def _gui_print(*args, **kwargs):
+					try:
+						buf = kwargs.get("file")
+						if buf in (None, sys.stdout, sys.stderr):
+							STATE.append(" ".join(str(a) for a in args))
+					except Exception:
+						pass
+					_real_print(*args, **kwargs)
+
+				builtins.print = _gui_print
+				addr = str(opt.get("via_relay") or DEFAULT_RELAY)
 				try:
 					trials = execute_session(
 						opt,
@@ -399,6 +417,18 @@ class Handler(BaseHTTPRequestHandler):
 				except Exception as exc:
 					STATE.q.put(("error", str(exc)))
 				finally:
+					builtins.print = _real_print
+					# Always Abort leftover -slm or Mark Points UI stays frozen
+					# on Trig In 1 after a one-group hang / early error.
+					try:
+						out = abort_and_clear_at(addr)
+						notes = out.get("notes") or []
+						STATE.append(
+							"post-run PV clear: "
+							+ (", ".join(str(n) for n in notes) or str(out))
+						)
+					except Exception as exc:
+						STATE.append(f"post-run PV clear failed: {exc}")
 					STATE.live.hold_for_stim(False)
 
 			threading.Thread(target=work, daemon=True).start()
