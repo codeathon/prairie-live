@@ -20,15 +20,34 @@ def abort_and_clear_stim(client: Any, *, settle_s: float = 0.6) -> dict[str, Any
 	"""
 	``client``: RelayClient or anything with abort / start_live.
 
-	1. -Silent -Abort — cancel armed -slm / -MarkPoints (and suppress boxes)
-	2. settle — let PV drop SLM spiral waveforms before series -lmp
+	1. force_interrupt (if available) — close hung -slm socket so Abort is not
+	   queued behind DONE/timeout (PV "won't Abort" hang)
+	2. -Silent -Abort — cancel armed -slm / -MarkPoints (and suppress boxes)
+	3. settle — let PV drop SLM spiral waveforms before series -lmp
 	   (too short a settle after -slm → Critical Error Int32 in spiral DAC)
-	3. -LiveScan — Abort also kills Live; restore FOV for the relay grabber
+	4. -LiveScan — Abort also kills Live; restore FOV for the relay grabber
 
 	Call at **session start** and on **Stop**, never between every trial.
 	"""
 	notes: list[str] = []
 	ok = True
+
+	# Wake a blocked -slm/-mp before Abort; no-op when the lock is free.
+	# PvScript returns bool; RelayClient returns {"interrupted": bool}.
+	if hasattr(client, "force_interrupt"):
+		try:
+			out = client.force_interrupt("abort_and_clear_stim")
+			notes.append("force_interrupt")
+			hit = (
+				bool(out.get("interrupted"))
+				if isinstance(out, dict)
+				else bool(out)
+			)
+			if hit:
+				notes.append("interrupted")
+				time.sleep(0.2)
+		except Exception as exc:
+			notes.append(f"force_interrupt_err:{exc}")
 
 	try:
 		out = client.abort()

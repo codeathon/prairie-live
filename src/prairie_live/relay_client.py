@@ -69,6 +69,10 @@ class RelayClient:
 	def abort(self) -> dict:
 		return self._command({"cmd": "abort"})
 
+	def force_interrupt(self, why: str = "operator Abort") -> dict:
+		"""Ask the relay to drop the hung PV script socket (does not wait on -slm)."""
+		return self._command({"cmd": "force_interrupt", "why": str(why)})
+
 	def abort_clear_stim(self) -> dict:
 		"""Abort in-flight stim, load empty Mark Points series, restart LiveScan."""
 		return self._command({"cmd": "abort_clear_stim"})

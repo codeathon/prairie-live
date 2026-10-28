@@ -61,6 +61,8 @@ class Relay:
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
+		# Set while -slm/-mp holds pv.lock so -gi cannot starve Abort/Stop.
+		self._stim_hold = threading.Event()
 		self._logged_first_grab = False
 		self._hb_t = 0.0
 		self._send_n = 0
@@ -115,6 +117,11 @@ class Relay:
 
 	def _grab_loop(self) -> None:
 		while not self._stop.is_set():
+			# Why: -gi and -slm share one lock; grab during an armed stim makes
+			# Stop/Abort wait behind every frame until the hang times out.
+			if self._stim_hold.is_set():
+				time.sleep(0.05)
+				continue
 			self._grab_one()
 			# The PV lock is not fair; this gap lets Mark Points commands in.
 			time.sleep(0.01)
@@ -170,6 +177,10 @@ class Relay:
 			return pv.start_tseries()
 		if cmd == "abort":
 			return pv.abort()
+		if cmd == "force_interrupt":
+			# Dedicated path for a second ctrl client while -slm is mid-recv.
+			hit = pv.force_interrupt(str(payload.get("why") or "ctrl force_interrupt"))
+			return {"ok": True, "cmd": "force_interrupt", "interrupted": bool(hit)}
 		if cmd == "abort_clear_stim":
 			# GUI Stop: kill armed Mark Points / -slm, replace series, restore Live.
 			from prairie_live.pv_cleanup import abort_and_clear_stim
@@ -197,7 +208,12 @@ class Relay:
 			t0 = time.monotonic()
 			no_wait = bool(payload["no_wait"]) if "no_wait" in payload else False
 			timeout = float(payload.get("timeout") or 180.0)
-			out = pv.mark_points(no_wait=no_wait, timeout=timeout)
+			# Pause -gi so Abort from Stop is not queued behind grab frames.
+			self._stim_hold.set()
+			try:
+				out = pv.mark_points(no_wait=no_wait, timeout=timeout)
+			finally:
+				self._stim_hold.clear()
 			dt = (time.monotonic() - t0) * 1000.0
 			print(f"mark_points #{self._n_fired} DONE in {dt:.0f} ms no_wait={out.get('no_wait')}")
 			return out
@@ -210,7 +226,11 @@ class Relay:
 				"timeout": float(payload.get("timeout") or 180.0),
 				"no_wait": bool(payload["no_wait"]) if "no_wait" in payload else False,
 			}
-			out = pv.mark_all_points(parts, **kw)
+			self._stim_hold.set()
+			try:
+				out = pv.mark_all_points(parts, **kw)
+			finally:
+				self._stim_hold.clear()
 			print(
 				f"mark_all_points DONE no_wait={out.get('no_wait')} "
 				f"parts0={parts[0] if parts else None}"

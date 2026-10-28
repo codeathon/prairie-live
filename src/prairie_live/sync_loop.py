@@ -349,9 +349,15 @@ def run_sync_loop(
 		if dry_run:
 			return
 		try:
-			from prairie_live.pv_cleanup import abort_and_clear_stim
+			from prairie_live.pv_cleanup import abort_and_clear_at, abort_and_clear_stim
 
-			if via_relay and relay is not None:
+			# Prefer a *fresh* ctrl socket. This session's RelayClient is often
+			# blocked inside mark_all_points readline and cannot send Abort
+			# until DONE — that is the "Abort takes forever" hang.
+			if via_relay and relay is not None and hasattr(relay, "host"):
+				addr = f"{relay.host}:{int(getattr(relay, 'port', 25100) or 25100)}"
+				out = abort_and_clear_at(addr)
+			elif via_relay and relay is not None:
 				out = abort_and_clear_stim(relay)
 			elif pl is not None:
 				out = abort_and_clear_stim(pl)

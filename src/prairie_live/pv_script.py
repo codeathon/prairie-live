@@ -162,6 +162,39 @@ class PvScript:
 		except Exception as exc:
 			print(f"recover_after_stuck_stim metadata: {exc}", flush=True)
 
+	def force_interrupt(self, why: str = "operator Abort") -> bool:
+		"""Close the script socket *without* taking ``lock``.
+
+		Why: ``send(-slm/-mp)`` holds ``lock`` until DONE/timeout. Stop/Abort
+		from another thread then queues behind that wait (tens of seconds),
+		and Mark Points stays frozen on Trig In 1. Closing the sock wakes the
+		blocked recv; ``_call`` drops/reopens under the lock, then Abort can
+		run. Returns True only when a hung holder was interrupted.
+		"""
+		link = self.link
+		if link is None:
+			return False
+		# Lock free ⇒ nothing is blocked in send/grab; Abort can proceed.
+		if self.lock.acquire(blocking=False):
+			self.lock.release()
+			return False
+		print(f"force_interrupt PV script ({why})", flush=True)
+		gi = self.gi
+		# Null before close so the hung finally-block does not restore timeout
+		# onto a dead link, and so _call reconnects cleanly.
+		self.link = None
+		self.gi = None
+		if gi is not None:
+			try:
+				gi.close()
+			except Exception:
+				pass
+		try:
+			link.close()
+		except Exception:
+			pass
+		return True
+
 	def send(self, *parts: str, timeout: float = 60.0) -> str:
 		"""One script command; waits for PV's DONE (TimeoutError otherwise)."""
 		def run():
@@ -201,7 +234,11 @@ class PvScript:
 	def abort(self) -> dict:
 		# -Silent: Abort mid-Mark-Points otherwise pops E:\\Markpoints
 		# "directory already exists — delete and continue?"
-		self.send("-Silent", "-Abort")
+		# If -slm/-mp holds the lock, drop the socket first so Abort is not
+		# stuck behind the hang timeout (GUI Stop felt like "PV won't Abort").
+		if self.force_interrupt("abort"):
+			time.sleep(0.2)
+		self.send("-Silent", "-Abort", timeout=15.0)
 		return {"ok": True, "cmd": "abort"}
 
 	def start_live(self) -> dict:

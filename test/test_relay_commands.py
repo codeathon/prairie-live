@@ -55,6 +55,43 @@ def test_live_tseries_abort_are_script_commands():
 	assert _cmds(r) == [("-LiveScan", "on"), ("-TSeries",), ("-Silent", "-Abort")]
 
 
+def test_force_interrupt_noop_when_lock_free():
+	r = _relay()
+	out = r.handle_command({"cmd": "force_interrupt", "why": "test"})
+	assert out == {"ok": True, "cmd": "force_interrupt", "interrupted": False}
+	assert r.pv.link is not None
+	assert _cmds(r) == []
+
+
+def test_force_interrupt_closes_sock_while_lock_held():
+	"""Stop/Abort must not wait on hung -slm DONE — drop the socket instead."""
+	r = _relay()
+	closed = {"n": 0}
+	link = r.pv.link
+
+	def _close():
+		closed["n"] += 1
+
+	link.close = _close  # type: ignore[method-assign]
+	assert r.pv.lock.acquire(blocking=False)
+	try:
+		out = r.handle_command({"cmd": "force_interrupt", "why": "hung-slm"})
+	finally:
+		r.pv.lock.release()
+	assert out["interrupted"] is True
+	assert closed["n"] == 1
+	assert r.pv.link is None
+
+
+def test_stim_hold_pauses_grab_during_mark_all_points():
+	r = _relay()
+	parts = ["-MarkAllPoints", "1", "False", "0.1", "0.2", "10", "Monaco", "0.75", "None"]
+	assert not r._stim_hold.is_set()
+	# mark_all_points clears hold in finally even on success.
+	assert r.handle_command({"cmd": "mark_all_points", "parts": parts})["ok"] is True
+	assert not r._stim_hold.is_set()
+
+
 def test_live_off_stops_scan_without_abort():
 	"""PV 6.1: -slm will not wait on Trig In 1 while Live is still running."""
 	r = _relay()

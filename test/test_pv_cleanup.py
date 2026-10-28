@@ -40,6 +40,23 @@ def test_abort_and_clear_stim_order():
 	assert out["notes"] == ["abort", "abort2", "live"]
 
 
+def test_abort_and_clear_stim_force_interrupts_first():
+	"""Stop must wake hung -slm before Abort (bool or dict interrupt)."""
+
+	class Holding(FakeClient):
+		def force_interrupt(self, why: str = "") -> bool:
+			self.calls.append(f"force:{why}")
+			return True
+
+	c = Holding()
+	out = abort_and_clear_stim(c, settle_s=0.0)
+	assert out["ok"] is True
+	assert c.calls[0].startswith("force:")
+	assert "force_interrupt" in out["notes"]
+	assert "interrupted" in out["notes"]
+	assert c.calls[1:] == ["abort", "abort", "live"]
+
+
 def test_clear_prior_skips_fake_without_abort():
 	from prairie_live.pv_cleanup import clear_prior_stim_on_client
 
