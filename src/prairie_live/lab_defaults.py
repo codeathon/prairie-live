@@ -59,7 +59,8 @@ def lab_defaults() -> dict[str, Any]:
 		"trigger": "serial",
 		"trigger_selection": DEFAULT_TRIGGER_SELECTION,
 		"stim_mode": DEFAULT_STIM_MODE,
-		"slm_pack": False,
+		# One packed -MarkAllPoints per power; one DTR (Trig In 1) per group.
+		"slm_pack": True,
 		"cover_all": True,
 		"password": "0000",
 		"host": "127.0.0.1",
@@ -89,6 +90,14 @@ def lab_defaults() -> dict[str, Any]:
 		"slm_arm_delay_s": 3.0,
 		# Idle after each group burn before the next -slm (LiveScan settle only).
 		"slm_group_settle_s": 2.5,
+		# Packed serial: min seconds between per-group DTR pulses (raised
+		# automatically to cover burn + PV Delay + F0/F1 windows).
+		"slm_group_gap_s": 3.0,
+		# PV Delay between packed groups — short; each group still waits on
+		# its own Trig In 1 edge.
+		"slm_group_delay_ms": 100.0,
+		# Keep LiveScan on through the packed sequence (per-group ΔF/F).
+		"slm_live_during_stim": True,
 		"pad_ms": 100.0,
 		"f0_s": 0.5,
 		"f1_s": 1.0,

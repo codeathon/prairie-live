@@ -238,7 +238,11 @@ class _FakeRelayMp:
 			time.sleep(0.35)
 		return {"ok": True, "cmd": "mark_points", "no_wait": no_wait}
 
-	def mark_all_points(self, parts, *, wait_ms=0.0, no_wait=None, timeout=None):
+	def mark_all_points(
+		self, parts, *, wait_ms=0.0, no_wait=None, timeout=None, ensure_live_off=True
+	):
+		if ensure_live_off:
+			self.calls.append(("live_off",))
 		self.calls.append(("slm", list(parts), wait_ms, no_wait, timeout))
 		# Blocking -slm must outlive the DTR arm_delay or stim_fire errors.
 		if not no_wait:
@@ -428,7 +432,7 @@ class _FakeTtl:
 
 
 def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
-	"""Serial SLM: group → arm -slm → one DTR → next group (never pack)."""
+	"""Serial SLM, slm_pack=False: group → arm -slm → one DTR → next group."""
 	steps = parse_mark_points(FAT_XML)
 	pts = extract_unique_points(steps)
 	meta = template_meta(steps)
@@ -469,7 +473,7 @@ def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
 			elite_frac=0.5,
 			dry_run=False,
 			stim_mode="slm",
-			slm_pack=True,  # ignored for serial
+			slm_pack=False,
 		)
 	finally:
 		log.close()
@@ -491,6 +495,68 @@ def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
 	assert not any(
 		isinstance(c, tuple) and c[0] == "get_state" for c in relay.calls
 	)
+
+def test_slm_serial_packed_one_command_one_dtr_per_group(tmp_path: Path):
+	"""Packed serial SLM: ONE -MarkAllPoints, one DTR per group, Live left on."""
+	steps = parse_mark_points(FAT_XML)
+	pts = extract_unique_points(steps)
+	meta = template_meta(steps)
+	meta["fov_width_um"] = 545.0
+	meta["spiral_size_um"] = "54.5"
+	meta["is_spiral"] = "True"
+	meta["initial_delay_ms"] = 0.0
+	meta["repetitions"] = 2
+	log = JsonlLog(tmp_path / "slm_packed.jsonl")
+	relay = _FakeRelayMp()
+	ttl = _FakeTtl()
+	try:
+		rows = run_sync_loop(
+			points=pts,
+			meta=meta,
+			pl=None,
+			log=log,
+			scope_xml=None,
+			n_iterations=1,
+			n_groups=2,
+			group_size=3,
+			powers=[0.75],
+			seed=1,
+			trigger="serial",
+			ttl=ttl,
+			ttl_width_s=0.01,
+			inter_trial_s=0.0,
+			pad_ms=0.0,
+			slm_arm_delay_s=0.05,
+			slm_group_gap_s=0.05,
+			slm_group_delay_ms=100.0,
+			mock_scores=True,
+			relay=relay,
+			via_relay=True,
+			f0_s=0.0,
+			f1_s=0.0,
+			frame_poll_s=0.01,
+			disk_radius=3,
+			elite_frac=0.5,
+			dry_run=False,
+			stim_mode="slm",
+			slm_pack=True,
+		)
+	finally:
+		log.close()
+	slm_calls = [c for c in relay.calls if c[0] == "slm"]
+	assert len(slm_calls) == 1
+	argv = slm_calls[0][1]
+	# Each group: Trig In 1 set + one None repeat (repetitions=2).
+	assert argv.count("Trig In 1") == 2
+	assert argv.count("None") == 2
+	assert argv[-1] == "None"
+	assert len(ttl.pulses) == 2
+	assert [r["trigger_index"] for r in rows] == [0, 1]
+	assert all(r["t_ttl"] is not None for r in rows)
+	assert rows[1]["t_ttl"] > rows[0]["t_ttl"]
+	# Live stays on for the packed sequence: never forced off.
+	assert not any(c[0] == "live_off" for c in relay.calls)
+
 
 RIG_GPL = """<?xml version="1.0" encoding="utf-8"?>
 <PVGalvoPointList>

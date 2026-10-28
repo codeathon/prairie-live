@@ -39,6 +39,7 @@ def run_while_pulsing_dtr(
 	row: dict[str, Any] | None = None,
 	on_pulse: Callable[[int], None] | None = None,
 	on_stuck: Callable[[], None] | None = None,
+	allow_early_done: bool = False,
 ) -> Any:
 	"""
 	Run blocking ``fn()`` and emit exactly ``n_pulses`` planned DTR edges.
@@ -55,6 +56,12 @@ def run_while_pulsing_dtr(
 	``rescue_gap_s`` until ``arm_delay_s + rescue_window_s`` from start or until
 	``fn`` returns (DONE). Covers slow SLM mask gen that misses the first edge.
 	Forced to 0 when ``n_pulses > 1`` (packed multi-group).
+
+	``allow_early_done``: keep pulsing on schedule even if ``fn`` already
+	returned. PV answers DONE immediately for commands sent during a Live /
+	T-series scan (Script Command Reference: they "never wait"), while the
+	armed hologram sequence keeps waiting on Trig In 1 in the background. In
+	that mode DONE says nothing about whether a group has burned.
 	"""
 	n_pulses = max(int(n_pulses), 1)
 	# Extra edges between packed sets would steal the next group's trigger.
@@ -87,6 +94,17 @@ def run_while_pulsing_dtr(
 		else max(180.0, pulse_budget_s)
 	)
 
+	early_noted = [False]
+
+	def _note_early(where: str) -> None:
+		if not early_noted[0]:
+			early_noted[0] = True
+			print(
+				f"  PV returned DONE before {where} — expected while Live runs; "
+				"pulsing on schedule",
+				flush=True,
+			)
+
 	t0 = time.monotonic()
 	th = threading.Thread(target=_run_fn, name="mp-blocking", daemon=True)
 	th.start()
@@ -96,7 +114,9 @@ def run_while_pulsing_dtr(
 		while time.monotonic() < deadline_first:
 			if errors:
 				break
-			if not th.is_alive() and not errors:
+			if not th.is_alive() and not errors and allow_early_done:
+				_note_early("the first DTR")
+			elif not th.is_alive() and not errors:
 				raise RuntimeError(
 					"Mark Points / -slm finished before the first DTR — "
 					"PV was not waiting on Trig In 1. Ensure -LiveScan off before "
@@ -107,7 +127,9 @@ def run_while_pulsing_dtr(
 		# If -slm/-mp returned before the first edge, PV never armed Trig In 1.
 		# Common cause on PV 6.1: LiveScan still on (-slm does not stop Live),
 		# or -gi restarting Live between Live-off and -slm.
-		if not th.is_alive() and not errors:
+		if not th.is_alive() and not errors and allow_early_done:
+			_note_early("the first DTR")
+		elif not th.is_alive() and not errors:
 			raise RuntimeError(
 				"Mark Points / -slm finished before the first DTR — "
 				"PV was not waiting on Trig In 1. Ensure -LiveScan off before "
@@ -117,7 +139,9 @@ def run_while_pulsing_dtr(
 		for i in range(n_pulses):
 			if errors:
 				break
-			if not th.is_alive():
+			if not th.is_alive() and allow_early_done:
+				_note_early(f"DTR pulse {i + 1}/{n_pulses}")
+			elif not th.is_alive():
 				raise RuntimeError(
 					f"Mark Points / -slm finished before DTR pulse {i + 1}/"
 					f"{n_pulses} — remaining groups would miss their TTL"

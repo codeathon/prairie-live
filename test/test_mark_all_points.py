@@ -230,3 +230,40 @@ def test_stim_params_carry_repetitions_and_burn_time():
 	q = stim_params_from_meta({})
 	assert q["repetitions"] == 1
 	assert slm_burn_ms(q) == q["duration_ms"]
+
+
+def test_bnc_repetitions_keep_repeats_with_trigger():
+	g0 = [{"id": "1", "x": 0.1, "y": 0.2}]
+	g1 = [{"id": "2", "x": 0.5, "y": 0.6}]
+	kw = dict(power=1, spiral=False, trigger_selection="Trig In 1",
+		delay_ms=100, repetitions=3, rep_delay_ms=14)
+	off = pack_mark_all_points([g0, g1], **kw)
+	assert [p for p in off if p in ("Trig In 1", "None")] == ["Trig In 1"] * 2
+	on = pack_mark_all_points([g0, g1], bnc_repetitions=True, **kw)
+	assert [p for p in on if p in ("Trig In 1", "None")] == [
+		"Trig In 1", "None", "None", "Trig In 1", "None", "None"
+	]
+	assert [p for p in on if p in ("14", "100")] == ["14", "14", "100", "14", "14"]
+	assert on[-1] == "None"
+
+
+def test_dtr_gap_covers_burn_delay_and_windows():
+	from prairie_live.sync_loop import slm_dtr_gap_s
+
+	# Floor wins when everything is short.
+	assert slm_dtr_gap_s(burn_ms=36, delay_ms=100, min_gap_s=3, f0_s=0.5, f1_s=1) == 3
+	# Long burn + Delay: re-arm margin binds (burn + Delay + 1 s).
+	g = slm_dtr_gap_s(burn_ms=4000, delay_ms=900, min_gap_s=1, f0_s=0.1, f1_s=0.1)
+	assert g == pytest.approx(5.9)
+	# Windows: f0 + burn + f1 must fit between pulses.
+	g = slm_dtr_gap_s(burn_ms=200, delay_ms=0, min_gap_s=0, f0_s=2, f1_s=3)
+	assert g == pytest.approx(5.2)
+
+
+def test_slice_group_frames_windows():
+	from prairie_live.sync_loop import slice_group_frames
+
+	stamped = [(10.0 + 0.1 * i, i) for i in range(40)]  # t = 10.0 … 13.9
+	f0, f1 = slice_group_frames(stamped, t_pulse=12.0, f0_s=0.5, f1_s=0.5, skip_s=0.2)
+	assert f0 == [15, 16, 17, 18, 19]  # 11.5 ≤ t < 12.0
+	assert f1 == [23, 24, 25, 26, 27]  # 12.2 < t ≤ 12.7

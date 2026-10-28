@@ -256,6 +256,9 @@ def run_sync_loop(
 	slm_pack: bool = False,
 	slm_arm_delay_s: float = 3.0,
 	slm_group_settle_s: float = 2.5,
+	slm_group_gap_s: float = 3.0,
+	slm_group_delay_ms: float = 100.0,
+	slm_live_during_stim: bool = True,
 	images_dir: str | None = None,
 	visual_cfg: Any | None = None,
 	on_trial: Callable[[dict], None] | None = None,
@@ -394,17 +397,17 @@ def run_sync_loop(
 			iter_trials: list[dict] = []
 
 			if mode == "slm":
-				# Classic SLM: -MarkAllPoints per group (FOV X/Y 0–1). Serial
-				# never packs — one hologram, one Trig In 1 / DTR, then next.
-				use_pack = bool(slm_pack) and trigger != "serial"
-				if slm_pack and trigger == "serial":
-					print(
-						"NOTE: serial+slm uses one -slm per group "
-						"(packed multi-set disabled — one TTL per group)"
-					)
+				# Packed (default): one -MarkAllPoints holds every group; each
+				# group waits on its own Trig In 1 edge (one DTR per group).
+				# slm_pack=false keeps the older one -slm per group path.
+				use_pack = bool(slm_pack)
 				print(
-					"stim_mode=slm → -MarkAllPoints per group "
-					"(FOV fractions 0–1; one DTR per group when trigger=serial)"
+					"stim_mode=slm → "
+					+ (
+						"ONE packed -MarkAllPoints per power, one DTR per group"
+						if use_pack
+						else "-MarkAllPoints per group"
+					)
 				)
 				for power in powers:
 					if _stop():
@@ -441,6 +444,10 @@ def run_sync_loop(
 							visual_stim=visual_stim,
 							visual_cfg=vcfg,
 							rng=rng,
+							slm_arm_delay_s=slm_arm_delay_s,
+							slm_group_gap_s=slm_group_gap_s,
+							slm_group_delay_ms=slm_group_delay_ms,
+							slm_live_during_stim=slm_live_during_stim,
 						)
 						iter_trials.extend(batch)
 						all_trials.extend(batch)
@@ -898,24 +905,42 @@ def _run_slm_packed_batch(
 	visual_stim: Any,
 	visual_cfg: Any,
 	rng: random.Random,
+	slm_arm_delay_s: float = 3.0,
+	slm_group_gap_s: float = 3.0,
+	slm_group_delay_ms: float = 100.0,
+	slm_live_during_stim: bool = True,
 ) -> list[dict]:
 	"""
 	One -slm command for all groups at this power; one TTL per group.
 
 	trigger_index i (0-based) is the i-th DTR pulse and maps to groups_pts[i].
+
+	Serial timing (atomic: PV sequences the groups, we only pulse):
+	  t=0            send -MarkAllPoints (all groups; each waits on Trig In 1)
+	  t=arm          DTR 0 → group 0 burns (+ its repeats)
+	  t=arm+k*gap    DTR k → group k
+	PV's ``Delay`` between groups is short (``slm_group_delay_ms``); the DTR
+	spacing ``gap`` must exceed burn + Delay + arm margin so every edge lands
+	after PV is waiting on the next group's trigger. (A Delay as long as the
+	pulse spacing made each edge arrive just before PV re-armed → only the
+	first group burned.)
 	"""
 	from prairie_live.mark_all_points import pack_mark_all_points, slm_burn_ms
 
 	n = len(groups_pts)
-	# PV Delay between packed sets: must cover the hologram + a settle so the
-	# next Trig In 1 wait is armed before the next DTR (too-short Delay → only
-	# the first group burns). Software sleeps the same gap between pulses.
-	delay_ms = (
-		slm_burn_ms(slm_params)
-		+ float(pad_ms)
-		+ float(inter_trial_s) * 1000.0
-		+ 250.0  # settle after burn before next wait-for-trigger
-	)
+	serial_pack = trigger == "serial"
+	burn_ms = slm_burn_ms(slm_params)
+	if serial_pack:
+		# Short PV Delay: the next group still waits on its own Trig In 1 edge.
+		delay_ms = max(float(slm_group_delay_ms), 0.0)
+	else:
+		# Trigger=None: PV Delay *is* the spacing between groups.
+		delay_ms = (
+			burn_ms
+			+ float(pad_ms)
+			+ float(inter_trial_s) * 1000.0
+			+ 250.0
+		)
 	# One LiveScan + geometry read for the whole packed command (same FOV).
 	flat = [p for g in groups_pts for p in g]
 	fire_flat, spiral_fov = _slm_fire_points(
@@ -958,6 +983,7 @@ def _run_slm_packed_batch(
 		delay_ms=delay_ms,
 		repetitions=slm_params.get("repetitions", 1),
 		rep_delay_ms=slm_params.get("rep_delay_ms", 0.0),
+		bnc_repetitions=serial_pack,
 	)
 	# Audit XML: one MarkPoint step per group (same order as packed -slm).
 	steps = []
@@ -1022,9 +1048,19 @@ def _run_slm_packed_batch(
 		+ float(slm_params.get("initial_delay_ms") or 0)
 		+ pad_ms
 	) / 1000.0
-	# PV Delay between packed sets — gap between Trig In 1 edges.
-	gap_s = max(float(delay_ms) / 1000.0, wait_s)
-	mp_timeout = max(180.0, gap_s * n + 60.0)
+	if serial_pack:
+		gap_s = slm_dtr_gap_s(
+			burn_ms=burn_ms,
+			delay_ms=delay_ms,
+			min_gap_s=slm_group_gap_s,
+			f0_s=f0_s,
+			f1_s=f1_s,
+		)
+		arm_s = max(float(slm_arm_delay_s), 0.0)
+	else:
+		gap_s = max(float(delay_ms) / 1000.0, wait_s)
+		arm_s = 0.4
+	mp_timeout = max(180.0, arm_s + gap_s * n + 60.0)
 	want = _want_frames(
 		relay=relay, dry_run=dry_run, mock_scores=mock_scores, run_root=run_root
 	)
@@ -1037,6 +1073,7 @@ def _run_slm_packed_batch(
 	)
 	pulse_times: list[float] = []
 	f0_shared: list = []
+	stamped_frames: list[tuple[float, Any]] = []
 
 	if dry_run:
 		print(
@@ -1048,9 +1085,14 @@ def _run_slm_packed_batch(
 
 		init_ms = float(slm_params.get("initial_delay_ms") or 0)
 		_pre_stim_delay(wait_ms=init_ms, pl=pl, via_relay=via_relay)
+		live_on = bool(slm_live_during_stim)
+		if live_on:
+			# Live keeps imaging through the whole sequence (per-group F0/F1).
+			_ensure_live_after_stim(
+				relay=relay, pl=pl, via_relay=via_relay, label="pre-pack"
+			)
 
 		def _do_packed() -> None:
-			# Packed + DTR ⇒ Trig In 1 — Live must be off under the same hold.
 			_fire_mark_all_points(
 				parts=slm_parts,
 				wait_ms=0.0,
@@ -1059,48 +1101,68 @@ def _run_slm_packed_batch(
 				via_relay=via_relay,
 				no_wait=False,
 				timeout=mp_timeout,
-				ensure_live_off=True,
+				ensure_live_off=not live_on,
 			)
 
 		def _on_pulse(i: int) -> None:
 			pulse_times.append(time.time())
 			entry = group_map[i]
 			print(
-				f"  trigger {i}/{n - 1}: trial {trial_index_start + i} "
-				f"pts={entry['point_ids']}"
+				f"  DTR {i + 1}/{n} → group {i + 1}: {entry['group_name']} "
+				f"pts={entry['point_ids']}",
+				flush=True,
 			)
 
-		# Timing: one planned DTR per group, spaced by PV Delay (gap_s).
-		# No rescue pulses — an extra edge would release the next group early.
+		reps = max(int(slm_params.get("repetitions") or 1), 1)
 		if hasattr(ttl, "set_dtr"):
 			ttl.set_dtr(False)
 		print(
-			f"  packed -slm power={power} (-slm {slm_pwr:g}) n_groups={n} "
-			f"(1 DTR/group, gap={gap_s:.3f}s, Delay={delay_ms:.0f}ms)"
+			f"  PACKED -slm power={power} (-slm {slm_pwr:g}) groups={n} "
+			f"reps={reps} burn={burn_ms:.0f}ms · Live {'ON' if live_on else 'OFF'} "
+			f"· first DTR @ {arm_s:g}s, then every {gap_s:.2f}s "
+			f"(PV Delay {delay_ms:.0f}ms)",
+			flush=True,
 		)
-		print("  pulse map:")
-		for e in group_map:
-			print(
-				f"    pulse {e['trigger_index']}/{n - 1}: "
-				f"{e['group_name']} points={e['point_ids']}"
-			)
-		# f0 while Live is still on — -slm often kills LiveScan.
-		if want:
+		print(f"  -slm argv: {' '.join(slm_parts)}", flush=True)
+		collector = (
+			_FrameCollector(relay, frame_poll_s) if (want and live_on) else None
+		)
+		if want and not live_on:
+			# Live off during the sequence → no frames; shared F0 before arm.
 			f0_shared = _collect_frames(relay, f0_s, frame_poll_s)
-		run_while_pulsing_dtr(
-			_do_packed,
-			ttl=ttl,
-			n_pulses=n,
-			ttl_width_s=ttl_width_s,
-			gap_s=gap_s if n > 1 else 0.0,
-			arm_delay_s=0.4,
-			rescue_window_s=0.0,
-			join_timeout_s=mp_timeout,
-			on_pulse=_on_pulse,
-		)
-		if hasattr(ttl, "set_dtr"):
-			ttl.set_dtr(False)
-		_ensure_live_after_stim(relay=relay, pl=pl, via_relay=via_relay)
+		if collector is not None:
+			collector.start()
+			# Baseline for group 0 before anything is sent.
+			time.sleep(max(float(f0_s), 0.0))
+		try:
+			run_while_pulsing_dtr(
+				_do_packed,
+				ttl=ttl,
+				n_pulses=n,
+				ttl_width_s=ttl_width_s,
+				gap_s=gap_s if n > 1 else 0.0,
+				arm_delay_s=arm_s,
+				rescue_window_s=0.0,
+				join_timeout_s=mp_timeout,
+				on_pulse=_on_pulse,
+				allow_early_done=live_on,
+			)
+			# Last group's response window.
+			if collector is not None:
+				time.sleep(burn_ms / 1000.0 + max(float(f1_s), 0.2))
+		finally:
+			if collector is not None:
+				collector.stop()
+			if hasattr(ttl, "set_dtr"):
+				ttl.set_dtr(False)
+		if collector is not None:
+			stamped_frames = collector.frames
+			print(
+				f"  captured {len(stamped_frames)} frames across the sequence",
+				flush=True,
+			)
+		if not live_on:
+			_ensure_live_after_stim(relay=relay, pl=pl, via_relay=via_relay)
 	else:
 		if want and not dry_run:
 			f0_shared = _collect_frames(relay, f0_s, frame_poll_s)
@@ -1132,7 +1194,7 @@ def _run_slm_packed_batch(
 
 	rows: list[dict] = []
 	f1_shared: list = []
-	if want and not dry_run:
+	if want and not dry_run and not stamped_frames:
 		f1_shared = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
 	for gi, gpts in enumerate(groups_pts):
 		entry = group_map[gi]
@@ -1180,6 +1242,25 @@ def _run_slm_packed_batch(
 			# DTRs already fired during -slm; do not pulse again.
 			if gi < len(pulse_times):
 				row["t_ttl"] = pulse_times[gi]
+				if stamped_frames:
+					f0_w, f1_w = slice_group_frames(
+						stamped_frames,
+						t_pulse=pulse_times[gi],
+						f0_s=f0_s,
+						f1_s=f1_s,
+						skip_s=burn_ms / 1000.0,
+					)
+					if f0_w and f1_w:
+						f0_frames, f1_frames = f0_w, f1_w
+						row["frame_window"] = "per_group"
+					else:
+						row["frame_window"] = "missing"
+						f0_frames, f1_frames = [], []
+						print(
+							f"  group {gi + 1}: no frames around its DTR "
+							f"(F0 {len(f0_w)}, F1 {len(f1_w)}) — not scored",
+							flush=True,
+						)
 		else:
 			f0_frames, f1_frames = _run_stim_epoch(
 				row,
@@ -2308,6 +2389,76 @@ def _fire_mark_points(
 	)
 
 
+def slm_dtr_gap_s(
+	*,
+	burn_ms: float,
+	delay_ms: float,
+	min_gap_s: float,
+	f0_s: float,
+	f1_s: float,
+	arm_margin_s: float = 1.0,
+) -> float:
+	"""Seconds between DTR pulses in a packed serial -slm.
+
+	Edge k+1 must land after group k's burn + PV Delay + time for PV to
+	re-arm on Trig In 1, and response/baseline windows must not overlap.
+	"""
+	need = (float(burn_ms) + float(delay_ms)) / 1000.0 + float(arm_margin_s)
+	windows = float(f0_s) + float(f1_s) + float(burn_ms) / 1000.0
+	return max(float(min_gap_s), need, windows)
+
+
+def slice_group_frames(
+	stamped: list[tuple[float, Any]],
+	*,
+	t_pulse: float,
+	f0_s: float,
+	f1_s: float,
+	skip_s: float = 0.0,
+) -> tuple[list, list]:
+	"""F0 = frames in [t-f0, t); F1 = frames in (t+skip, t+skip+f1]."""
+	t0 = float(t_pulse)
+	f0 = [f for ts, f in stamped if t0 - float(f0_s) <= ts < t0]
+	lo = t0 + max(float(skip_s), 0.0)
+	f1 = [f for ts, f in stamped if lo < ts <= lo + max(float(f1_s), 0.2)]
+	return f0, f1
+
+
+class _FrameCollector:
+	"""Poll relay frames with wall-clock stamps on a background thread."""
+
+	def __init__(self, relay: Any, poll_s: float) -> None:
+		import threading
+
+		self._relay = relay
+		self._poll = max(float(poll_s), 0.01)
+		self._stop = threading.Event()
+		self._th = threading.Thread(
+			target=self._run, name="pack-frames", daemon=True
+		)
+		self.frames: list[tuple[float, Any]] = []
+		self._last_id: int | None = None
+
+	def _run(self) -> None:
+		while not self._stop.is_set():
+			try:
+				frm = self._relay.get_frame()
+			except Exception:
+				frm = None
+			# Relay returns its latest frame; skip repeats of the same object.
+			if frm is not None and id(frm) != self._last_id:
+				self._last_id = id(frm)
+				self.frames.append((time.time(), frm))
+			self._stop.wait(self._poll)
+
+	def start(self) -> None:
+		self._th.start()
+
+	def stop(self) -> None:
+		self._stop.set()
+		self._th.join(timeout=2.0)
+
+
 def _collect_frames(relay, duration_s: float, poll_s: float) -> list[np.ndarray]:
 	frames: list[np.ndarray] = []
 	t_end = time.monotonic() + max(duration_s, 0.0)
@@ -2493,6 +2644,9 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("inter_trial", 0.5)
 	opt.setdefault("slm_arm_delay_s", 3.0)
 	opt.setdefault("slm_group_settle_s", 2.5)
+	opt.setdefault("slm_group_gap_s", 3.0)
+	opt.setdefault("slm_group_delay_ms", 100.0)
+	opt.setdefault("slm_live_during_stim", True)
 	opt.setdefault("pad_ms", 100.0)
 	opt.setdefault("elite_frac", 0.4)
 	opt.setdefault("f0_s", 0.5)
@@ -2534,6 +2688,9 @@ def execute_session(
 	opt.setdefault("inter_trial", 0.5)
 	opt.setdefault("slm_arm_delay_s", 3.0)
 	opt.setdefault("slm_group_settle_s", 2.5)
+	opt.setdefault("slm_group_gap_s", 3.0)
+	opt.setdefault("slm_group_delay_ms", 100.0)
+	opt.setdefault("slm_live_during_stim", True)
 	opt.setdefault("pad_ms", 100.0)
 	opt.setdefault("elite_frac", 0.4)
 	opt.setdefault("f0_s", 0.5)
@@ -2628,7 +2785,14 @@ def execute_session(
 		for p in oob[:5]:
 			print(f"  Point {p['id']}  ({p['x']:.4f}, {p['y']:.4f})")
 	if stim_mode == "slm":
-		if str(opt.get("trigger") or "") == "serial":
+		if str(opt.get("trigger") or "") == "serial" and opt.get("slm_pack"):
+			print(
+				"stim_mode=slm + serial → ONE packed -MarkAllPoints per power: "
+				f"first DTR @ {float(opt.get('slm_arm_delay_s') or 3.0):g}s, then "
+				f"one DTR per group every ≥{float(opt.get('slm_group_gap_s') or 3.0):g}s · "
+				f"Live {'ON' if opt.get('slm_live_during_stim', True) else 'OFF'}"
+			)
+		elif str(opt.get("trigger") or "") == "serial":
 			print(
 				"stim_mode=slm + serial → each group: arm -MarkAllPoints "
 				f"(mask {float(opt.get('slm_arm_delay_s') or 3.0):g}s) → "
@@ -2783,6 +2947,9 @@ def execute_session(
 			slm_pack=bool(opt.get("slm_pack", False)),
 			slm_arm_delay_s=float(opt.get("slm_arm_delay_s") or 3.0),
 			slm_group_settle_s=float(opt.get("slm_group_settle_s") or 2.5),
+			slm_group_gap_s=float(opt.get("slm_group_gap_s") or 3.0),
+			slm_group_delay_ms=float(opt.get("slm_group_delay_ms") or 100.0),
+			slm_live_during_stim=bool(opt.get("slm_live_during_stim", True)),
 			images_dir=opt.get("images_dir"),
 			visual_cfg=opt,
 			stim_dff_min=float(opt.get("stim_dff_min") or 0.0),

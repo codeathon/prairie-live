@@ -139,8 +139,8 @@ def apply_gui_overrides(
 		else n_groups_for_pool(n_points, GROUP_SIZE)
 	)
 	opt["iterations"] = max(int(opt.get("iterations") or 1), 1)
-	# Classic SLM: one -MarkAllPoints per group (FOV 0–1); never pack with serial.
-	opt["slm_pack"] = False
+	# One packed -MarkAllPoints per power; each group waits on its own DTR.
+	opt["slm_pack"] = True
 	opt["cover_all"] = True
 	if via_relay:
 		opt["via_relay"] = via_relay

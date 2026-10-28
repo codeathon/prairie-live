@@ -149,6 +149,7 @@ def pack_mark_all_points(
 	delay_ms: float = 0.0,
 	repetitions: int = 1,
 	rep_delay_ms: float = 0.0,
+	bnc_repetitions: bool = False,
 ) -> list[str]:
 	"""
 	Pack many simultaneous sets into one -slm command.
@@ -165,8 +166,15 @@ def pack_mark_all_points(
 	DONE before DTR (group never fires). BNC packs therefore emit **one set
 	per group**; XML/GUI Repetitions > 1 are ignored here (one burn per DTR).
 
-	``delay_ms`` separates groups. ``rep_delay_ms`` separates None-trigger
-	repeats only.
+	``bnc_repetitions=True`` (packed Live-on path) keeps repetitions with a BNC
+	trigger: each group's first set waits on the trigger, its repeats use
+	``None`` and follow immediately, so one DTR still releases one whole group.
+	That early-DONE observation came from the Live-off single-group path, where
+	PV also failed to burn with Trigger=None — it is not evidence against
+	repeats when Live stays on.
+
+	``delay_ms`` separates groups. ``rep_delay_ms`` separates repeats of one
+	group.
 
 	``power`` is the total UI UncagingLaserPower for each hologram set (not
 	scaled by spot count; SLM splits that total across the spots).
@@ -176,7 +184,9 @@ def pack_mark_all_points(
 	trig0 = str(trigger_selection or "None").strip()
 	bnc_wait = trig0.lower() not in ("none", "")
 	# BNC + Live off cannot use Trigger=None follow-ups in the same -slm.
-	reps = 1 if bnc_wait else max(int(repetitions), 1)
+	reps = (
+		1 if (bnc_wait and not bnc_repetitions) else max(int(repetitions), 1)
+	)
 	set_kw = dict(
 		power=power,
 		laser=laser,
