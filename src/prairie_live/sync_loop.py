@@ -1984,10 +1984,18 @@ def _slm_fire_points(
 			+ (f"· spiral_fov={spiral_fov:.4g}" if spiral_fov is not None else "")
 		)
 	else:
-		# Galvo: convert NOW while Live is still on.
+		# Galvo: Live MUST be on before -gts (prior Abort often left it off —
+		# that is why convert stalled and no -MarkAllPoints was sent).
 		print(
-			f"{log_prefix}galvo → FOV: reading -gts (Live still on)…",
+			f"{log_prefix}galvo → FOV: ensure Live on, then -gts convert…",
 			flush=True,
+		)
+		_ensure_live_after_stim(
+			relay=relay,
+			pl=pl,
+			via_relay=via_relay,
+			settle_s=0.35,
+			label=f"{log_prefix.strip()}pre-gts",
 		)
 		try:
 			fire_pts, spiral_fov, note = points_for_slm_fire(
@@ -1999,7 +2007,7 @@ def _slm_fire_points(
 		except Exception as exc:
 			raise RuntimeError(
 				f"galvo→FOV conversion failed ({exc}). "
-				"Check Live is on so -gts returns amp/center."
+				"Live on + -gts amp/center required before Live off."
 			) from exc
 
 	print(f"{log_prefix}{note}", flush=True)
