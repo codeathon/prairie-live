@@ -1409,6 +1409,12 @@ def _run_slm_single_trial(
 		init_ms = float(slm_params.get("initial_delay_ms") or 0)
 		_pre_stim_delay(wait_ms=init_ms, pl=pl, via_relay=via_relay)
 
+		# Live off on the main thread *before* the DTR clock starts so arm_delay
+		# covers mask gen after -slm, not the ensure_live_off settle itself.
+		_stop_live_for_stim(
+			relay=relay, pl=pl, via_relay=via_relay, label=f"group {gi + 1} pre-arm"
+		)
+
 		# Keep Mark Points UI from sitting frozen on Trig In 1 for minutes.
 		slm_timeout = max(45.0, wait_s + arm_s + rescue_s + 15.0)
 
@@ -1417,7 +1423,7 @@ def _run_slm_single_trial(
 				f"  group {gi + 1}/{n_groups}: sending -MarkAllPoints to relay…",
 				flush=True,
 			)
-			# Serial + Trig In 1: Live off under the same hold as -slm.
+			# Serial + Trig In 1: re-check Live off under the same hold as -slm.
 			_fire_mark_all_points(
 				parts=slm_parts,
 				wait_ms=0.0,
@@ -1449,6 +1455,13 @@ def _run_slm_single_trial(
 			except Exception as exc:
 				print(f"  unstick Abort failed: {exc}")
 
+		file_reps = max(int(slm_params.get("repetitions") or 1), 1)
+		if file_reps > 1:
+			print(
+				f"  NOTE: XML/GUI Repetitions={file_reps} → one -slm set "
+				"(BNC+Live-off cannot pack Trigger=None repeats)",
+				flush=True,
+			)
 		print(
 			f"  BEGIN group {gi + 1}/{n_groups}: arm -slm "
 			f"(Live off · first DTR @ {arm_s:g}s · rescue {rescue_s:g}s) "
@@ -1460,7 +1473,23 @@ def _run_slm_single_trial(
 		# NOT bounce Live on here — that made it look like Live was on during
 		# the failed arm (the real restart is this finally, not a race mid-slm).
 		early_done = False
-		try:
+
+		def _arm_once(*, attempt: int) -> None:
+			if attempt > 1:
+				print(
+					f"  group {gi + 1}/{n_groups}: retry arm "
+					f"(attempt {attempt} — prior -slm finished before DTR)",
+					flush=True,
+				)
+				_stop_live_for_stim(
+					relay=relay,
+					pl=pl,
+					via_relay=via_relay,
+					label=f"group {gi + 1} retry pre-arm",
+				)
+				if hasattr(ttl, "set_dtr"):
+					ttl.set_dtr(False)
+				time.sleep(0.3)
 			run_while_pulsing_dtr(
 				_do_slm,
 				ttl=ttl,
@@ -1476,6 +1505,15 @@ def _run_slm_single_trial(
 				),
 				on_stuck=_unstick,
 			)
+
+		try:
+			try:
+				_arm_once(attempt=1)
+			except RuntimeError as exc:
+				if "finished before the first DTR" not in str(exc):
+					raise
+				# One retry: Live often races back on before the first -slm.
+				_arm_once(attempt=2)
 			print(f"  group {gi + 1}/{n_groups}: -slm DONE")
 		except RuntimeError as exc:
 			early_done = "finished before the first DTR" in str(exc)

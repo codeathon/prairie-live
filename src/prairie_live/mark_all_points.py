@@ -156,19 +156,27 @@ def pack_mark_all_points(
 	PV grammar: after each set's Trigger[+Count], append Delay ms except on the
 	last set. Software maps trigger pulse i → groups[i] (same order as packed).
 
-	``repetitions``: -MarkAllPoints has no Repetitions parameter, so each group
-	is emitted as ``repetitions`` identical sets. Only the first set of a group
-	waits on ``trigger_selection``; the repeats use trigger ``None`` so one
-	pulse releases the whole group. ``rep_delay_ms`` separates repeats of the
-	same group; ``delay_ms`` separates the last repeat of one group from the
-	next group.
+	``repetitions``: -MarkAllPoints has no Repetitions parameter. With
+	``TriggerSelection=None`` (Live on), each group is emitted as
+	``repetitions`` identical sets so one command burns N times.
+
+	With a BNC trigger (``Trig In 1``), serial mode must keep Live *off* to
+	arm. Mixing ``Trig In 1`` then ``None`` repeats in one -slm has returned
+	DONE before DTR (group never fires). BNC packs therefore emit **one set
+	per group**; XML/GUI Repetitions > 1 are ignored here (one burn per DTR).
+
+	``delay_ms`` separates groups. ``rep_delay_ms`` separates None-trigger
+	repeats only.
 
 	``power`` is the total UI UncagingLaserPower for each hologram set (not
 	scaled by spot count; SLM splits that total across the spots).
 	"""
 	if not groups:
 		raise ValueError("pack_mark_all_points needs at least one group")
-	reps = max(int(repetitions), 1)
+	trig0 = str(trigger_selection or "None").strip()
+	bnc_wait = trig0.lower() not in ("none", "")
+	# BNC + Live off cannot use Trigger=None follow-ups in the same -slm.
+	reps = 1 if bnc_wait else max(int(repetitions), 1)
 	set_kw = dict(
 		power=power,
 		laser=laser,
@@ -187,7 +195,7 @@ def pack_mark_all_points(
 			if r == 0:
 				trig, count = trigger_selection, trigger_count
 			else:
-				# Repeats fire straight after the previous set — no extra edge.
+				# None-trigger repeats only (Live on / trigger=none path).
 				trig, count = "None", 1
 			parts.extend(
 				build_set_tokens(
