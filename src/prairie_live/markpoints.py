@@ -29,9 +29,15 @@ _SPIRAL_DEFAULTS = {
 _DEFAULT_LASER = "Monaco"
 _DEFAULT_SPIRAL_REVS = "8"
 _DEFAULT_USE_3D = "False"
-# PV's saved series stores UncagingLaserPower as a fraction of this UI value
-# (rig file: 0.4 at UI 160, 0.625 at UI 250).
-POWER_FULL_SCALE = 400.0
+# Monaco laser (lab PV Mark Points / laser panel):
+#   Out min/max  = 0.0 … 2.5   (what series XML UncagingLaserPower stores)
+#   Display max  = 1000        (what the Mark Points GUI and -slm use)
+# XML Out ↔ GUI Display: display = out * (DISPLAY_MAX / OUT_MAX) = out * 400
+#   e.g. XML 0.4 → GUI 160, XML 0.625 → GUI 250.
+MONACO_OUT_MIN = 0.0
+MONACO_OUT_MAX = 2.5
+MONACO_DISPLAY_MAX = 1000.0
+POWER_FULL_SCALE = MONACO_DISPLAY_MAX / MONACO_OUT_MAX  # 400.0
 _NO_TRIGGER_ID = NO_TRIGGER_IDENTIFIER
 
 
@@ -358,21 +364,28 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 
 
 def xml_power(power: float, meta: dict[str, Any] | None = None) -> float:
-	"""UI power (e.g. 160) → PV series UncagingLaserPower fraction (0.4)."""
+	"""GUI Display UncagingLaserPower (e.g. 160) → series XML Out (e.g. 0.4).
+
+	XML stores Monaco **Out** (0–``MONACO_OUT_MAX``), not Display/1000.
+	"""
 	scale = float((meta or {}).get("power_full_scale") or POWER_FULL_SCALE)
-	frac = float(power) / scale
-	if not 0.0 <= frac <= 1.0:
+	out = float(power) / scale
+	if not 0.0 <= out <= float(MONACO_OUT_MAX) + 1e-9:
 		raise ValueError(
-			f"power {power:g} is outside 0–{scale:g} (PV full scale); "
+			f"power {power:g} is outside Display 0–{scale:g} "
+			f"(Out 0–{MONACO_OUT_MAX:g}); "
 			"enter powers as shown in PV's Mark Points window"
 		)
-	return round(frac, 6)
+	return round(out, 6)
 
 
 def ui_power(raw: Any) -> float:
-	"""PV series UncagingLaserPower fraction → UI power (0.4 → 160)."""
+	"""Series XML Out (e.g. 0.4) → GUI Display UncagingLaserPower (160).
+
+	Values already > Out max are treated as Display already.
+	"""
 	val = float(raw or 0)
-	return round(val * POWER_FULL_SCALE, 6) if val <= 1.0 else val
+	return round(val * POWER_FULL_SCALE, 6) if val <= MONACO_OUT_MAX else val
 
 
 def build_group_step(

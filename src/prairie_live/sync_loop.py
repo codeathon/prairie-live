@@ -1882,14 +1882,14 @@ def _slm_fire_points(
 def _slm_script_power(power: float, meta: dict | None = None) -> float:
 	"""Power token for ``-MarkAllPoints``.
 
-	PV's script ``-slm`` takes the same UI UncagingLaserPower scale as the Mark
-	Points window (e.g. 150), *not* the 0–1 fraction written into series XML
-	(``UncagingLaserPower="0.375"``).
+	Same number as Mark Points **GUI Display** UncagingLaserPower (0–1000 on
+	this Monaco: Out 0–2.5, Display max 1000). Not series XML Out (0.4) and
+	not Out volts.
 
 	Powers is the **total** for that hologram / group. Simultaneous SLM splits
 	the beam across spots (N spots → ~power/N each) — we do not multiply by N.
 	"""
-	del meta  # series XML scale only — kept for call-site compatibility
+	del meta  # series XML Out scale only — kept for call-site compatibility
 	return float(power)
 
 

@@ -525,17 +525,28 @@ def test_gpl_group_fires_like_pv(tmp_path: Path):
 
 
 def test_pv_saved_series_reads_and_writes_like_pv(tmp_path: Path):
-	"""PV's own saved series: inline X/Y, power as a fraction of 400."""
+	"""PV's own saved series: inline X/Y; XML Out ↔ GUI Display via ×400.
+
+	Monaco: Out 0–2.5, Display max 1000 → Display = Out × (1000/2.5).
+	"""
 	import xml.etree.ElementTree as ET
 
 	import pytest
 
-	from prairie_live.markpoints import load_mark_points_file, xml_power
+	from prairie_live.markpoints import (
+		MONACO_DISPLAY_MAX,
+		MONACO_OUT_MAX,
+		POWER_FULL_SCALE,
+		load_mark_points_file,
+		xml_power,
+	)
 
+	assert POWER_FULL_SCALE == pytest.approx(MONACO_DISPLAY_MAX / MONACO_OUT_MAX)
 	steps = load_mark_points_file("samples/MarkPoints_rig_saved.xml")
 	pts = extract_unique_points(steps)
 	assert len(pts) == 5
 	assert pts[0]["x"] == pytest.approx(-3.25489489483074)
+	# XML 0.4 Out → Display 160; XML 0.625 → Display 250.
 	assert steps[0]["laser_pwr"] == pytest.approx(160.0)
 	assert steps[-1]["laser_pwr"] == pytest.approx(250.0)
 	meta = template_meta(steps)
@@ -543,7 +554,7 @@ def test_pv_saved_series_reads_and_writes_like_pv(tmp_path: Path):
 	assert meta["repetitions"] == 3 and meta["duration"] == 36.0
 	assert xml_power(160, meta) == 0.4
 	with pytest.raises(ValueError):
-		xml_power(500, meta)
+		xml_power(1500, meta)
 
 	step = build_group_step(pts[:3], name="g", power=160.0, meta=meta)
 	root = ET.fromstring(groups_to_xml([step]))

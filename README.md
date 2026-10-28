@@ -217,7 +217,10 @@ remaps galvo→FOV at fire time with LiveScan on.
 
 **SpiralSize / power:** never-run PVSaved `SpiralSize` is galvo volts (do not
 send ~0.185 as FOV fraction). For `-slm`, the GUI prefers lab spiral
-**54.5 µm / FOV µm** (≈0.048). Powers are Mark Points **UI scale** (150, not
-XML `0.375`) and are the **total** for that group hologram. Simultaneous SLM
-splits that total across spots (~150/4 each if the group has 4 points) — unlike
-PV Mark Points firing one spot at a time at full 150.
+**54.5 µm / FOV µm** (≈0.048).
+
+**Monaco laser power (lab):** Out min/max **0–2.5**, Display max **1000**.
+Mark Points GUI and `-slm` use **Display** (e.g. Powers `150`). Series XML
+`UncagingLaserPower` stores **Out** (`150/1000×2.5 = 0.375`). Conversion
+factor Display/Out = 400. Powers is the **total** for the group hologram;
+simultaneous SLM splits that across spots (~150/4 if the group has 4).

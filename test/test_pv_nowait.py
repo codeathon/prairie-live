@@ -197,8 +197,7 @@ def test_single_dtr_no_rescue_during_long_stim_dwell():
 def test_slm_script_power_keeps_ui_scale():
 	from prairie_live.sync_loop import _slm_script_power
 
-	# -slm wants UI UncagingLaserPower, not series XML ÷400.
+	# -slm wants GUI Display UncagingLaserPower (0–1000), not XML Out (0–2.5).
 	# Powers is total for the hologram (not multiplied by spot count).
 	assert _slm_script_power(160.0, {}) == 160.0
-	assert _slm_script_power(0.75, {}) == 0.75
 	assert _slm_script_power(150.0, {}) == 150.0
