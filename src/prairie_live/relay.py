@@ -63,6 +63,8 @@ class Relay:
 		self._stop = threading.Event()
 		# Set while -slm/-mp holds pv.lock so -gi cannot starve Abort/Stop.
 		self._stim_hold = threading.Event()
+		# Coalesce concurrent Stop / post-run / session Abort storms.
+		self._abort_clear_lock = threading.Lock()
 		self._logged_first_grab = False
 		self._hb_t = 0.0
 		self._send_n = 0
@@ -186,18 +188,30 @@ class Relay:
 			hit = pv.force_interrupt(why, force=force)
 			return {"ok": True, "cmd": "force_interrupt", "interrupted": bool(hit)}
 		if cmd == "abort_clear_stim":
-			# GUI Stop: kill armed Mark Points / -slm, replace series, restore Live.
+			# GUI Stop: kill armed Mark Points / -slm, restore Live.
+			# One at a time — overlapping Stop/post-run/session clears were
+			# flooding PV with -Abort while the Trial log sat on "starting…".
 			from prairie_live.pv_cleanup import abort_and_clear_stim
 
 			restore = payload.get("restore_live")
 			kw = {}
 			if restore is not None:
 				kw["restore_live"] = bool(restore)
-			return {
-				"ok": True,
-				"cmd": "abort_clear_stim",
-				**abort_and_clear_stim(pv, **kw),
-			}
+			if not self._abort_clear_lock.acquire(blocking=False):
+				print("abort_clear_stim skipped (already in progress)", flush=True)
+				return {
+					"ok": True,
+					"cmd": "abort_clear_stim",
+					"notes": ["skipped_busy"],
+				}
+			try:
+				return {
+					"ok": True,
+					"cmd": "abort_clear_stim",
+					**abort_and_clear_stim(pv, **kw),
+				}
+			finally:
+				self._abort_clear_lock.release()
 		if cmd == "live":
 			# PV 6.1 needs explicit on|off; off must precede -slm/-mp.
 			state = str(payload.get("state") or "on").strip().lower()

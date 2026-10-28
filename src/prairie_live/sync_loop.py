@@ -2503,27 +2503,30 @@ def execute_session(
 				password=str(opt["password"]),
 			)
 
-		# Prior Run (often stim_mode=slm) can leave -MarkAllPoints armed; the
-		# next series -MarkPoints then hits "another task already in progress"
-		# and/or E:\Markpoints folder dialogs. Clear once here, not per trial.
-		# SLM: do NOT -LiveScan on here — Live on→off right before -slm misses
-		# Trig In 1 (one trial, no burns). Leave Live off for the first arm.
+		# Prior Run can leave -MarkAllPoints armed. For SLM, do NOT Abort here —
+		# Abort storms (session start + Stop + post-run) were freezing the GUI
+		# on "starting…" while the relay only logged Abort. Live off is enough;
+		# a busy -slm is cleared on the first fire via recover_after_stuck_stim.
 		if not opt.get("dry_run"):
-			from prairie_live.pv_cleanup import clear_prior_stim_on_client
+			if stim_mode == "slm":
+				print("session start: SLM — LiveScan off only (no Abort storm)")
+				try:
+					if via_relay and relay is not None and hasattr(relay, "stop_live"):
+						relay.stop_live()
+					elif pl is not None:
+						pl.send_command("-LiveScan", "off")
+					print("session start: LiveScan off")
+				except Exception as exc:
+					print(f"session start: LiveScan off failed: {exc}")
+			else:
+				from prairie_live.pv_cleanup import clear_prior_stim_on_client
 
-			print(
-				"session start: Abort leftover -slm "
-				f"(Live will stay {'on' if stim_mode != 'slm' else 'off'})…"
-			)
-			clr = clear_prior_stim_on_client(
-				relay,
-				pl,
-				restore_live=(stim_mode != "slm"),
-			)
-			print(
-				"session start: clear done → "
-				+ ", ".join(str(n) for n in (clr.get("notes") or []))
-			)
+				print("session start: Abort leftover Mark Points…")
+				clr = clear_prior_stim_on_client(relay, pl, restore_live=True)
+				print(
+					"session start: clear done → "
+					+ ", ".join(str(n) for n in (clr.get("notes") or []))
+				)
 
 		# Classic -slm needs FOV 0–1. Galvo lists are remapped at fire time
 		# via live scan amp; prefer exporting FOV points from Live clicks.

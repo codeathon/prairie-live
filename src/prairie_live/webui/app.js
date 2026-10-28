@@ -400,9 +400,27 @@ async function boot() {
       trigger: $("trigger").value,
       ...visualRunPayload(),
     });
-    if (!res.ok) $("save_status").textContent = res.error || "run failed";
+    if (!res.ok) {
+      const err = res.error || "run failed";
+      $("save_status").textContent = err;
+      // "starting…" is client-only — replace it so a 409 does not look hung.
+      lastLogText = "";
+      $("log").textContent =
+        err.includes("already")
+          ? "Run rejected — already running. Hit Stop, then Run again."
+          : `Run failed: ${err}`;
+      return;
+    }
+    // Pull server log immediately (do not wait for the 800ms poll).
+    lastLogText = "";
+    await tick();
   });
-  $("stop").addEventListener("click", () => jpost("/api/stop", {}));
+  $("stop").addEventListener("click", async () => {
+    $("save_status").textContent = "stopping…";
+    await jpost("/api/stop", {});
+    lastLogText = "";
+    await tick();
+  });
   $("sel_top").addEventListener("click", () => {
     selectionCleared = false;
     picked.clear();

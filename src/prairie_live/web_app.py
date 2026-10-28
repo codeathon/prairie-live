@@ -410,7 +410,7 @@ class Handler(BaseHTTPRequestHandler):
 				builtins.print = _gui_print
 				addr = str(opt.get("via_relay") or DEFAULT_RELAY)
 				try:
-					STATE.append("connecting relay / clearing leftover -slm…")
+					STATE.append("connecting relay / starting session…")
 					trials = execute_session(
 						opt,
 						on_trial=lambda row: STATE.q.put(("trial", dict(row))),

@@ -207,15 +207,22 @@ class PvScript:
 		# -Silent: Abort mid-Mark-Points otherwise pops E:\\Markpoints
 		# "directory already exists — delete and continue?"
 		# Wait briefly for a normal -gi; if the lock is still held, drop the
-		# socket so Abort cannot queue forever behind a hung -slm (session
-		# start / Stop looked like a blank Run with Live stuck off).
-		got = self.lock.acquire(timeout=0.75)
+		# socket so Abort cannot queue forever behind a hung -slm.
+		# Short DONE timeout: wedged PV often never replies to -Abort either
+		# (that was the multi-Abort storm with the GUI stuck on "starting…").
+		got = self.lock.acquire(timeout=0.5)
 		if got:
 			self.lock.release()
 		else:
-			self._drop_socket_unlocked("abort: lock busy >0.75s")
-			time.sleep(0.2)
-		self.send("-Silent", "-Abort", timeout=15.0)
+			self._drop_socket_unlocked("abort: lock busy >0.5s")
+			time.sleep(0.15)
+		try:
+			self.send("-Silent", "-Abort", timeout=3.0)
+		except TimeoutError:
+			# PV ate Abort without DONE — session already dropped in _call.
+			print("abort: -Abort timed out (PV wedged); continuing", flush=True)
+		except Exception as exc:
+			print(f"abort: {exc}", flush=True)
 		return {"ok": True, "cmd": "abort"}
 
 	def send(self, *parts: str, timeout: float = 60.0) -> str:

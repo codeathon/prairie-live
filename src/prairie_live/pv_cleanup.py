@@ -19,19 +19,14 @@ EMPTY_MARK_POINTS_XML = """<?xml version="1.0" encoding="utf-8"?>
 def abort_and_clear_stim(
 	client: Any,
 	*,
-	settle_s: float = 0.6,
+	settle_s: float = 0.25,
 	restore_live: bool = True,
 ) -> dict[str, Any]:
 	"""
 	``client``: RelayClient or anything with abort / start_live.
 
-	1. force_interrupt (if available) — close hung -slm socket so Abort is not
-	   queued behind DONE/timeout (PV "won't Abort" hang)
-	2. -Silent -Abort — cancel armed -slm / -MarkPoints (and suppress boxes)
-	3. settle — let PV drop SLM spiral waveforms before series -lmp
-	   (too short a settle after -slm → Critical Error Int32 in spiral DAC)
-	4. -LiveScan on — only when ``restore_live`` (Abort kills Live). Skip for
-	   SLM session start: Live on→off right before -slm misses Trig In 1.
+	One -Silent -Abort (not two — double Abort was spamming the relay and
+	stalling the Run on "starting…"), brief settle, then Live on/off.
 
 	Call at **session start** and on **Stop**, never between every trial.
 	"""
@@ -52,16 +47,6 @@ def abort_and_clear_stim(
 	if settle_s and settle_s > 0:
 		time.sleep(float(settle_s))
 		notes.append(f"settle_{settle_s:g}s")
-
-	# Second Abort after settle — clears leftover -MarkAllPoints more reliably.
-	try:
-		out = client.abort()
-		notes.append("abort2")
-		if isinstance(out, dict) and out.get("ok") is False:
-			notes.append(f"abort2_fail:{out.get('error', out)}")
-	except Exception as exc:
-		notes.append(f"abort2_err:{exc}")
-	time.sleep(0.2)
 
 	if restore_live:
 		try:

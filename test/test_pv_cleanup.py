@@ -35,9 +35,9 @@ def test_abort_and_clear_stim_order():
 	c = FakeClient()
 	out = abort_and_clear_stim(c, settle_s=0.0)
 	assert out["ok"] is True
-	# Double Abort after settle clears leftover -slm before series.
-	assert c.calls == ["abort", "abort", "live"]
-	assert out["notes"] == ["abort", "abort2", "live"]
+	# One Abort only — a second Abort was spamming the relay.
+	assert c.calls == ["abort", "live"]
+	assert out["notes"] == ["abort", "live"]
 
 
 def test_abort_and_clear_stim_slm_leaves_live_off():
@@ -51,7 +51,7 @@ def test_abort_and_clear_stim_slm_leaves_live_off():
 	c = Client()
 	out = abort_and_clear_stim(c, settle_s=0.0, restore_live=False)
 	assert out["ok"] is True
-	assert c.calls == ["abort", "abort", "live_off"]
+	assert c.calls == ["abort", "live_off"]
 	assert "live_off" in out["notes"]
 	assert "live" not in out["notes"]
 
@@ -73,5 +73,5 @@ def test_relay_abort_clear_stim_command():
 	assert out["cmd"] == "abort_clear_stim"
 	cmds = _cmds(r)
 	assert cmds[0] == ("-Silent", "-Abort")
-	assert cmds[1] == ("-Silent", "-Abort")
-	assert cmds[2] == ("-LiveScan", "on")
+	assert cmds[1] == ("-LiveScan", "on")
+	assert cmds.count(("-Silent", "-Abort")) == 1
