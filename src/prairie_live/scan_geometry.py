@@ -55,21 +55,34 @@ def _num(text: Any) -> float | None:
 
 
 def fetch_scan_geometry(client) -> dict[str, float]:
-	"""Scan amplitude/center from PV via the relay; ValueError says which read failed."""
+	"""Scan amplitude/center from PV via the relay; ValueError says which read failed.
+
+	Prefer calling this while LiveScan is **on** — after Live off, ``-gts`` can
+	hang and block galvo→FOV conversion (no ``-MarkAllPoints`` ever sent).
+	"""
 	geom: dict[str, float] = {}
 	for name, key, index in _KEYS:
 		try:
 			out = client.get_state(key, index)
 		except Exception as exc:
+			# Center often 0; if amp already read, default missing center to 0.
+			if name in ("ctr_x", "ctr_y") and geom.get("amp_x") and geom.get("amp_y"):
+				geom[name] = 0.0
+				continue
 			raise ValueError(f"{key} {index}: {exc}") from exc
 		if not out.get("ok", True):
 			raise ValueError(f"{key} {index}: {out.get('error') or 'relay error'}")
 		val = _num(out.get("value"))
 		if val is None:
+			if name in ("ctr_x", "ctr_y"):
+				geom[name] = 0.0
+				continue
 			raise ValueError(f"{key} {index}: PV replied {out.get('value')!r}")
 		geom[name] = val
 	if not geom["amp_x"] or not geom["amp_y"]:
 		raise ValueError(f"scan amplitude is 0 (X {geom['amp_x']}, Y {geom['amp_y']})")
+	geom.setdefault("ctr_x", 0.0)
+	geom.setdefault("ctr_y", 0.0)
 	return geom
 
 

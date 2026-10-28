@@ -1959,22 +1959,19 @@ def _slm_fire_points(
 	dry_run: bool,
 	log_prefix: str = "  ",
 ) -> tuple[list[dict], float | None]:
-	"""Keep Live **off**, remap galvo→FOV only when needed, then ready for -slm.
+	"""Galvo→FOV convert, then Live **off**, then ready for -slm.
 
-	FOV 0–1 Mark Points lists skip ``-gts`` entirely — a wedged scan-geometry
-	read was blocking every Run before any ``-MarkAllPoints`` left the PC.
+	Order matters: ``-gts`` after Live off was hanging on the scope (relay showed
+	amp/center X then silence — no ``-MarkAllPoints``). Read geometry while Live
+	is still on, do the conversion in Python, *then* Live off for Trig In 1.
 	"""
 	from prairie_live.scan_geometry import is_fraction_space, points_for_slm_fire
 
 	if dry_run or relay is None:
 		# Dry-run / no relay: keep whatever fractions the session lock produced.
 		return list(gpts), None
-	# Live must be off before -slm (PV 6.1). No Live-on first.
-	_stop_live_for_stim(
-		relay=relay, pl=pl, via_relay=via_relay, label=f"{log_prefix.strip()}pre-slm"
-	)
-	time.sleep(0.25)  # let Live actually stop before -slm
-	# Fat FOV exports are already 0–1 — do not touch PV script port again.
+
+	# Fat FOV exports are already 0–1 — no -gts needed.
 	if is_fraction_space(gpts):
 		fire_pts = [dict(p, coord_space="fov") for p in gpts]
 		spiral_fov = None
@@ -1986,25 +1983,25 @@ def _slm_fire_points(
 			f"SLM fire: {len(fire_pts)} FOV points as-is (skip -gts) "
 			+ (f"· spiral_fov={spiral_fov:.4g}" if spiral_fov is not None else "")
 		)
-		print(f"{log_prefix}{note}", flush=True)
-		return fire_pts, spiral_fov
-
-	print(
-		f"{log_prefix}galvo points — reading -gts for FOV remap…",
-		flush=True,
-	)
-	try:
-		fire_pts, spiral_fov, note = points_for_slm_fire(
-			gpts,
-			relay,
-			spiral_size_um=slm_params.get("spiral_size_um"),
-			fov_width_um=slm_params.get("fov_width_um"),
+	else:
+		# Galvo: convert NOW while Live is still on.
+		print(
+			f"{log_prefix}galvo → FOV: reading -gts (Live still on)…",
+			flush=True,
 		)
-	except Exception as exc:
-		raise RuntimeError(
-			f"scan geometry failed before -slm ({exc}). "
-			"Export FOV 0–1 Mark Points from Live, or fix -gts on the scope."
-		) from exc
+		try:
+			fire_pts, spiral_fov, note = points_for_slm_fire(
+				gpts,
+				relay,
+				spiral_size_um=slm_params.get("spiral_size_um"),
+				fov_width_um=slm_params.get("fov_width_um"),
+			)
+		except Exception as exc:
+			raise RuntimeError(
+				f"galvo→FOV conversion failed ({exc}). "
+				"Check Live is on so -gts returns amp/center."
+			) from exc
+
 	print(f"{log_prefix}{note}", flush=True)
 	for p in fire_pts[:5]:
 		gx, gy = p.get("x_galvo"), p.get("y_galvo")
@@ -2019,6 +2016,12 @@ def _slm_fire_points(
 				f"{log_prefix}  P{p['id']} FOV ({float(p['x']):.4f},{float(p['y']):.4f})",
 				flush=True,
 			)
+
+	# Live off only after conversion — required before -slm Trig In 1 on PV 6.1.
+	_stop_live_for_stim(
+		relay=relay, pl=pl, via_relay=via_relay, label=f"{log_prefix.strip()}pre-slm"
+	)
+	time.sleep(0.25)
 	return fire_pts, spiral_fov
 
 
@@ -2540,21 +2543,15 @@ def execute_session(
 				password=str(opt["password"]),
 			)
 
-		# Prior Run can leave -MarkAllPoints armed. For SLM, do NOT Abort here —
-		# Abort storms (session start + Stop + post-run) were freezing the GUI
-		# on "starting…" while the relay only logged Abort. Live off is enough;
-		# a busy -slm is cleared on the first fire via recover_after_stuck_stim.
+		# Prior Run can leave -MarkAllPoints armed. For SLM: leave Live **on**
+		# so the first group can -gts galvo→FOV; Live off happens after convert.
+		# (Live off then -gts was the stall — no -MarkAllPoints ever sent.)
 		if not opt.get("dry_run"):
 			if stim_mode == "slm":
-				print("session start: SLM — LiveScan off only (no Abort storm)")
-				try:
-					if via_relay and relay is not None and hasattr(relay, "stop_live"):
-						relay.stop_live()
-					elif pl is not None:
-						pl.send_command("-LiveScan", "off")
-					print("session start: LiveScan off")
-				except Exception as exc:
-					print(f"session start: LiveScan off failed: {exc}")
+				print(
+					"session start: SLM — leave Live on for galvo→FOV -gts "
+					"(Live off after convert, before -slm)"
+				)
 			else:
 				from prairie_live.pv_cleanup import clear_prior_stim_on_client
 
