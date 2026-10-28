@@ -1964,13 +1964,17 @@ def _slm_fire_points(
 		relay=relay, pl=pl, via_relay=via_relay, label=f"{log_prefix.strip()}pre-slm"
 	)
 	time.sleep(0.4)  # let Live actually stop before -gts / -slm
+	print(
+		f"{log_prefix}reading scan amplitude/center (-gts) for FOV remap…",
+		flush=True,
+	)
 	fire_pts, spiral_fov, note = points_for_slm_fire(
 		gpts,
 		relay,
 		spiral_size_um=slm_params.get("spiral_size_um"),
 		fov_width_um=slm_params.get("fov_width_um"),
 	)
-	print(f"{log_prefix}{note}")
+	print(f"{log_prefix}{note}", flush=True)
 	for p in fire_pts[:5]:
 		gx, gy = p.get("x_galvo"), p.get("y_galvo")
 		if gx is not None and gy is not None:
