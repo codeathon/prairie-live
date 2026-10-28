@@ -214,3 +214,10 @@ SpiralWidth_FOV = SpiralSize_galvo / (2 · |amp|)
 `stim_mode=slm` remaps galvo→FOV at fire time with LiveScan on, so a `.gpl` is
 usable; a post-run FOV XML works as-is. Keep zoom fixed between export and fire
 (or re-read amp/center).
+
+**SpiralSize trap:** never-run PVSaved files store spiral in **galvo volts**
+(often ~0.02–0.2). That range overlaps FOV fractions. Sending `0.185` V to
+`-MarkAllPoints` as FOV fraction spreads the beam ~70× thinner than the real
+~2% spiral — shutters click, no visible burns, while the same UI power works
+on post-run FOV XMLs. Fire path always divides galvo `SpiralSize` by
+`2·|amp|`.
