@@ -101,6 +101,16 @@ def test_trial_log_always_refreshes():
 	assert "app.js?v=" in html
 
 
+def test_xml_file_keeps_filename_visible():
+	"""After Choose File, leave the input value so it is not 'No file chosen'."""
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	assert "Leave input.value set" in js
+	assert 'addEventListener("click"' in js
+	assert "Loaded:" in js
+
+
 def test_com_ports_never_empty():
 	assert list_com_ports()
 

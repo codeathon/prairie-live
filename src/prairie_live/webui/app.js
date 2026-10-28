@@ -234,8 +234,8 @@ async function onXmlFile(ev) {
   const input = ev.target;
   const f = input.files && input.files[0];
   if (!f) return;
-  // Clear so choosing another file (even same name) always fires change.
-  input.value = "";
+  // Leave input.value set so the control shows the filename (not "No file
+  // chosen"). Re-picks clear on click instead (see xml_file click handler).
   $("xml_path").textContent = `loading ${f.name}…`;
   $("plan").textContent = "";
   let b64;
@@ -265,11 +265,11 @@ async function onXmlFile(ev) {
     $("xml_path").textContent = res.error || "parse failed";
     return;
   }
-  // Keep the real path in dataset for Run; label shows which file is active.
+  // Keep the real path in dataset for Run; label confirms which series is active.
   $("xml_path").dataset.path = res.path || "";
   $("xml_path").textContent = res.name
-    ? `${res.name} (${res.n_points} pts)`
-    : res.path;
+    ? `Loaded: ${res.name} (${res.n_points} pts)`
+    : `Loaded: ${res.path}`;
   $("plan").textContent = res.plan || `${res.n_points || "?"} points`;
   showXmlFields(res.fields || {});
   await refreshPoints();
@@ -397,6 +397,10 @@ async function boot() {
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
   $("powers").addEventListener("input", syncTypedPowers);
+  // Clear before the dialog opens so picking the same filename still fires change.
+  $("xml_file").addEventListener("click", () => {
+    $("xml_file").value = "";
+  });
   $("xml_file").addEventListener("change", onXmlFile);
   $("visual_enabled").addEventListener("change", syncVisualOpts);
   $("marks_toggle").addEventListener("click", () => {
