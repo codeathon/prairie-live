@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -232,10 +233,16 @@ class _FakeRelayMp:
 
 	def mark_points(self, *, no_wait=None, timeout=None):
 		self.calls.append(("mark", no_wait, timeout))
+		# Blocking -mp must outlive series arm_delay (0.25s) or stim_fire errors.
+		if not no_wait:
+			time.sleep(0.35)
 		return {"ok": True, "cmd": "mark_points", "no_wait": no_wait}
 
 	def mark_all_points(self, parts, *, wait_ms=0.0, no_wait=None, timeout=None):
 		self.calls.append(("slm", list(parts), wait_ms, no_wait, timeout))
+		# Blocking -slm must outlive the DTR arm_delay or stim_fire errors.
+		if not no_wait:
+			time.sleep(0.35)
 		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts), "no_wait": no_wait}
 
 	def start_live(self):
@@ -406,6 +413,10 @@ def test_slm_via_relay_fires_mark_all_points(tmp_path: Path):
 class _FakeTtl:
 	def __init__(self):
 		self.pulses: list[float] = []
+		self.dtr = False
+
+	def set_dtr(self, on: bool) -> None:
+		self.dtr = bool(on)
 
 	def pulse_dtr(self, width_s: float):
 		self.pulses.append(width_s)
@@ -440,6 +451,9 @@ def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
 			ttl_width_s=0.01,
 			inter_trial_s=0.0,
 			pad_ms=0.0,
+			# Short delays in unit tests; lab defaults are longer for mask gen.
+			slm_arm_delay_s=0.05,
+			slm_group_settle_s=0.05,
 			mock_scores=True,
 			relay=relay,
 			via_relay=True,

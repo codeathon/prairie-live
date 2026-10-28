@@ -83,6 +83,12 @@ def lab_defaults() -> dict[str, Any]:
 		"pixel_size_um": 2.220,
 		"ttl_width": 0.01,
 		"inter_trial": 0.5,
+		# Seconds after -slm starts before the first DTR — covers SLM mask
+		# generation so Trig In 1 is armed. Too short → later groups miss burns.
+		# Do not Abort between groups (Abort kills LiveScan).
+		"slm_arm_delay_s": 1.5,
+		# Idle after each group burn before the next -slm (LiveScan settle only).
+		"slm_group_settle_s": 1.0,
 		"pad_ms": 100.0,
 		"f0_s": 0.5,
 		"f1_s": 1.0,

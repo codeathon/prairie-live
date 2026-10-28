@@ -254,6 +254,8 @@ def run_sync_loop(
 	dry_run: bool,
 	stim_mode: str = "series",
 	slm_pack: bool = False,
+	slm_arm_delay_s: float = 1.5,
+	slm_group_settle_s: float = 1.0,
 	images_dir: str | None = None,
 	visual_cfg: Any | None = None,
 	on_trial: Callable[[dict], None] | None = None,
@@ -454,6 +456,8 @@ def run_sync_loop(
 								ttl_width_s=ttl_width_s,
 								inter_trial_s=inter_trial_s,
 								pad_ms=pad_ms,
+								slm_arm_delay_s=slm_arm_delay_s,
+								slm_group_settle_s=slm_group_settle_s,
 								pl=pl,
 								relay=relay,
 								via_relay=via_relay,
@@ -1215,6 +1219,8 @@ def _run_slm_single_trial(
 	ttl_width_s: float,
 	inter_trial_s: float,
 	pad_ms: float,
+	slm_arm_delay_s: float = 1.5,
+	slm_group_settle_s: float = 1.0,
 	pl: PrairieLink | None,
 	relay: Any | None,
 	via_relay: bool,
@@ -1369,6 +1375,8 @@ def _run_slm_single_trial(
 	elif trigger == "serial" and ttl is not None and not visual_cfg.enabled:
 		from prairie_live.stim_fire import run_while_pulsing_dtr
 
+		arm_s = max(float(slm_arm_delay_s), 0.0)
+		settle_s = max(float(slm_group_settle_s), float(inter_trial_s), 0.0)
 		# Idle-low before arm so the next rising edge is clean.
 		if hasattr(ttl, "set_dtr"):
 			ttl.set_dtr(False)
@@ -1383,36 +1391,44 @@ def _run_slm_single_trial(
 				relay=relay,
 				via_relay=via_relay,
 				no_wait=False,
-				timeout=max(180.0, wait_s + 60.0),
+				timeout=max(180.0, wait_s + arm_s + 60.0),
 			)
 
 		print(
-			f"  group {gi + 1}/{n_groups}: arm -slm "
-			f"(Trig In 1) → 1 DTR → burn pts={point_ids} "
-			f"power={power:g} (~{wait_s:.2f}s)"
+			f"  BEGIN group {gi + 1}/{n_groups}: arm -slm "
+			f"(mask settle {arm_s:g}s → 1 DTR → burn) "
+			f"pts={point_ids} power={power:g}"
 		)
-		# Exactly one planned DTR; no rescue edges (those stole later groups).
+		# One DTR per group. Long arm_delay covers SLM mask generation so PV
+		# is waiting on Trig In 1 before the edge. No Abort (kills LiveScan).
 		run_while_pulsing_dtr(
 			_do_slm,
 			ttl=ttl,
 			n_pulses=1,
 			ttl_width_s=ttl_width_s,
-			arm_delay_s=0.4,
+			arm_delay_s=arm_s,
 			rescue_window_s=0.0,
-			join_timeout_s=max(180.0, wait_s + 60.0),
+			join_timeout_s=max(180.0, wait_s + arm_s + 60.0),
 			row=row,
 			on_pulse=lambda _i: print(
 				f"  group {gi + 1}/{n_groups}: DTR pulsed → pts={point_ids}"
 			),
 		)
-		if hasattr(ttl, "set_dtr"):
-			ttl.set_dtr(False)
-		# -slm stops LiveScan → black power tiles unless we restart first.
-		_ensure_live_after_stim(relay=relay, pl=pl, via_relay=via_relay)
+		# Burn done: restore LiveScan and idle before the next group's -slm.
+		_slm_group_idle(
+			relay=relay,
+			pl=pl,
+			via_relay=via_relay,
+			ttl=ttl,
+			settle_s=settle_s,
+			label=f"END group {gi + 1}/{n_groups}",
+		)
+		print(
+			f"  END group {gi + 1}/{n_groups}: burn done · "
+			f"idled {settle_s:g}s before next"
+		)
 		if want:
 			f1_frames = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
-		# Settle before the next group's -slm arms Trig In 1.
-		time.sleep(max(float(inter_trial_s), 0.35))
 	else:
 		_fire_mark_all_points(
 			parts=slm_parts,
@@ -1830,6 +1846,31 @@ def _ensure_live_after_stim(
 		time.sleep(float(settle_s))
 
 
+def _slm_group_idle(
+	*,
+	relay: Any | None,
+	pl: PrairieLink | None,
+	via_relay: bool,
+	ttl: Any | None,
+	settle_s: float = 0.5,
+	label: str = "slm-idle",
+) -> None:
+	"""Idle between SLM groups: DTR low → LiveScan → longer settle (no Abort).
+
+	Mask generation needs time before the next Trig In 1 arm; Abort is not
+	required and can thrash PV. Too-short settle → only the first group burns.
+	"""
+	if ttl is not None and hasattr(ttl, "set_dtr"):
+		ttl.set_dtr(False)
+	_ensure_live_after_stim(
+		relay=relay,
+		pl=pl,
+		via_relay=via_relay,
+		settle_s=settle_s,
+		label=label,
+	)
+
+
 def _slm_fire_points(
 	gpts: list[dict],
 	*,
@@ -2180,6 +2221,8 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("trigger", "none")
 	opt.setdefault("ttl_width", 0.01)
 	opt.setdefault("inter_trial", 0.5)
+	opt.setdefault("slm_arm_delay_s", 1.5)
+	opt.setdefault("slm_group_settle_s", 1.0)
 	opt.setdefault("pad_ms", 100.0)
 	opt.setdefault("elite_frac", 0.4)
 	opt.setdefault("f0_s", 0.5)
@@ -2219,6 +2262,8 @@ def execute_session(
 	opt.setdefault("trigger", "none")
 	opt.setdefault("ttl_width", 0.01)
 	opt.setdefault("inter_trial", 0.5)
+	opt.setdefault("slm_arm_delay_s", 1.5)
+	opt.setdefault("slm_group_settle_s", 1.0)
 	opt.setdefault("pad_ms", 100.0)
 	opt.setdefault("elite_frac", 0.4)
 	opt.setdefault("f0_s", 0.5)
@@ -2307,7 +2352,10 @@ def execute_session(
 		if str(opt.get("trigger") or "") == "serial":
 			print(
 				"stim_mode=slm + serial → each group: arm -MarkAllPoints "
-				"(FOV 0–1) → 1 DTR → burn → LiveScan"
+				f"(mask {float(opt.get('slm_arm_delay_s') or 1.5):g}s) → "
+				f"1 DTR → burn → LiveScan idle "
+				f"{float(opt.get('slm_group_settle_s') or 1.0):g}s "
+				"(no Abort between groups)"
 			)
 		else:
 			print(
@@ -2447,6 +2495,8 @@ def execute_session(
 			dry_run=bool(opt.get("dry_run")),
 			stim_mode=stim_mode,
 			slm_pack=bool(opt.get("slm_pack", False)),
+			slm_arm_delay_s=float(opt.get("slm_arm_delay_s") or 1.5),
+			slm_group_settle_s=float(opt.get("slm_group_settle_s") or 1.0),
 			images_dir=opt.get("images_dir"),
 			visual_cfg=opt,
 			stim_dff_min=float(opt.get("stim_dff_min") or 0.0),

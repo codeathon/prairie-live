@@ -201,3 +201,24 @@ def test_slm_script_power_keeps_ui_scale():
 	# Powers is total for the hologram (not multiplied by spot count).
 	assert _slm_script_power(160.0, {}) == 160.0
 	assert _slm_script_power(150.0, {}) == 150.0
+
+
+def test_dtr_errors_if_slm_finishes_before_first_pulse():
+	"""Premature DONE → later groups would look like 'laser only once'."""
+	import pytest
+
+	ttl = _FakeTtl()
+
+	def _slm_instant() -> str:
+		return "ok"
+
+	with pytest.raises(RuntimeError, match="finished before the first DTR"):
+		run_while_pulsing_dtr(
+			_slm_instant,
+			ttl=ttl,
+			n_pulses=1,
+			ttl_width_s=0.01,
+			arm_delay_s=0.05,
+			rescue_window_s=0.0,
+		)
+	assert ttl.pulses == []

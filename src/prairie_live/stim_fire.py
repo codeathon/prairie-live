@@ -79,9 +79,23 @@ def run_while_pulsing_dtr(
 	th.start()
 	try:
 		time.sleep(max(float(arm_delay_s), 0.0))
+		# If -slm/-mp returned before the first edge, PV never armed Trig In 1
+		# (mask still building, leftover stim, or LiveScan race) — pulsing now
+		# would look like "laser only fired once" on later groups.
+		if not th.is_alive() and not errors:
+			raise RuntimeError(
+				"Mark Points / -slm finished before the first DTR — "
+				"PV was not waiting on Trig In 1. Increase slm_arm_delay_s "
+				"(mask generation) and idle longer between groups."
+			)
 		for i in range(n_pulses):
 			if errors:
 				break
+			if not th.is_alive():
+				raise RuntimeError(
+					f"Mark Points / -slm finished before DTR pulse {i + 1}/"
+					f"{n_pulses} — remaining groups would miss their TTL"
+				)
 			t_mono = ttl.pulse_dtr(float(ttl_width_s))
 			if row is not None:
 				row["t_ttl"] = time.time()

@@ -28,6 +28,8 @@ _CLI_KEYS = (
 	"serial",
 	"ttl_width",
 	"inter_trial",
+	"slm_arm_delay_s",
+	"slm_group_settle_s",
 	"pad_ms",
 	"elite_frac",
 	"mock_scores",
