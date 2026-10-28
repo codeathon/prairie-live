@@ -74,7 +74,11 @@ class RelayClient:
 		return self._command({"cmd": "abort_clear_stim"})
 
 	def start_live(self) -> dict:
-		return self._command({"cmd": "live"})
+		return self._command({"cmd": "live", "state": "on"})
+
+	def stop_live(self) -> dict:
+		"""-LiveScan off (no Abort). Call before -slm/-mp on PV 6.1."""
+		return self._command({"cmd": "live", "state": "off"})
 
 	def ping(self) -> dict:
 		return self._command({"cmd": "ping"})

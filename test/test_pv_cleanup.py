@@ -58,4 +58,4 @@ def test_relay_abort_clear_stim_command():
 	cmds = _cmds(r)
 	assert cmds[0] == ("-Silent", "-Abort")
 	assert cmds[1] == ("-Silent", "-Abort")
-	assert cmds[2] == ("-LiveScan",)
+	assert cmds[2] == ("-LiveScan", "on")

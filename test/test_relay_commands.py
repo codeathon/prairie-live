@@ -52,7 +52,15 @@ def test_live_tseries_abort_are_script_commands():
 	r = _relay()
 	for cmd in ("live", "tseries", "abort"):
 		assert r.handle_command({"cmd": cmd})["ok"] is True
-	assert _cmds(r) == [("-LiveScan",), ("-TSeries",), ("-Silent", "-Abort")]
+	assert _cmds(r) == [("-LiveScan", "on"), ("-TSeries",), ("-Silent", "-Abort")]
+
+
+def test_live_off_stops_scan_without_abort():
+	"""PV 6.1: -slm will not wait on Trig In 1 while Live is still running."""
+	r = _relay()
+	assert r.handle_command({"cmd": "live", "state": "off"})["ok"] is True
+	assert _cmds(r) == [("-LiveScan", "off")]
+	assert ("-Silent", "-Abort") not in _cmds(r)
 
 
 def test_get_state_uses_gts():

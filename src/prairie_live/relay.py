@@ -176,6 +176,10 @@ class Relay:
 
 			return {"ok": True, "cmd": "abort_clear_stim", **abort_and_clear_stim(pv)}
 		if cmd == "live":
+			# PV 6.1 needs explicit on|off; off must precede -slm/-mp.
+			state = str(payload.get("state") or "on").strip().lower()
+			if state in ("off", "0", "false"):
+				return pv.stop_live()
 			return pv.start_live()
 		if cmd == "get_state":
 			return pv.get_state(

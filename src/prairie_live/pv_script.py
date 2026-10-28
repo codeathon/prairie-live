@@ -205,8 +205,19 @@ class PvScript:
 		return {"ok": True, "cmd": "abort"}
 
 	def start_live(self) -> dict:
-		self.send("-LiveScan")
+		# PV 6.1: explicit on|off (bare -LiveScan still means on).
+		self.send("-LiveScan", "on")
 		return {"ok": True, "cmd": "live"}
+
+	def stop_live(self) -> dict:
+		"""End LiveScan without Abort — required before -slm/-mp on PV 6.1.
+
+		Newer PrairieView does **not** auto-stop Live when Mark Points / -slm
+		starts. Leaving Live on → -slm returns DONE immediately (no Trig In 1
+		wait) → \"finished before the first DTR\".
+		"""
+		self.send("-LiveScan", "off")
+		return {"ok": True, "cmd": "live_off"}
 
 	def disable_mark_points_metadata(self) -> dict:
 		"""Turn off ad-hoc Mark Points disk saves (persists in PV until changed)."""
@@ -225,7 +236,7 @@ class PvScript:
 		except Exception as exc:
 			print(f"ensure_idle_for_stim -Abort: {exc}")
 		try:
-			self.send("-LiveScan")
+			self.start_live()
 		except Exception as exc:
 			print(f"ensure_idle_for_stim -LiveScan: {exc}")
 

@@ -79,14 +79,13 @@ def run_while_pulsing_dtr(
 	th.start()
 	try:
 		time.sleep(max(float(arm_delay_s), 0.0))
-		# If -slm/-mp returned before the first edge, PV never armed Trig In 1
-		# (mask still building, leftover stim, or LiveScan race) — pulsing now
-		# would look like "laser only fired once" on later groups.
+		# If -slm/-mp returned before the first edge, PV never armed Trig In 1.
+		# Common cause on PV 6.1: LiveScan still on (-slm does not stop Live).
 		if not th.is_alive() and not errors:
 			raise RuntimeError(
 				"Mark Points / -slm finished before the first DTR — "
-				"PV was not waiting on Trig In 1. Increase slm_arm_delay_s "
-				"(mask generation) and idle longer between groups."
+				"PV was not waiting on Trig In 1. Ensure -LiveScan off before "
+				"arm (PV 6.1), and increase slm_arm_delay_s if the mask is slow."
 			)
 		for i in range(n_pulses):
 			if errors:

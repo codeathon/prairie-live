@@ -1396,11 +1396,12 @@ def _run_slm_single_trial(
 
 		print(
 			f"  BEGIN group {gi + 1}/{n_groups}: arm -slm "
-			f"(mask settle {arm_s:g}s → 1 DTR → burn) "
-			f"pts={point_ids} power={power:g}"
+			f"(Live off · mask {arm_s:g}s → 1 DTR → burn) "
+			f"pts={point_ids} power={power:g} "
+			f"trig={trig_sel!r} parts={slm_parts}"
 		)
-		# One DTR per group. Long arm_delay covers SLM mask generation so PV
-		# is waiting on Trig In 1 before the edge. No Abort (kills LiveScan).
+		# One DTR per group. Live already off (see _slm_fire_points). Long
+		# arm_delay covers mask generation. No Abort between groups.
 		run_while_pulsing_dtr(
 			_do_slm,
 			ttl=ttl,
@@ -1701,6 +1702,10 @@ def _run_series_trial(
 			relay=relay,
 			via_relay=via_relay,
 		)
+		# PV 6.1: Live stays on through -lmp; stop it before -mp arms Trig In 1.
+		_stop_live_for_stim(
+			relay=relay, pl=pl, via_relay=via_relay, label=f"trial {trial_index}"
+		)
 
 		def _do_mp() -> None:
 			_mark_points_only(
@@ -1711,8 +1716,7 @@ def _run_series_trial(
 				timeout=mp_timeout,
 			)
 
-		# Timing: load done → -mp starts → arm_delay (PV enters FirstRepetition
-		# wait on the group's first point) → one DTR → join until group DONE.
+		# Timing: load done → Live off → -mp → arm_delay → one DTR → DONE.
 		how = "simultaneous APA" if simultaneous else "series"
 		print(
 			f"  trial {trial_index}: -lmp/-mp {gname} ({how}) power={power} "
@@ -1823,27 +1827,59 @@ def _ensure_live_after_stim(
 	settle_s: float = 0.4,
 	label: str = "post-stim",
 ) -> None:
-	"""-MarkAllPoints / -Abort often kill LiveScan → black power-tile frames.
+	"""Restart LiveScan after stim (FOV for relay / next geometry read).
 
-	Restart Live and wait briefly so the relay grabber has non-zero FOV again.
-	Also used *before* SLM fire so ``currentScanAmplitude`` matches the overlay.
+	PV 6.1: use ``-LiveScan on`` (see ``start_live``). Not an Abort.
 	"""
 	if via_relay and relay is not None and hasattr(relay, "start_live"):
 		try:
 			out = relay.start_live()
-			print(f"  {label}: -LiveScan (FOV / scan range)")
+			print(f"  {label}: -LiveScan on")
 			if isinstance(out, dict) and out.get("ok") is False:
-				print(f"  WARNING: -LiveScan failed: {out}")
+				print(f"  WARNING: -LiveScan on failed: {out}")
 		except Exception as exc:
-			print(f"  WARNING: -LiveScan ({label}) failed: {exc}")
+			print(f"  WARNING: -LiveScan on ({label}) failed: {exc}")
 	elif pl is not None:
 		try:
-			pl.send_command("-LiveScan")
-			print(f"  {label}: -LiveScan (FOV / scan range)")
+			pl.send_command("-LiveScan", "on")
+			print(f"  {label}: -LiveScan on")
 		except Exception as exc:
-			print(f"  WARNING: -LiveScan ({label}) failed: {exc}")
+			print(f"  WARNING: -LiveScan on ({label}) failed: {exc}")
 	if settle_s > 0:
 		time.sleep(float(settle_s))
+
+
+def _stop_live_for_stim(
+	*,
+	relay: Any | None,
+	pl: PrairieLink | None,
+	via_relay: bool,
+	label: str = "pre-slm",
+) -> None:
+	"""-LiveScan off before -slm/-mp. PV 6.1 will not stop Live for us.
+
+	Leaving Live on makes -slm return DONE without waiting on Trig In 1
+	(\"finished before the first DTR\"). Prefer off over Abort.
+	"""
+	if via_relay and relay is not None and hasattr(relay, "stop_live"):
+		try:
+			out = relay.stop_live()
+			print(f"  {label}: -LiveScan off (so -slm can arm Trig In 1)")
+			if isinstance(out, dict) and out.get("ok") is False:
+				print(f"  WARNING: -LiveScan off failed: {out}")
+		except Exception as exc:
+			print(f"  WARNING: -LiveScan off ({label}) failed: {exc}")
+		return
+	if via_relay and relay is not None and hasattr(relay, "start_live"):
+		# Older relay without stop_live — best-effort bare off via get_state? skip.
+		print(f"  {label}: WARNING relay has no stop_live — upgrade relay on scope PC")
+		return
+	if pl is not None:
+		try:
+			pl.send_command("-LiveScan", "off")
+			print(f"  {label}: -LiveScan off (so -slm can arm Trig In 1)")
+		except Exception as exc:
+			print(f"  WARNING: -LiveScan off ({label}) failed: {exc}")
 
 
 def _slm_group_idle(
@@ -1855,11 +1891,7 @@ def _slm_group_idle(
 	settle_s: float = 0.5,
 	label: str = "slm-idle",
 ) -> None:
-	"""Idle between SLM groups: DTR low → LiveScan → longer settle (no Abort).
-
-	Mask generation needs time before the next Trig In 1 arm; Abort is not
-	required and can thrash PV. Too-short settle → only the first group burns.
-	"""
+	"""Idle between SLM groups: DTR low → LiveScan on → settle (no Abort)."""
 	if ttl is not None and hasattr(ttl, "set_dtr"):
 		ttl.set_dtr(False)
 	_ensure_live_after_stim(
@@ -1917,6 +1949,10 @@ def _slm_fire_points(
 			print(
 				f"{log_prefix}  P{p['id']} FOV ({float(p['x']):.4f},{float(p['y']):.4f})"
 			)
+	# Geometry read needs Live on; -slm needs Live off (PV 6.1).
+	_stop_live_for_stim(
+		relay=relay, pl=pl, via_relay=via_relay, label=f"{log_prefix.strip()}pre-slm"
+	)
 	return fire_pts, spiral_fov
 
 

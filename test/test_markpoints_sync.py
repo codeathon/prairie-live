@@ -249,6 +249,10 @@ class _FakeRelayMp:
 		self.calls.append(("live",))
 		return {"ok": True, "cmd": "live"}
 
+	def stop_live(self):
+		self.calls.append(("live_off",))
+		return {"ok": True, "cmd": "live_off"}
+
 	def get_frame(self):
 		return None
 
@@ -478,8 +482,9 @@ def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
 	assert all(r.get("slm_pack") is False for r in rows)
 	assert "group 1/2" in rows[0]["summary"]
 	assert "group 2/2" in rows[1]["summary"]
-	# pre-slm LiveScan (FOV remap) + post-stim LiveScan per group
+	# Live on for FOV remap, off before -slm (PV 6.1), on again after burn.
 	assert sum(1 for c in relay.calls if c[0] == "live") >= 2
+	assert sum(1 for c in relay.calls if c[0] == "live_off") >= 2
 	assert not any(c[0] == "load" for c in relay.calls)
 
 RIG_GPL = """<?xml version="1.0" encoding="utf-8"?>
