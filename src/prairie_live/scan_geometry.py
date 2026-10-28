@@ -58,7 +58,10 @@ def fetch_scan_geometry(client) -> dict[str, float]:
 	"""Scan amplitude/center from PV via the relay; ValueError says which read failed."""
 	geom: dict[str, float] = {}
 	for name, key, index in _KEYS:
-		out = client.get_state(key, index)
+		try:
+			out = client.get_state(key, index)
+		except Exception as exc:
+			raise ValueError(f"{key} {index}: {exc}") from exc
 		if not out.get("ok", True):
 			raise ValueError(f"{key} {index}: {out.get('error') or 'relay error'}")
 		val = _num(out.get("value"))

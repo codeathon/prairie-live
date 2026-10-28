@@ -7,15 +7,32 @@ let rankedSig = "";
 let selectionCleared = false;
 
 async function jget(url) {
-  const r = await fetch(url);
+  let r;
+  try {
+    r = await fetch(url);
+  } catch (e) {
+    // Browser lost the GUI process (not the scope relay IP).
+    throw new Error(
+      `GUI unreachable (${url}) — is \`python -m prairie_live gui\` still running? ` +
+        `(relay IP is separate; Failed to fetch here is not a wrong scope address)`
+    );
+  }
   return r.json();
 }
 async function jpost(url, body) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
+  let r;
+  try {
+    r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+  } catch (e) {
+    throw new Error(
+      `GUI unreachable (${url}) — restart the GUI on this PC ` +
+        `(not a relay IP problem)`
+    );
+  }
   return r.json();
 }
 
@@ -314,6 +331,10 @@ async function tick() {
     }
   } catch (e) {
     console.warn("status poll failed", e);
+    const msg = String(e && e.message ? e.message : e);
+    if (msg.includes("GUI unreachable")) {
+      $("save_status").textContent = msg;
+    }
   }
 }
 

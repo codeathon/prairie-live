@@ -303,7 +303,28 @@ class PvScript:
 		if not key:
 			raise ValueError("GetState requires a key")
 		parts = [str(key)] + [str(v) for v in (index, subindex) if v is not None]
-		out = {"ok": True, "cmd": "get_state", "key": key, "value": self.query("-gts", *parts)}
+		# Short timeout: a wedged -gts used to block the whole Run before any
+		# -slm (Trial log stuck on start, no MarkAllPoints on the relay).
+		toks = ("-gts", *parts)
+
+		def run():
+			link = self.link
+			if link is None:
+				raise RuntimeError("not connected to PrairieView script port")
+			old = link.timeout
+			link.timeout = 5.0
+			try:
+				return link.query(*toks)
+			finally:
+				if self.link is link:
+					link.timeout = old
+
+		out = {
+			"ok": True,
+			"cmd": "get_state",
+			"key": key,
+			"value": self._call(toks, run),
+		}
 		if index is not None:
 			out["index"] = index
 		if subindex is not None:

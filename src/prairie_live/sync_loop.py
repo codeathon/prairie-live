@@ -1370,8 +1370,9 @@ def _run_slm_single_trial(
 
 	f0_frames: list = []
 	f1_frames: list = []
-	if want and not dry_run and not visual_cfg.enabled:
-		f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+	# Do NOT collect F0 here for serial SLM: Live is already off (Trig In 1),
+	# so get_frame() cannot produce frames and this only delayed -slm. F0 is
+	# taken after the burn when Live is restored.
 
 	if dry_run:
 		print(
@@ -1395,6 +1396,10 @@ def _run_slm_single_trial(
 		slm_timeout = max(45.0, wait_s + arm_s + rescue_s + 15.0)
 
 		def _do_slm() -> None:
+			print(
+				f"  group {gi + 1}/{n_groups}: sending -MarkAllPoints to relay…",
+				flush=True,
+			)
 			_fire_mark_all_points(
 				parts=slm_parts,
 				wait_ms=0.0,
@@ -1428,9 +1433,10 @@ def _run_slm_single_trial(
 		print(
 			f"  BEGIN group {gi + 1}/{n_groups}: arm -slm "
 			f"(Live off · first DTR @ {arm_s:g}s · rescue {rescue_s:g}s) "
-			f"pts={point_ids} power={power:g} trig={trig_sel!r}"
+			f"pts={point_ids} power={power:g} trig={trig_sel!r}",
+			flush=True,
 		)
-		print(f"  -slm argv: {' '.join(slm_parts)}")
+		print(f"  -slm argv: {' '.join(slm_parts)}", flush=True)
 		# Always restore Live — hang/timeout used to leave Live off forever.
 		try:
 			run_while_pulsing_dtr(
@@ -1463,8 +1469,14 @@ def _run_slm_single_trial(
 				f"idled {settle_s:g}s before next"
 			)
 		if want:
+			# Baseline after Live is back; empty if grab is still dark.
+			if f0_s > 0:
+				f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
 			f1_frames = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
 	else:
+		if want and not dry_run and not visual_cfg.enabled:
+			f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+		print("  sending -MarkAllPoints to relay…", flush=True)
 		_fire_mark_all_points(
 			parts=slm_parts,
 			wait_ms=float(slm_params.get("initial_delay_ms") or 0),
@@ -1968,12 +1980,25 @@ def _slm_fire_points(
 		f"{log_prefix}reading scan amplitude/center (-gts) for FOV remap…",
 		flush=True,
 	)
-	fire_pts, spiral_fov, note = points_for_slm_fire(
-		gpts,
-		relay,
-		spiral_size_um=slm_params.get("spiral_size_um"),
-		fov_width_um=slm_params.get("fov_width_um"),
-	)
+	try:
+		fire_pts, spiral_fov, note = points_for_slm_fire(
+			gpts,
+			relay,
+			spiral_size_um=slm_params.get("spiral_size_um"),
+			fov_width_um=slm_params.get("fov_width_um"),
+		)
+	except Exception as exc:
+		# Wedged -gts must not block -slm forever; FOV 0–1 lists can fire as-is.
+		from prairie_live.scan_geometry import is_fraction_space
+
+		if not is_fraction_space(gpts):
+			raise
+		print(
+			f"{log_prefix}WARNING: scan geometry failed ({exc}); "
+			"using FOV 0–1 points as-is",
+			flush=True,
+		)
+		fire_pts, spiral_fov, note = list(gpts), None, "SLM fire: FOV as-is (no -gts)"
 	print(f"{log_prefix}{note}", flush=True)
 	for p in fire_pts[:5]:
 		gx, gy = p.get("x_galvo"), p.get("y_galvo")
