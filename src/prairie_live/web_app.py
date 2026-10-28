@@ -384,6 +384,10 @@ class Handler(BaseHTTPRequestHandler):
 			def work() -> None:
 				from prairie_live.sync_loop import execute_session
 
+				# LiveFeed must not -LiveScan on during -slm (PV 6.1 race →
+				# DONE before DTR). Sync loop owns Live off/on per group.
+				STATE.live.hold_for_stim(True)
+				STATE.append("live FOV paused for stim (no LiveScan on until Run ends)")
 				try:
 					trials = execute_session(
 						opt,
@@ -394,6 +398,8 @@ class Handler(BaseHTTPRequestHandler):
 					STATE.q.put(("done", {"trials": trials}))
 				except Exception as exc:
 					STATE.q.put(("error", str(exc)))
+				finally:
+					STATE.live.hold_for_stim(False)
 
 			threading.Thread(target=work, daemon=True).start()
 			_json(self, {"ok": True, "n_trials": n_t})

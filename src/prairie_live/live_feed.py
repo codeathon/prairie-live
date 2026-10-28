@@ -24,6 +24,8 @@ class LiveFeed:
 		self.geometry_error = ""
 		self.frame_wh: tuple[int, int] | None = None
 		self._stop = threading.Event()
+		# Set while mp-sync fires: never -LiveScan on (would undo stim Live-off).
+		self._hold_stim = threading.Event()
 		self._lock = threading.Lock()
 		self._thread: threading.Thread | None = None
 
@@ -36,6 +38,15 @@ class LiveFeed:
 
 	def stop(self) -> None:
 		self._stop.set()
+
+	def hold_for_stim(self, held: bool) -> None:
+		"""During a Run, do not call -LiveScan on (races serial -slm Trig In 1)."""
+		if held:
+			self._hold_stim.set()
+			with self._lock:
+				self.detail = "stim hold — not starting LiveScan"
+		else:
+			self._hold_stim.clear()
 
 	def set_addr(self, addr: str) -> None:
 		with self._lock:
@@ -52,6 +63,7 @@ class LiveFeed:
 				"detail": self.detail,
 				"has_frame": self.png is not None,
 				"live_started": self.live_started,
+				"stim_hold": self._hold_stim.is_set(),
 				"addr": self.addr,
 			}
 
@@ -97,6 +109,13 @@ class LiveFeed:
 
 	def _loop(self) -> None:
 		while not self._stop.is_set():
+			# During a Run, idle — do not reconnect into -LiveScan on.
+			if self._hold_stim.is_set():
+				with self._lock:
+					self.ok = False
+					self.detail = "stim hold — live FOV paused"
+				self._stop.wait(0.5)
+				continue
 			with self._lock:
 				addr = self.addr
 			st = probe_relay(addr, timeout=1.2)
@@ -122,19 +141,31 @@ class LiveFeed:
 		client.connect()
 		started = False
 		try:
-			try:
-				client.start_live()
-				started = True
-			except Exception as exc:
+			# mp-sync turns Live off for -slm; starting it here races Trig In 1.
+			if self._hold_stim.is_set():
 				with self._lock:
-					self.detail = f"connected; LiveScan failed ({exc})"
+					self.detail = "stim hold — LiveScan left off"
 			else:
-				with self._lock:
-					self.live_started = True
-					self.detail = "LiveScan on"
+				try:
+					client.start_live()
+					started = True
+				except Exception as exc:
+					with self._lock:
+						self.detail = f"connected; LiveScan failed ({exc})"
+				else:
+					with self._lock:
+						self.live_started = True
+						self.detail = "LiveScan on"
 			# Zoom/pan change the scan range, so the Mark Points overlay re-reads it.
 			next_geom: float | None = 0.0
 			while not self._stop.is_set():
+				# Hold flipped mid-stream (Run started): drop this session so we
+				# do not keep a client that might reconnect into -LiveScan on.
+				if self._hold_stim.is_set() and started:
+					with self._lock:
+						self.detail = "stim hold — releasing live client"
+						self.live_started = False
+					break
 				if next_geom is not None and time.monotonic() >= next_geom:
 					wait = self._poll_geometry(client)
 					next_geom = None if wait is None else time.monotonic() + wait
@@ -155,7 +186,7 @@ class LiveFeed:
 					self.png = png
 					self.frame_wh = (int(oriented.shape[1]), int(oriented.shape[0]))
 					self.ok = True
-					if started:
+					if started and not self._hold_stim.is_set():
 						self.detail = "live FOV"
 				self._stop.wait(0.08)
 		finally:
