@@ -205,14 +205,14 @@ PrairieView writes two spaces for the same targets:
 Conversion (matches PV; implemented in `scan_geometry.py`):
 
 ```
-FOV  = 0.5 + (galvo − currentScanCenter) / (2 · currentScanAmplitude)
-galvo = currentScanCenter + (FOV − 0.5) · (2 · currentScanAmplitude)
-SpiralWidth_FOV = SpiralSize_galvo / (2 · |amp|)
+FOV  = 0.5 + (galvo − currentScanCenter) / currentScanAmplitude
+galvo = currentScanCenter + (FOV − 0.5) · currentScanAmplitude
+SpiralWidth_FOV = SpiralSize_galvo / |amp|
 ```
 
-`currentScanAmplitude` from `-gts` is the scan **half-width** (frame =
-center ± amp). Rig zoom 1 ≈ ±4.20 V — treating amp as full width put points
-off the image and mismatched PV’s Mark Points GUI. Classic `stim_mode=slm`
+`currentScanAmplitude` from `-gts` is the scan **full width** (frame =
+center ± amp/2). Using `2·amp` compressed the constellation toward center
+(cyan rings too close vs PV’s Mark Points GUI). Classic `stim_mode=slm`
 remaps galvo→FOV at fire time with LiveScan on.
 
 **SpiralSize / power:** never-run PVSaved `SpiralSize` is galvo volts (do not
