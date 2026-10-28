@@ -334,6 +334,10 @@ def run_sync_loop(
 			meta["trigger_frequency"] = DEFAULT_TRIGGER_FREQUENCY
 	if mode == "slm":
 		slm_params["trigger_selection"] = trig_sel
+		# LiveFeed amp/center captured before stim hold — avoids mid-Run -gts.
+		cached = meta.get("_scan_geometry")
+		if isinstance(cached, dict) and cached.get("amp_x") and cached.get("amp_y"):
+			slm_params["scan_geometry"] = cached
 
 	stopped = False
 
@@ -1984,31 +1988,39 @@ def _slm_fire_points(
 			+ (f"· spiral_fov={spiral_fov:.4g}" if spiral_fov is not None else "")
 		)
 	else:
-		# Galvo: Live MUST be on before -gts (prior Abort often left it off —
-		# that is why convert stalled and no -MarkAllPoints was sent).
-		print(
-			f"{log_prefix}galvo → FOV: ensure Live on, then -gts convert…",
-			flush=True,
-		)
-		_ensure_live_after_stim(
-			relay=relay,
-			pl=pl,
-			via_relay=via_relay,
-			settle_s=0.35,
-			label=f"{log_prefix.strip()}pre-gts",
-		)
-		try:
-			fire_pts, spiral_fov, note = points_for_slm_fire(
-				gpts,
-				relay,
-				spiral_size_um=slm_params.get("spiral_size_um"),
-				fov_width_um=slm_params.get("fov_width_um"),
+		# Galvo: convert in Python. Prefer LiveFeed-cached amp/center so we
+		# never call -gts mid-Run (that hang blocked every -MarkAllPoints).
+		cached = slm_params.get("scan_geometry")
+		if (
+			isinstance(cached, dict)
+			and cached.get("amp_x")
+			and cached.get("amp_y")
+		):
+			print(
+				f"{log_prefix}galvo → FOV: using cached scan geom "
+				f"(amp {float(cached['amp_x']):g}/{float(cached['amp_y']):g}) "
+				"— no -gts",
+				flush=True,
 			)
-		except Exception as exc:
+			try:
+				fire_pts, spiral_fov, note = points_for_slm_fire(
+					gpts,
+					relay,
+					spiral_size_um=slm_params.get("spiral_size_um"),
+					fov_width_um=slm_params.get("fov_width_um"),
+					geom=cached,
+				)
+			except Exception as exc:
+				raise RuntimeError(
+					f"galvo→FOV with cached geom failed ({exc})"
+				) from exc
+		else:
+			# Mid-Run -gts hangs PV (Live on or off) — MarkAllPoints never
+			# starts. Refuse rather than stall; GUI must stash LiveFeed geom.
 			raise RuntimeError(
-				f"galvo→FOV conversion failed ({exc}). "
-				"Live on + -gts amp/center required before Live off."
-			) from exc
+				"galvo→FOV needs cached scan amp/center (no mid-Run -gts). "
+				"In the web GUI wait until cyan overlay appears, then Run again."
+			)
 
 	print(f"{log_prefix}{note}", flush=True)
 	for p in fire_pts[:5]:
@@ -2439,6 +2451,15 @@ def execute_session(
 		opt["duration_ms"] = float(gpl_durs[0])
 		print(f"NOTE: using Duration={opt['duration_ms']} ms from .gpl")
 	meta = apply_stim_to_meta(meta, opt)
+	# Web GUI stashes LiveFeed amp/center so _slm_fire_points never -gts mid-Run.
+	sg = opt.get("scan_geometry")
+	if isinstance(sg, dict) and sg.get("amp_x") and sg.get("amp_y"):
+		meta["_scan_geometry"] = {
+			"amp_x": float(sg["amp_x"]),
+			"amp_y": float(sg["amp_y"]),
+			"ctr_x": float(sg.get("ctr_x") or 0.0),
+			"ctr_y": float(sg.get("ctr_y") or 0.0),
+		}
 
 	print(
 		f"points pool: {len(points)} from {src_kind}  powers={powers}  "

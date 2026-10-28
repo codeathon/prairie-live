@@ -252,18 +252,32 @@ def points_for_slm_fire(
 	*,
 	spiral_size_um: float | None = None,
 	fov_width_um: float | None = None,
+	geom: dict[str, float] | None = None,
 ) -> tuple[list[dict], float | None, str]:
 	"""Remap Mark Points → live FOV 0–1 for ``-MarkAllPoints`` at fire time.
 
 	Galvo XML: convert from ``x_galvo``/``y_galvo`` (or native x/y) with the
 	*current* scan window. Already-FOV files keep x/y. Raises if any point
 	lands outside 0–1 (would burn off-image).
+
+	Pass ``geom`` (from LiveFeed cache) to skip ``-gts`` — live ``-gts`` during
+	a Run was hanging after Live off and blocking every ``-MarkAllPoints``.
 	"""
 	if not points:
 		return [], None, "no points"
-	if relay is None:
-		raise ValueError("SLM fire needs the relay to read live scan amplitude/center")
-	geom = fetch_scan_geometry(relay)
+	if geom is None:
+		if relay is None:
+			raise ValueError(
+				"SLM fire needs scan geometry (LiveFeed cache or relay -gts)"
+			)
+		geom = fetch_scan_geometry(relay)
+	else:
+		geom = {
+			"amp_x": float(geom["amp_x"]),
+			"amp_y": float(geom["amp_y"]),
+			"ctr_x": float(geom.get("ctr_x") or 0.0),
+			"ctr_y": float(geom.get("ctr_y") or 0.0),
+		}
 	out: list[dict] = []
 	n_from_galvo = 0
 	for p in points:

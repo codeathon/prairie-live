@@ -381,6 +381,32 @@ class Handler(BaseHTTPRequestHandler):
 				f"lead_ms={opt.get('visual_lead_ms')}  trials={n_t}"
 			)
 
+			# Snapshot amp/center NOW — before stim hold drops LiveFeed's -gts
+			# poll. Mid-Run -gts after Live off hangs PV and MarkAllPoints never
+			# starts; sync_loop converts galvo→FOV from this cache instead.
+			geom, _ = STATE.live.scan_geometry()
+			if (
+				isinstance(geom, dict)
+				and geom.get("amp_x") not in (None, "", 0, 0.0)
+				and geom.get("amp_y") not in (None, "", 0, 0.0)
+			):
+				opt["scan_geometry"] = {
+					"amp_x": float(geom["amp_x"]),
+					"amp_y": float(geom["amp_y"]),
+					"ctr_x": float(geom.get("ctr_x") or 0.0),
+					"ctr_y": float(geom.get("ctr_y") or 0.0),
+				}
+				STATE.append(
+					f"scan geom cached for SLM "
+					f"(amp {opt['scan_geometry']['amp_x']:g}/"
+					f"{opt['scan_geometry']['amp_y']:g})"
+				)
+			elif str(opt.get("stim_mode") or "").lower() == "slm":
+				STATE.append(
+					"WARNING: no LiveFeed scan amp/center — wait for cyan "
+					"overlay before Run, or galvo→FOV may hang on -gts"
+				)
+
 			def work() -> None:
 				import builtins
 				import sys

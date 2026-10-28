@@ -261,6 +261,23 @@ def test_points_for_slm_fire_remaps_galvo_with_live_amp():
 	assert spiral == pytest.approx(54.5 / 1136.7, abs=1e-5)
 
 
+def test_points_for_slm_fire_uses_cached_geom_without_relay_gts():
+	"""LiveFeed-cached amp/center must convert without calling -gts on relay."""
+	from prairie_live.scan_geometry import galvo_to_fraction, points_for_slm_fire
+
+	class NoGts:
+		def get_state(self, *_a, **_k):
+			raise AssertionError("cached geom must not call relay -gts")
+
+	geom = fetch_scan_geometry(FakeRelay(GEOM))
+	pts = [{"id": "1", "x": -1.0, "y": 1.0, "x_galvo": -1.0, "y_galvo": 1.0}]
+	fx, fy = galvo_to_fraction(-1.0, 1.0, geom)
+	fire, _, note = points_for_slm_fire(pts, NoGts(), geom=geom)
+	assert float(fire[0]["x"]) == pytest.approx(fx, abs=1e-5)
+	assert float(fire[0]["y"]) == pytest.approx(fy, abs=1e-5)
+	assert "SLM fire" in note
+
+
 def test_points_for_slm_fire_rejects_oob():
 	from prairie_live.scan_geometry import points_for_slm_fire
 
