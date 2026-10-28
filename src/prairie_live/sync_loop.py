@@ -254,8 +254,8 @@ def run_sync_loop(
 	dry_run: bool,
 	stim_mode: str = "series",
 	slm_pack: bool = False,
-	slm_arm_delay_s: float = 1.5,
-	slm_group_settle_s: float = 1.0,
+	slm_arm_delay_s: float = 3.0,
+	slm_group_settle_s: float = 2.5,
 	images_dir: str | None = None,
 	visual_cfg: Any | None = None,
 	on_trial: Callable[[dict], None] | None = None,
@@ -1219,8 +1219,8 @@ def _run_slm_single_trial(
 	ttl_width_s: float,
 	inter_trial_s: float,
 	pad_ms: float,
-	slm_arm_delay_s: float = 1.5,
-	slm_group_settle_s: float = 1.0,
+	slm_arm_delay_s: float = 3.0,
+	slm_group_settle_s: float = 2.5,
 	pl: PrairieLink | None,
 	relay: Any | None,
 	via_relay: bool,
@@ -2221,8 +2221,8 @@ def main(argv: list[str] | None = None) -> None:
 	opt.setdefault("trigger", "none")
 	opt.setdefault("ttl_width", 0.01)
 	opt.setdefault("inter_trial", 0.5)
-	opt.setdefault("slm_arm_delay_s", 1.5)
-	opt.setdefault("slm_group_settle_s", 1.0)
+	opt.setdefault("slm_arm_delay_s", 3.0)
+	opt.setdefault("slm_group_settle_s", 2.5)
 	opt.setdefault("pad_ms", 100.0)
 	opt.setdefault("elite_frac", 0.4)
 	opt.setdefault("f0_s", 0.5)
@@ -2262,8 +2262,8 @@ def execute_session(
 	opt.setdefault("trigger", "none")
 	opt.setdefault("ttl_width", 0.01)
 	opt.setdefault("inter_trial", 0.5)
-	opt.setdefault("slm_arm_delay_s", 1.5)
-	opt.setdefault("slm_group_settle_s", 1.0)
+	opt.setdefault("slm_arm_delay_s", 3.0)
+	opt.setdefault("slm_group_settle_s", 2.5)
 	opt.setdefault("pad_ms", 100.0)
 	opt.setdefault("elite_frac", 0.4)
 	opt.setdefault("f0_s", 0.5)
@@ -2352,9 +2352,9 @@ def execute_session(
 		if str(opt.get("trigger") or "") == "serial":
 			print(
 				"stim_mode=slm + serial → each group: arm -MarkAllPoints "
-				f"(mask {float(opt.get('slm_arm_delay_s') or 1.5):g}s) → "
+				f"(mask {float(opt.get('slm_arm_delay_s') or 3.0):g}s) → "
 				f"1 DTR → burn → LiveScan idle "
-				f"{float(opt.get('slm_group_settle_s') or 1.0):g}s "
+				f"{float(opt.get('slm_group_settle_s') or 2.5):g}s "
 				"(no Abort between groups)"
 			)
 		else:
@@ -2495,8 +2495,8 @@ def execute_session(
 			dry_run=bool(opt.get("dry_run")),
 			stim_mode=stim_mode,
 			slm_pack=bool(opt.get("slm_pack", False)),
-			slm_arm_delay_s=float(opt.get("slm_arm_delay_s") or 1.5),
-			slm_group_settle_s=float(opt.get("slm_group_settle_s") or 1.0),
+			slm_arm_delay_s=float(opt.get("slm_arm_delay_s") or 3.0),
+			slm_group_settle_s=float(opt.get("slm_group_settle_s") or 2.5),
 			images_dir=opt.get("images_dir"),
 			visual_cfg=opt,
 			stim_dff_min=float(opt.get("stim_dff_min") or 0.0),
