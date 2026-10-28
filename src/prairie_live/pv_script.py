@@ -60,6 +60,9 @@ class PvScript:
 		self.reconnects = 0
 		self._opened_at = 0.0
 		self._started = False
+		# True while -slm / -mp / -lmp is blocked in send — Abort may drop the
+		# socket. Never set for -gi/-gts or a brief Live toggle.
+		self._blocking_stim = False
 
 	def connect(self) -> None:
 		self._open()
@@ -169,12 +172,18 @@ class PvScript:
 		from another thread then queues behind that wait (tens of seconds),
 		and Mark Points stays frozen on Trig In 1. Closing the sock wakes the
 		blocked recv; ``_call`` drops/reopens under the lock, then Abort can
-		run. Returns True only when a hung holder was interrupted.
+		run.
+
+		Only interrupts an in-flight stim (``_blocking_stim``). Dropping the
+		socket while ``-gi`` holds the lock was killing Live/arm and yielding
+		one-trial runs with no burns.
 		"""
+		if not self._blocking_stim:
+			return False
 		link = self.link
 		if link is None:
 			return False
-		# Lock free ⇒ nothing is blocked in send/grab; Abort can proceed.
+		# Lock free ⇒ stim flag is stale; Abort can proceed without a drop.
 		if self.lock.acquire(blocking=False):
 			self.lock.release()
 			return False
@@ -323,37 +332,41 @@ class PvScript:
 			self.disable_mark_points_metadata()
 		except Exception:
 			pass
+		self._blocking_stim = True
 		try:
-			raw = self.send("-Silent", "-LoadMarkPoints", disk)
-		except TimeoutError as exc:
-			# Dialog / wedged PV — do not queue another -lmp on the same session.
-			self.recover_after_stuck_stim()
-			raise RuntimeError(
-				"LoadMarkPoints timed out (often E:\\Markpoints "
-				"'File already present'). Session dropped + Abort; "
-				"stop the Run before retrying."
-			) from exc
-		if _pv_file_dialog(raw) or _pv_task_busy(raw):
-			# One Abort + retry for a transient busy; never leave a second
-			# -lmp queued if the dialog is still up (that is the leftover hang).
-			self.ensure_idle_for_stim()
 			try:
-				self.disable_mark_points_metadata()
-			except Exception:
-				pass
-			disk = unique_mp_path(None)  # new path — avoid replace dialog
-			parent = os.path.dirname(disk)
-			if parent:
-				os.makedirs(parent, exist_ok=True)
-			with open(disk, "w", encoding="utf-8") as f:
-				f.write(xml)
-			raw = self.send("-Silent", "-LoadMarkPoints", disk)
-			if _pv_file_dialog(raw) or _pv_task_busy(raw):
+				raw = self.send("-Silent", "-LoadMarkPoints", disk)
+			except TimeoutError as exc:
+				# Dialog / wedged PV — do not queue another -lmp on the same session.
 				self.recover_after_stuck_stim()
 				raise RuntimeError(
-					f"LoadMarkPoints still blocked after Abort: {raw[:240]!r}. "
-					"Dismiss any Markpoints dialog, then Stop and re-Run."
-				)
+					"LoadMarkPoints timed out (often E:\\Markpoints "
+					"'File already present'). Session dropped + Abort; "
+					"stop the Run before retrying."
+				) from exc
+			if _pv_file_dialog(raw) or _pv_task_busy(raw):
+				# One Abort + retry for a transient busy; never leave a second
+				# -lmp queued if the dialog is still up (that is the leftover hang).
+				self.ensure_idle_for_stim()
+				try:
+					self.disable_mark_points_metadata()
+				except Exception:
+					pass
+				disk = unique_mp_path(None)  # new path — avoid replace dialog
+				parent = os.path.dirname(disk)
+				if parent:
+					os.makedirs(parent, exist_ok=True)
+				with open(disk, "w", encoding="utf-8") as f:
+					f.write(xml)
+				raw = self.send("-Silent", "-LoadMarkPoints", disk)
+				if _pv_file_dialog(raw) or _pv_task_busy(raw):
+					self.recover_after_stuck_stim()
+					raise RuntimeError(
+						f"LoadMarkPoints still blocked after Abort: {raw[:240]!r}. "
+						"Dismiss any Markpoints dialog, then Stop and re-Run."
+					)
+		finally:
+			self._blocking_stim = False
 		return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
 
 	def mark_points(self, *, no_wait: bool = False, timeout: float = 180.0) -> dict:
@@ -368,24 +381,28 @@ class PvScript:
 		raise — do **not** fire a second -MarkPoints (that left leftover arms
 		running after a PV restart).
 		"""
+		self._blocking_stim = True
 		try:
-			if no_wait:
-				raw = self.send("-Silent", "-NoWait", "-MarkPoints", timeout=timeout)
-			else:
-				raw = self.send("-Silent", "-MarkPoints", timeout=timeout)
-		except TimeoutError as exc:
-			self.recover_after_stuck_stim()
-			raise RuntimeError(
-				"MarkPoints timed out (Trig In 1 miss or E:\\Markpoints dialog). "
-				"Script session dropped + Abort; stop the Run — do not keep "
-				"sending groups after restarting PV."
-			) from exc
-		if _pv_task_busy(raw) or _pv_file_dialog(raw):
-			self.recover_after_stuck_stim()
-			raise RuntimeError(
-				f"MarkPoints blocked ({raw[:240]!r}). Cleared with Abort; "
-				"stop the Run and dismiss any Markpoints folder dialog."
-			)
+			try:
+				if no_wait:
+					raw = self.send("-Silent", "-NoWait", "-MarkPoints", timeout=timeout)
+				else:
+					raw = self.send("-Silent", "-MarkPoints", timeout=timeout)
+			except TimeoutError as exc:
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					"MarkPoints timed out (Trig In 1 miss or E:\\Markpoints dialog). "
+					"Script session dropped + Abort; stop the Run — do not keep "
+					"sending groups after restarting PV."
+				) from exc
+			if _pv_task_busy(raw) or _pv_file_dialog(raw):
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					f"MarkPoints blocked ({raw[:240]!r}). Cleared with Abort; "
+					"stop the Run and dismiss any Markpoints folder dialog."
+				)
+		finally:
+			self._blocking_stim = False
 		return {"ok": True, "cmd": "mark_points", "pv": raw, "no_wait": bool(no_wait)}
 
 	def mark_all_points(
@@ -414,18 +431,22 @@ class PvScript:
 			send_toks = ["-NoWait", *send_toks]
 		if send_toks[0] not in ("-Silent", "-s"):
 			send_toks = ["-Silent", *send_toks]
+		self._blocking_stim = True
 		try:
-			raw = self.send(*send_toks, timeout=timeout)
-		except TimeoutError as exc:
-			self.recover_after_stuck_stim()
-			raise RuntimeError(
-				"MarkAllPoints timed out; session dropped + Abort. Stop the Run."
-			) from exc
-		if _pv_task_busy(raw) or _pv_file_dialog(raw):
-			self.recover_after_stuck_stim()
-			raise RuntimeError(
-				f"MarkAllPoints blocked ({raw[:240]!r}); Abort sent — stop the Run."
-			)
+			try:
+				raw = self.send(*send_toks, timeout=timeout)
+			except TimeoutError as exc:
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					"MarkAllPoints timed out; session dropped + Abort. Stop the Run."
+				) from exc
+			if _pv_task_busy(raw) or _pv_file_dialog(raw):
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					f"MarkAllPoints blocked ({raw[:240]!r}); Abort sent — stop the Run."
+				)
+		finally:
+			self._blocking_stim = False
 		return {
 			"ok": True,
 			"cmd": "mark_all_points",

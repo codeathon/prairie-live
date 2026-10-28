@@ -286,18 +286,42 @@ function renderCandidates(ranked) {
 
 let lastLogText = "";
 
-function logHasSelection() {
+function logSelectedText() {
   const el = $("log");
   const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return false;
-  return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return "";
+  if (!(el.contains(sel.anchorNode) || el.contains(sel.focusNode))) return "";
+  return sel.toString();
+}
+
+function clearLogSelection() {
+  const el = $("log");
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  if (el.contains(sel.anchorNode) || el.contains(sel.focusNode)) {
+    sel.removeAllRanges();
+  }
 }
 
 function renderLog(lines) {
   const el = $("log");
+  const head = $("log_copy");
   const text = (lines || []).join("\n");
-  // Do not rewrite while the user is selecting — that kills copy/paste.
-  if (logHasSelection()) return;
+  // Pause only while there is real selected text in the log. A leftover
+  // Copy/select-all range used to freeze the display on blank/stale content
+  // for the whole Run.
+  const picking = logSelectedText();
+  if (picking) {
+    if (head && head.dataset.paused !== "1") {
+      head.dataset.paused = "1";
+      head.title = "Log refresh paused while text is selected — click away to resume";
+    }
+    return;
+  }
+  if (head && head.dataset.paused === "1") {
+    head.dataset.paused = "0";
+    head.title = "Copy full log to clipboard";
+  }
   if (text === lastLogText) return;
   const pinBottom =
     el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -370,21 +394,30 @@ async function boot() {
     const text = $("log").textContent || "";
     try {
       await navigator.clipboard.writeText(text);
+      clearLogSelection();
       $("log_copy").textContent = "Copied";
       setTimeout(() => {
         $("log_copy").textContent = "Copy";
       }, 1200);
     } catch (_) {
-      // Fallback when clipboard API is blocked.
+      // Fallback when clipboard API is blocked — leave selection for Ctrl+C,
+      // but do not keep it forever (resume refresh after a few seconds).
       const r = document.createRange();
       r.selectNodeContents($("log"));
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(r);
       $("log_copy").textContent = "Select all — Ctrl+C";
+      setTimeout(() => {
+        clearLogSelection();
+        $("log_copy").textContent = "Copy";
+      }, 4000);
     }
   });
   $("run").addEventListener("click", async () => {
+    // Drop any leftover log selection so the Trial log can update this Run.
+    clearLogSelection();
+    lastLogText = "";
     const res = await jpost("/api/run", {
       series: $("xml_path").textContent,
       powers: $("powers").value,

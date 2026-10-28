@@ -16,7 +16,12 @@ EMPTY_MARK_POINTS_XML = """<?xml version="1.0" encoding="utf-8"?>
 """
 
 
-def abort_and_clear_stim(client: Any, *, settle_s: float = 0.6) -> dict[str, Any]:
+def abort_and_clear_stim(
+	client: Any,
+	*,
+	settle_s: float = 0.6,
+	restore_live: bool = True,
+) -> dict[str, Any]:
 	"""
 	``client``: RelayClient or anything with abort / start_live.
 
@@ -25,14 +30,15 @@ def abort_and_clear_stim(client: Any, *, settle_s: float = 0.6) -> dict[str, Any
 	2. -Silent -Abort — cancel armed -slm / -MarkPoints (and suppress boxes)
 	3. settle — let PV drop SLM spiral waveforms before series -lmp
 	   (too short a settle after -slm → Critical Error Int32 in spiral DAC)
-	4. -LiveScan — Abort also kills Live; restore FOV for the relay grabber
+	4. -LiveScan on — only when ``restore_live`` (Abort kills Live). Skip for
+	   SLM session start: Live on→off right before -slm misses Trig In 1.
 
 	Call at **session start** and on **Stop**, never between every trial.
 	"""
 	notes: list[str] = []
 	ok = True
 
-	# Wake a blocked -slm/-mp before Abort; no-op when the lock is free.
+	# Wake a blocked -slm/-mp before Abort; no-op when no stim is armed.
 	# PvScript returns bool; RelayClient returns {"interrupted": bool}.
 	if hasattr(client, "force_interrupt"):
 		try:
@@ -73,28 +79,47 @@ def abort_and_clear_stim(client: Any, *, settle_s: float = 0.6) -> dict[str, Any
 		notes.append(f"abort2_err:{exc}")
 	time.sleep(0.2)
 
-	try:
-		out = client.start_live()
-		notes.append("live")
-		if isinstance(out, dict) and out.get("ok") is False:
-			notes.append(f"live_fail:{out.get('error', out)}")
-	except Exception as exc:
-		notes.append(f"live_err:{exc}")
+	if restore_live:
+		try:
+			out = client.start_live()
+			notes.append("live")
+			if isinstance(out, dict) and out.get("ok") is False:
+				notes.append(f"live_fail:{out.get('error', out)}")
+		except Exception as exc:
+			notes.append(f"live_err:{exc}")
+	else:
+		# SLM needs Live off before -slm; leave it off after Abort.
+		if hasattr(client, "stop_live"):
+			try:
+				client.stop_live()
+				notes.append("live_off")
+			except Exception as exc:
+				notes.append(f"live_off_err:{exc}")
+		else:
+			notes.append("live_skipped")
 
 	return {"ok": ok, "notes": notes}
 
 
-def clear_prior_stim_on_client(relay: Any | None, pl: Any | None) -> dict[str, Any]:
+def clear_prior_stim_on_client(
+	relay: Any | None,
+	pl: Any | None,
+	*,
+	restore_live: bool = True,
+) -> dict[str, Any]:
 	"""Best-effort session-start clear; no-op if client has no abort()."""
 	if relay is not None and hasattr(relay, "abort"):
-		return abort_and_clear_stim(relay)
+		return abort_and_clear_stim(relay, restore_live=restore_live)
 	if pl is not None and hasattr(pl, "send_command"):
 		# Direct PrairieLink (no RelayClient wrapper).
 		try:
 			pl.send_command("-Silent", "-Abort")
 			time.sleep(0.35)
-			pl.send_command("-LiveScan")
-			return {"ok": True, "notes": ["abort", "settle_0.35s", "live"]}
+			if restore_live:
+				pl.send_command("-LiveScan", "on")
+				return {"ok": True, "notes": ["abort", "settle_0.35s", "live"]}
+			pl.send_command("-LiveScan", "off")
+			return {"ok": True, "notes": ["abort", "settle_0.35s", "live_off"]}
 		except Exception as exc:
 			return {"ok": False, "notes": [f"pl_err:{exc}"]}
 	return {"ok": True, "notes": ["skipped"]}

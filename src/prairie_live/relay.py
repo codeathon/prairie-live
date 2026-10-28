@@ -179,13 +179,25 @@ class Relay:
 			return pv.abort()
 		if cmd == "force_interrupt":
 			# Dedicated path for a second ctrl client while -slm is mid-recv.
-			hit = pv.force_interrupt(str(payload.get("why") or "ctrl force_interrupt"))
+			# Only while stim hold / blocking stim — never for a mere -gi lock.
+			why = str(payload.get("why") or "ctrl force_interrupt")
+			if not (self._stim_hold.is_set() or pv._blocking_stim):
+				return {"ok": True, "cmd": "force_interrupt", "interrupted": False}
+			hit = pv.force_interrupt(why)
 			return {"ok": True, "cmd": "force_interrupt", "interrupted": bool(hit)}
 		if cmd == "abort_clear_stim":
 			# GUI Stop: kill armed Mark Points / -slm, replace series, restore Live.
 			from prairie_live.pv_cleanup import abort_and_clear_stim
 
-			return {"ok": True, "cmd": "abort_clear_stim", **abort_and_clear_stim(pv)}
+			restore = payload.get("restore_live")
+			kw = {}
+			if restore is not None:
+				kw["restore_live"] = bool(restore)
+			return {
+				"ok": True,
+				"cmd": "abort_clear_stim",
+				**abort_and_clear_stim(pv, **kw),
+			}
 		if cmd == "live":
 			# PV 6.1 needs explicit on|off; off must precede -slm/-mp.
 			state = str(payload.get("state") or "on").strip().lower()

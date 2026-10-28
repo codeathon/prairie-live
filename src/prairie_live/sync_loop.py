@@ -1407,12 +1407,18 @@ def _run_slm_single_trial(
 
 		def _unstick() -> None:
 			# Timeout path — Abort or Mark Points "Run" stays greyed out forever.
+			# Fresh ctrl socket: this RelayClient is blocked in mark_all_points.
 			print(
 				f"  group {gi + 1}/{n_groups}: -slm still armed after DTR — "
 				"Abort (unstick Mark Points GUI)"
 			)
 			try:
-				if via_relay and relay is not None and hasattr(relay, "abort"):
+				if via_relay and relay is not None and hasattr(relay, "host"):
+					from prairie_live.pv_cleanup import abort_and_clear_at
+
+					addr = f"{relay.host}:{int(getattr(relay, 'port', 25100) or 25100)}"
+					abort_and_clear_at(addr)
+				elif via_relay and relay is not None and hasattr(relay, "abort"):
 					relay.abort()
 				elif pl is not None:
 					pl.send_command("-Silent", "-Abort")
@@ -2500,10 +2506,14 @@ def execute_session(
 		# Prior Run (often stim_mode=slm) can leave -MarkAllPoints armed; the
 		# next series -MarkPoints then hits "another task already in progress"
 		# and/or E:\Markpoints folder dialogs. Clear once here, not per trial.
+		# SLM: do NOT -LiveScan on here — Live on→off right before -slm misses
+		# Trig In 1 (one trial, no burns). Leave Live off for the first arm.
 		if not opt.get("dry_run"):
 			from prairie_live.pv_cleanup import clear_prior_stim_on_client
 
-			clr = clear_prior_stim_on_client(relay, pl)
+			clr = clear_prior_stim_on_client(
+				relay, pl, restore_live=(stim_mode != "slm")
+			)
 			print(
 				"session start: clear leftover PV stim → "
 				+ ", ".join(str(n) for n in (clr.get("notes") or []))

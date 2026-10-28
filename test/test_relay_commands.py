@@ -63,7 +63,19 @@ def test_force_interrupt_noop_when_lock_free():
 	assert _cmds(r) == []
 
 
-def test_force_interrupt_closes_sock_while_lock_held():
+def test_force_interrupt_ignores_grab_lock():
+	"""Do not drop the socket when only -gi holds the lock (no burns bug)."""
+	r = _relay()
+	assert r.pv.lock.acquire(blocking=False)
+	try:
+		out = r.handle_command({"cmd": "force_interrupt", "why": "grab"})
+	finally:
+		r.pv.lock.release()
+	assert out["interrupted"] is False
+	assert r.pv.link is not None
+
+
+def test_force_interrupt_closes_sock_while_slm_held():
 	"""Stop/Abort must not wait on hung -slm DONE — drop the socket instead."""
 	r = _relay()
 	closed = {"n": 0}
@@ -73,11 +85,15 @@ def test_force_interrupt_closes_sock_while_lock_held():
 		closed["n"] += 1
 
 	link.close = _close  # type: ignore[method-assign]
+	r.pv._blocking_stim = True
+	r._stim_hold.set()
 	assert r.pv.lock.acquire(blocking=False)
 	try:
 		out = r.handle_command({"cmd": "force_interrupt", "why": "hung-slm"})
 	finally:
 		r.pv.lock.release()
+		r.pv._blocking_stim = False
+		r._stim_hold.clear()
 	assert out["interrupted"] is True
 	assert closed["n"] == 1
 	assert r.pv.link is None

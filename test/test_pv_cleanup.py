@@ -57,6 +57,22 @@ def test_abort_and_clear_stim_force_interrupts_first():
 	assert c.calls[1:] == ["abort", "abort", "live"]
 
 
+def test_abort_and_clear_stim_slm_leaves_live_off():
+	"""SLM session start must not -LiveScan on (misses Trig In 1)."""
+
+	class Client(FakeClient):
+		def stop_live(self) -> dict:
+			self.calls.append("live_off")
+			return {"ok": True, "cmd": "live_off"}
+
+	c = Client()
+	out = abort_and_clear_stim(c, settle_s=0.0, restore_live=False)
+	assert out["ok"] is True
+	assert c.calls == ["abort", "abort", "live_off"]
+	assert "live_off" in out["notes"]
+	assert "live" not in out["notes"]
+
+
 def test_clear_prior_skips_fake_without_abort():
 	from prairie_live.pv_cleanup import clear_prior_stim_on_client
 

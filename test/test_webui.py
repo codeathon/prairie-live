@@ -88,6 +88,17 @@ def test_candidate_clear_is_selection_not_list():
 	assert "green highlight" in html
 
 
+def test_trial_log_refresh_resumes_after_copy_selection():
+	"""Leftover Copy/select must not freeze the Trial log on blank/stale text."""
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	assert "logSelectedText" in js
+	assert "clearLogSelection" in js
+	assert "Pause only while there is real selected text" in js
+	assert "lastLogText = \"\"" in js
+
+
 def test_com_ports_never_empty():
 	assert list_com_ports()
 
