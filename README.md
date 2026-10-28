@@ -192,3 +192,25 @@ starting with `_` are comments. Useful keys: `series`, `via_relay`, `serial`,
 (SLM spiral µm→FOV). For **PV-saved** Mark Points XML, do **not** put
 `duration_ms` / `spiral_revolutions` / `inter_point_delay_ms` in the config —
 those stay on the XML.
+
+## Mark Points coordinates (galvo vs FOV)
+
+PrairieView writes two spaces for the same targets:
+
+| When you save | Typical file | X/Y meaning |
+|---------------|--------------|-------------|
+| Point list / save before running | `.gpl` / `PVSavedMarkPointSeriesElements` | **Galvo volts** (can be &lt;0 or \|Y\|&gt;1) |
+| Fat series after a Mark Points run | `PVMarkPointSeriesElements` + nested `<Point>` | **FOV fractions 0–1** of the Live image |
+
+Conversion (matches PV; implemented in `scan_geometry.py`):
+
+```
+FOV  = 0.5 + (galvo − currentScanCenter) / (2 · currentScanAmplitude)
+galvo = currentScanCenter + (FOV − 0.5) · (2 · currentScanAmplitude)
+SpiralWidth_FOV = SpiralSize_galvo / (2 · |amp|)
+```
+
+`currentScanAmplitude` is the scan **half-width** (read with `-gts`). Classic
+`stim_mode=slm` remaps galvo→FOV at fire time with LiveScan on, so a `.gpl` is
+usable; a post-run FOV XML works as-is. Keep zoom fixed between export and fire
+(or re-read amp/center).

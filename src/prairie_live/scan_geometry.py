@@ -1,10 +1,30 @@
 """Map Mark Points X/Y onto the live image (0–1 of width/height).
 
-PV saves Mark Points positions in galvo units, the same units as its scan
-state. currentScanAmplitude is the half-width: the frame spans
-currentScanCenter ± currentScanAmplitude on each axis (rig, zoom 1: ±4.2, with
-picked points out to ±3.75). A negative amplitude means that axis is reversed.
-Points already inside 0–1 are image fractions and are used as is.
+PrairieView coordinate contract (verified against paired exports)
+-----------------------------------------------------------------
+Saving a point list / ``PVSavedMarkPointSeriesElements`` writes **galvo volts**.
+After Mark Points has been run (or when PV writes a fat series with nested
+``<Point>``), the same targets appear as **FOV fractions** 0–1 of the Live
+image.
+
+PV's conversion (identical on X and Y) is:
+
+	FOV  = 0.5 + (galvo − currentScanCenter) / (2 · currentScanAmplitude)
+	galvo = currentScanCenter + (FOV − 0.5) · (2 · currentScanAmplitude)
+
+``currentScanAmplitude`` is the **half-width** of the live scan window
+(frame spans center ± amp). Negative amp means that axis is mirrored.
+
+Spiral size follows the same scale:
+
+	SpiralWidth_FOV = SpiralSize_galvo / (2 · |amp|)
+
+Example (lab export pair, amp ≈ 2.10178 V, center ≈ 0):
+	galvo (−0.584, −1.777) → FOV (0.361, 0.077)
+
+We read amp/center live via ``-gts currentScanAmplitude/Center`` so a ``.gpl``
+can feed classic ``-MarkAllPoints`` without requiring a post-run FOV XML.
+Points already inside 0–1 are left as image fractions.
 """
 
 from __future__ import annotations
@@ -53,7 +73,11 @@ def is_fraction_space(points: list[dict]) -> bool:
 
 
 def galvo_to_fraction(x: float, y: float, geom: dict[str, float]) -> tuple[float, float]:
-	"""Galvo voltage → image fraction; amplitude is the half-width of the scan."""
+	"""Galvo voltage → FOV fraction (PV's pre-run → post-run Mark Points map).
+
+	``geom['amp_*']`` = ``currentScanAmplitude`` (half-width volts).
+	``FOV = 0.5 + (galvo - center) / (2 * amp)``.
+	"""
 	ax = 2.0 * float(geom["amp_x"])
 	ay = 2.0 * float(geom["amp_y"])
 	return (
@@ -63,7 +87,7 @@ def galvo_to_fraction(x: float, y: float, geom: dict[str, float]) -> tuple[float
 
 
 def fraction_to_galvo(fx: float, fy: float, geom: dict[str, float]) -> tuple[float, float]:
-	"""Image fraction → galvo voltage for the current scan window."""
+	"""FOV fraction → galvo voltage (inverse of ``galvo_to_fraction``)."""
 	ax = 2.0 * float(geom["amp_x"])
 	ay = 2.0 * float(geom["amp_y"])
 	return (

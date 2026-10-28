@@ -61,6 +61,33 @@ def test_galvo_points_map_into_frame():
 	assert p1["r"] == pytest.approx(0.184901809118501 / 15.2 / 2, abs=1e-4)
 
 
+def test_pv_pre_run_gpl_to_post_run_fov_formula():
+	"""PV's before/after Mark Points exports are the scan-window linear map.
+
+	Lab evidence: same 4 points saved as .gpl (galvo) then as fat series after
+	a PV GUI run (FOV 0–1). Fit recovers amp≈2.10178, center≈0 on both axes.
+	"""
+	from prairie_live.scan_geometry import galvo_to_fraction
+
+	# currentScanAmplitude half-width implied by the export pair.
+	amp = 2.10177886425
+	geom = {"amp_x": amp, "amp_y": amp, "ctr_x": 0.0, "ctr_y": 0.0}
+	pairs = [
+		((-0.583964350325029, -1.77653289698036), (0.361078546307151, 0.0773739742086753)),
+		((0.87471453318728, -1.72232523576876), (0.708089097303634, 0.0902696365767878)),
+		((-0.579036381123974, -0.347421828674384), (0.362250879249707, 0.417350527549824)),
+		((0.795867025970399, -0.11087930702374), (0.689331770222743, 0.473622508792497)),
+	]
+	for (gx, gy), (fx, fy) in pairs:
+		px, py = galvo_to_fraction(gx, gy, geom)
+		assert px == pytest.approx(fx, abs=1e-9)
+		assert py == pytest.approx(fy, abs=1e-9)
+	# SpiralSize (galvo) → SpiralWidth (FOV fraction).
+	spiral_galvo = 0.0197118768042204
+	spiral_fov = 0.00468933177022279
+	assert spiral_galvo / (2.0 * amp) == pytest.approx(spiral_fov, abs=1e-12)
+
+
 def test_fraction_galvo_roundtrip_tracks_live_fov():
 	from prairie_live.scan_geometry import (
 		fraction_to_galvo,
