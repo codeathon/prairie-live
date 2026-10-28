@@ -1402,6 +1402,9 @@ def _run_slm_single_trial(
 		arm_s = max(float(slm_arm_delay_s), 0.0)
 		# Keep re-poking Trig In 1 while mask builds (first edge is often early).
 		rescue_s = max(arm_s * 2.0, 6.0)
+		# First DTR soon after Live-off+-slm (~1s), not only after full arm_s —
+		# a blind 3s sleep hid early DONE and let -gi restart Live in the gap.
+		first_dtr_s = min(max(arm_s, 0.5), 1.25)
 		settle_s = max(float(slm_group_settle_s), float(inter_trial_s), 0.0)
 		# Idle-low before arm so the next rising edge is clean.
 		if hasattr(ttl, "set_dtr"):
@@ -1409,11 +1412,18 @@ def _run_slm_single_trial(
 		init_ms = float(slm_params.get("initial_delay_ms") or 0)
 		_pre_stim_delay(wait_ms=init_ms, pl=pl, via_relay=via_relay)
 
-		# Live off on the main thread *before* the DTR clock starts so arm_delay
-		# covers mask gen after -slm, not the ensure_live_off settle itself.
-		_stop_live_for_stim(
-			relay=relay, pl=pl, via_relay=via_relay, label=f"group {gi + 1} pre-arm"
-		)
+		# Pause relay -gi for the *whole* arm. A Live-off that releases hold
+		# lets grab restart LiveScan → -slm DONE before Trig In 1.
+		if via_relay and relay is not None and hasattr(relay, "set_stim_hold"):
+			try:
+				relay.set_stim_hold(True)
+				print(
+					f"  group {gi + 1}/{n_groups}: stim_hold on "
+					"(pause -gi for Live-off → -slm → DTR)",
+					flush=True,
+				)
+			except Exception as exc:
+				print(f"  WARNING: stim_hold on failed: {exc}", flush=True)
 
 		# Keep Mark Points UI from sitting frozen on Trig In 1 for minutes.
 		slm_timeout = max(45.0, wait_s + arm_s + rescue_s + 15.0)
@@ -1423,7 +1433,7 @@ def _run_slm_single_trial(
 				f"  group {gi + 1}/{n_groups}: sending -MarkAllPoints to relay…",
 				flush=True,
 			)
-			# Serial + Trig In 1: re-check Live off under the same hold as -slm.
+			# Serial + Trig In 1: Live off under hold; leave hold for DTR.
 			_fire_mark_all_points(
 				parts=slm_parts,
 				wait_ms=0.0,
@@ -1433,6 +1443,7 @@ def _run_slm_single_trial(
 				no_wait=False,
 				timeout=slm_timeout,
 				ensure_live_off=True,
+				release_hold=False,
 			)
 
 		def _unstick() -> None:
@@ -1464,7 +1475,8 @@ def _run_slm_single_trial(
 			)
 		print(
 			f"  BEGIN group {gi + 1}/{n_groups}: arm -slm "
-			f"(Live off · first DTR @ {arm_s:g}s · rescue {rescue_s:g}s) "
+			f"(Live off · first DTR @ {first_dtr_s:g}s · rescue→"
+			f"{arm_s + rescue_s:g}s) "
 			f"pts={point_ids} power={power:g} trig={trig_sel!r}",
 			flush=True,
 		)
@@ -1481,12 +1493,6 @@ def _run_slm_single_trial(
 					f"(attempt {attempt} — prior -slm finished before DTR)",
 					flush=True,
 				)
-				_stop_live_for_stim(
-					relay=relay,
-					pl=pl,
-					via_relay=via_relay,
-					label=f"group {gi + 1} retry pre-arm",
-				)
 				if hasattr(ttl, "set_dtr"):
 					ttl.set_dtr(False)
 				time.sleep(0.3)
@@ -1496,6 +1502,7 @@ def _run_slm_single_trial(
 				n_pulses=1,
 				ttl_width_s=ttl_width_s,
 				arm_delay_s=arm_s,
+				first_pulse_s=first_dtr_s,
 				rescue_window_s=rescue_s,
 				rescue_gap_s=0.5,
 				join_timeout_s=slm_timeout + 10.0,
@@ -1512,13 +1519,18 @@ def _run_slm_single_trial(
 			except RuntimeError as exc:
 				if "finished before the first DTR" not in str(exc):
 					raise
-				# One retry: Live often races back on before the first -slm.
+				# One retry under the same stim_hold (grab still paused).
 				_arm_once(attempt=2)
 			print(f"  group {gi + 1}/{n_groups}: -slm DONE")
 		except RuntimeError as exc:
 			early_done = "finished before the first DTR" in str(exc)
 			raise
 		finally:
+			if via_relay and relay is not None and hasattr(relay, "set_stim_hold"):
+				try:
+					relay.set_stim_hold(False)
+				except Exception as exc:
+					print(f"  WARNING: stim_hold off failed: {exc}", flush=True)
 			if early_done:
 				if ttl is not None and hasattr(ttl, "set_dtr"):
 					ttl.set_dtr(False)
@@ -2176,6 +2188,7 @@ def _fire_mark_all_points(
 	no_wait: bool = False,
 	timeout: float = 180.0,
 	ensure_live_off: bool = True,
+	release_hold: bool = True,
 ) -> None:
 	"""Send -MarkAllPoints; optionally Live-off under the same stim-hold.
 
@@ -2184,6 +2197,9 @@ def _fire_mark_all_points(
 
 	Trigger=None: leave Live on (``ensure_live_off=False``) so the hologram
 	actually uncages — off + None → DONE with no burns.
+
+	``release_hold=False`` when the caller already paused -gi for a longer
+	serial arm window (Live-off → -slm → DTR).
 	"""
 	live_note = "ensure Live off first" if ensure_live_off else "Live stays on (Trigger=None)"
 	print(
@@ -2200,9 +2216,13 @@ def _fire_mark_all_points(
 			no_wait=no_wait,
 			timeout=timeout,
 			ensure_live_off=bool(ensure_live_off),
+			release_hold=bool(release_hold),
 		)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay mark_all_points failed: {out}")
+		elapsed = out.get("elapsed_ms")
+		if elapsed is not None:
+			print(f"  relay -slm returned in {elapsed} ms", flush=True)
 		return
 	if pl is None:
 		raise RuntimeError("need PrairieLink or --via-relay for stim_mode=slm")

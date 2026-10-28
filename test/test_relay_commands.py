@@ -167,6 +167,42 @@ def test_stim_hold_pauses_grab_during_mark_all_points():
 	assert any(c[0] == "-Silent" for c in cmds)
 
 
+def test_stim_hold_cmd_and_serial_arm_keeps_hold_after_slm():
+	# Serial arm: hold -gi across Live-off → -slm → DTR so grab cannot
+	# restart Live (that caused finished-before-first-DTR).
+	r = _relay()
+	parts = [
+		"-MarkAllPoints",
+		"1",
+		"False",
+		"0.5",
+		"0.5",
+		"36",
+		"Monaco",
+		"160",
+		"Trig In 1",
+		"1",
+	]
+	assert r.handle_command({"cmd": "stim_hold", "held": True})["held"] is True
+	assert r._stim_hold.is_set()
+	out = r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"ensure_live_off": True,
+			"live_off_attempts": 2,
+			"live_off_settle_s": 0,
+			"release_hold": False,
+		}
+	)
+	assert out["ok"] is True
+	assert "elapsed_ms" in out
+	# Hold must survive -slm so DTR can still land while grab is paused.
+	assert r._stim_hold.is_set()
+	assert r.handle_command({"cmd": "stim_hold", "held": False})["held"] is False
+	assert not r._stim_hold.is_set()
+
+
 def test_mark_all_points_ensures_live_off_before_slm():
 	r = _relay()
 	parts = ["-MarkAllPoints", "1", "False", "0.5", "0.5", "36", "Monaco", "160", "Trig In 1", "1"]

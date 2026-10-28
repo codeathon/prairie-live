@@ -212,11 +212,23 @@ class Relay:
 				}
 			finally:
 				self._abort_clear_lock.release()
+		if cmd == "stim_hold":
+			# Pause/resume -gi for the whole serial arm (Live-off → -slm → DTR).
+			# Without this, grab -gi between Live-off and -slm can restart Live
+			# → -slm DONE before Trig In 1 (finished before first DTR).
+			held = bool(payload.get("held", True))
+			if held:
+				self._stim_hold.set()
+			else:
+				self._stim_hold.clear()
+			print(f"stim_hold held={held}", flush=True)
+			return {"ok": True, "cmd": "stim_hold", "held": held}
 		if cmd == "live":
 			# PV 6.1 needs explicit on|off; off must precede -slm/-mp.
 			state = str(payload.get("state") or "on").strip().lower()
 			if state in ("off", "0", "false"):
 				# Pause -gi so grab cannot race / restart Live under us.
+				keep_hold = bool(payload.get("keep_hold", False))
 				self._stim_hold.set()
 				try:
 					if hasattr(pv, "ensure_live_off"):
@@ -226,9 +238,8 @@ class Relay:
 						)
 					return pv.stop_live()
 				finally:
-					# Leave hold set only if a stim cmd will clear it; otherwise
-					# release so post-stim Live on / FOV can resume.
-					if not pv._blocking_stim:
+					# keep_hold: caller spans Live-off → -slm under one hold.
+					if not keep_hold and not pv._blocking_stim:
 						self._stim_hold.clear()
 			return pv.start_live()
 		if cmd == "get_state":
@@ -267,7 +278,12 @@ class Relay:
 			}
 			# Hold grab for the whole off→-slm window so nothing can sneak a
 			# -LiveScan on between ensure_live_off and MarkAllPoints.
+			# If the caller already held (serial arm), leave it held afterward
+			# so -gi cannot restart Live before DTR.
+			was_held = self._stim_hold.is_set()
 			self._stim_hold.set()
+			t0 = time.monotonic()
+			out: dict = {"ok": False, "cmd": "mark_all_points"}
 			try:
 				ensure = payload.get("ensure_live_off", True)
 				if ensure and hasattr(pv, "ensure_live_off"):
@@ -276,18 +292,25 @@ class Relay:
 						settle_s=float(payload.get("live_off_settle_s") or 0.3),
 					)
 					if isinstance(off, dict) and off.get("ok") is False:
-						return {
+						out = {
 							"ok": False,
 							"error": f"LiveScan still on before -slm: {off}",
 							"cmd": "mark_all_points",
 						}
+						return out
 					print("mark_all_points: LiveScan off ensured under stim hold", flush=True)
 				out = pv.mark_all_points(parts, **kw)
 			finally:
-				self._stim_hold.clear()
+				# Only drop hold if we acquired it here and caller allows release.
+				if not was_held and bool(payload.get("release_hold", True)):
+					self._stim_hold.clear()
+			dt = (time.monotonic() - t0) * 1000.0
+			pv_raw = str(out.get("pv") or "")[:160]
+			out["elapsed_ms"] = round(dt, 1)
 			print(
-				f"mark_all_points DONE no_wait={out.get('no_wait')} "
-				f"parts0={parts[0] if parts else None}"
+				f"mark_all_points DONE in {dt:.0f} ms no_wait={out.get('no_wait')} "
+				f"parts0={parts[0] if parts else None} pv={pv_raw!r}",
+				flush=True,
 			)
 			return out
 		return {"ok": False, "error": f"unknown cmd {cmd}"}

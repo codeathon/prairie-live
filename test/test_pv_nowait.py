@@ -246,3 +246,28 @@ def test_dtr_errors_if_slm_finishes_before_first_pulse():
 			rescue_window_s=0.0,
 		)
 	assert ttl.pulses == []
+
+
+def test_first_pulse_s_can_be_earlier_than_arm_delay():
+	"""Serial SLM: first DTR ~1s after start; rescue window still uses arm_delay."""
+	ttl = _FakeTtl()
+	t0 = time.monotonic()
+
+	def _slm() -> str:
+		time.sleep(0.35)
+		return "ok"
+
+	out = run_while_pulsing_dtr(
+		_slm,
+		ttl=ttl,
+		n_pulses=1,
+		ttl_width_s=0.01,
+		arm_delay_s=0.5,
+		first_pulse_s=0.08,
+		rescue_window_s=0.4,
+		rescue_gap_s=0.12,
+	)
+	assert out == "ok"
+	assert ttl.pulses
+	assert ttl.times[0] - t0 >= 0.06
+	assert ttl.times[0] - t0 < 0.25

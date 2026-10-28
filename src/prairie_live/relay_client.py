@@ -80,9 +80,19 @@ class RelayClient:
 	def start_live(self) -> dict:
 		return self._command({"cmd": "live", "state": "on"})
 
-	def stop_live(self) -> dict:
-		"""-LiveScan off (no Abort). Call before -slm/-mp on PV 6.1."""
-		return self._command({"cmd": "live", "state": "off"})
+	def stop_live(self, *, keep_hold: bool = False) -> dict:
+		"""-LiveScan off (no Abort). Call before -slm/-mp on PV 6.1.
+
+		``keep_hold=True`` leaves the relay stim-hold set so -gi cannot restart
+		Live before the following ``mark_all_points``.
+		"""
+		return self._command(
+			{"cmd": "live", "state": "off", "keep_hold": bool(keep_hold)}
+		)
+
+	def set_stim_hold(self, held: bool) -> dict:
+		"""Pause/resume relay -gi for a multi-command serial arm window."""
+		return self._command({"cmd": "stim_hold", "held": bool(held)})
 
 	def ping(self) -> dict:
 		return self._command({"cmd": "ping"})
@@ -132,16 +142,22 @@ class RelayClient:
 		no_wait: bool | None = None,
 		timeout: float | None = None,
 		ensure_live_off: bool = True,
+		release_hold: bool = True,
 	) -> dict:
 		"""Simultaneous SLM fire (-MarkAllPoints / -slm) on the scope.
 
 		By default the relay ensures ``-LiveScan off`` under the same stim-hold
 		lock as ``-slm`` so nothing can turn Live back on in between.
+
+		When the caller already set ``stim_hold`` (serial arm), pass
+		``release_hold=False`` or leave hold set beforehand so -gi stays paused
+		until DTR finishes.
 		"""
 		payload: dict = {
 			"cmd": "mark_all_points",
 			"parts": list(parts),
 			"ensure_live_off": bool(ensure_live_off),
+			"release_hold": bool(release_hold),
 		}
 		if wait_ms and float(wait_ms) > 0:
 			payload["wait_ms"] = float(wait_ms)

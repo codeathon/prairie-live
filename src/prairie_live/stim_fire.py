@@ -6,7 +6,8 @@ pulses never released the hologram/series — no burns.
 Order that works (exactly the planned edges — typically one per group):
   1. Finish -LoadMarkPoints / -Wait *before* calling this helper.
   2. Start blocking -MarkPoints / -slm on a worker thread.
-  3. After ``arm_delay_s``, pulse DTR (Trig In 1) on the main thread.
+  3. After ``first_pulse_s`` (default = ``arm_delay_s``), pulse DTR on the
+	 main thread. Poll for premature DONE the whole time (do not sleep blindly).
   4. For multi-pulse (packed SLM): sleep ``gap_s``, then next planned pulse.
   5. Single-pulse: re-poke DTR while still armed until DONE or arm window ends
 	 (mask gen can outlast the first edge).
@@ -31,6 +32,7 @@ def run_while_pulsing_dtr(
 	ttl_width_s: float = 0.01,
 	gap_s: float = 0.0,
 	arm_delay_s: float = 0.25,
+	first_pulse_s: float | None = None,
 	rescue_window_s: float = 0.75,
 	rescue_gap_s: float = 0.4,
 	join_timeout_s: float | None = None,
@@ -41,8 +43,13 @@ def run_while_pulsing_dtr(
 	"""
 	Run blocking ``fn()`` and emit exactly ``n_pulses`` planned DTR edges.
 
-	``arm_delay_s``: pause after starting ``fn`` so PV can enter Wait-for-Trigger
-	before the first rising edge. Finish load/Wait before calling this helper.
+	``arm_delay_s``: preferred mask/arm window used with ``rescue_window_s`` for
+	the rescue deadline (from thread start).
+
+	``first_pulse_s``: seconds after start before the first DTR (defaults to
+	``arm_delay_s``). Serial SLM often wants this shorter (~1.2s) so the edge
+	lands soon after Live-off+-slm rather than waiting the full mask budget
+	before noticing an early DONE.
 
 	``rescue_window_s``: after the *first* planned pulse, re-poke DTR every
 	``rescue_gap_s`` until ``arm_delay_s + rescue_window_s`` from start or until
@@ -62,8 +69,13 @@ def run_while_pulsing_dtr(
 		except BaseException as exc:  # noqa: BLE001 — surface on join
 			errors.append(exc)
 
+	first_s = (
+		max(float(first_pulse_s), 0.0)
+		if first_pulse_s is not None
+		else max(float(arm_delay_s), 0.0)
+	)
 	pulse_budget_s = (
-		max(float(arm_delay_s), 0.0)
+		max(float(arm_delay_s), first_s)
 		+ n_pulses * max(float(ttl_width_s), 0.0)
 		+ max(n_pulses - 1, 0) * max(float(gap_s), 0.0)
 		+ max(float(rescue_window_s), 0.0)
@@ -79,14 +91,28 @@ def run_while_pulsing_dtr(
 	th = threading.Thread(target=_run_fn, name="mp-blocking", daemon=True)
 	th.start()
 	try:
-		time.sleep(max(float(arm_delay_s), 0.0))
+		# Poll — a blind sleep hid early DONE until the full arm_delay elapsed.
+		deadline_first = t0 + first_s
+		while time.monotonic() < deadline_first:
+			if errors:
+				break
+			if not th.is_alive() and not errors:
+				raise RuntimeError(
+					"Mark Points / -slm finished before the first DTR — "
+					"PV was not waiting on Trig In 1. Ensure -LiveScan off before "
+					"arm (PV 6.1), pause grab (-gi) for the whole arm, and "
+					"increase slm_arm_delay_s if the mask is slow."
+				)
+			time.sleep(0.05)
 		# If -slm/-mp returned before the first edge, PV never armed Trig In 1.
-		# Common cause on PV 6.1: LiveScan still on (-slm does not stop Live).
+		# Common cause on PV 6.1: LiveScan still on (-slm does not stop Live),
+		# or -gi restarting Live between Live-off and -slm.
 		if not th.is_alive() and not errors:
 			raise RuntimeError(
 				"Mark Points / -slm finished before the first DTR — "
 				"PV was not waiting on Trig In 1. Ensure -LiveScan off before "
-				"arm (PV 6.1), and increase slm_arm_delay_s if the mask is slow."
+				"arm (PV 6.1), pause grab (-gi) for the whole arm, and "
+				"increase slm_arm_delay_s if the mask is slow."
 			)
 		for i in range(n_pulses):
 			if errors:
@@ -106,7 +132,7 @@ def run_while_pulsing_dtr(
 			if i < n_pulses - 1 and gap_s > 0:
 				time.sleep(float(gap_s))
 		# Re-poke while still armed: first edge often lands during mask gen.
-		arm_deadline = t0 + max(float(arm_delay_s), 0.0) + max(
+		arm_deadline = t0 + max(float(arm_delay_s), first_s) + max(
 			float(rescue_window_s), 0.0
 		)
 		gap = max(float(rescue_gap_s), 0.1)
