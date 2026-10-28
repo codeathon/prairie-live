@@ -919,13 +919,19 @@ def _run_slm_packed_batch(
 		n_g = len(gpts)
 		fire_groups.append(fire_flat[i : i + n_g])
 		i += n_g
-	# -slm wants UI UncagingLaserPower (160), not series XML fraction (0.4).
+	# -slm wants UI UncagingLaserPower (150), not series XML fraction (0.375).
 	# trigger_count=1: one Trig In 1 edge releases each packed hologram/group.
-	slm_pwr = _slm_script_power(power, meta)
-	print(f"  SLM power (UI scale) → -slm {slm_pwr:g}")
+	# Per-set power is scaled by that set's spot count inside pack (see
+	# scale_power_by_n_spots) — use the first group's size for the log line.
+	n0 = max(len(fire_groups[0]), 1) if fire_groups else 1
+	slm_pwr = _slm_script_power(power, meta, n_spots=n0)
+	print(
+		f"  SLM power (UI scale) {float(power):g} × {n0} spots → -slm {slm_pwr:g} "
+		f"(beam split; matches PV single-spot {float(power):g})"
+	)
 	slm_parts = pack_mark_all_points(
 		fire_groups,
-		power=slm_pwr,
+		power=float(power),
 		laser=slm_params["laser"],
 		duration_ms=slm_params["duration_ms"],
 		use_3d=slm_params["use_3d"],
@@ -937,6 +943,7 @@ def _run_slm_packed_batch(
 		trigger_selection=trig_sel,
 		trigger_count=1,
 		delay_ms=delay_ms,
+		scale_power_by_n_spots=True,
 	)
 	# Audit XML: one MarkPoint step per group (same order as packed -slm).
 	steps = []
@@ -1245,11 +1252,14 @@ def _run_slm_single_trial(
 		slm_params=slm_params,
 		dry_run=dry_run,
 	)
-	slm_pwr = _slm_script_power(power, meta)
-	print(f"  SLM power (UI scale) → -slm {slm_pwr:g}")
+	slm_pwr = _slm_script_power(power, meta, n_spots=len(fire_pts))
+	print(
+		f"  SLM power (UI scale) {float(power):g} × {len(fire_pts)} spots → "
+		f"-slm {slm_pwr:g} (beam split; matches PV single-spot {float(power):g})"
+	)
 	slm_parts = pack_mark_all_points(
 		[fire_pts],
-		power=slm_pwr,
+		power=float(power),
 		laser=slm_params["laser"],
 		duration_ms=slm_params["duration_ms"],
 		use_3d=slm_params["use_3d"],
@@ -1261,6 +1271,7 @@ def _run_slm_single_trial(
 		trigger_selection=trig_sel,
 		trigger_count=1,
 		delay_ms=0.0,
+		scale_power_by_n_spots=True,
 	)
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
 	point_ids = [str(p["id"]) for p in fire_pts]
@@ -1870,16 +1881,26 @@ def _slm_fire_points(
 	return fire_pts, spiral_fov
 
 
-def _slm_script_power(power: float, meta: dict | None = None) -> float:
+def _slm_script_power(
+	power: float,
+	meta: dict | None = None,
+	*,
+	n_spots: int = 1,
+) -> float:
 	"""Power token for ``-MarkAllPoints``.
 
 	PV's script ``-slm`` takes the same UI UncagingLaserPower scale as the Mark
-	Points window (e.g. 160), *not* the 0–1 fraction written into series XML
-	(``UncagingLaserPower="0.4"``). Sending the fraction made SLM look like it
-	ran with no visible burns.
+	Points window (e.g. 150), *not* the 0–1 fraction written into series XML
+	(``UncagingLaserPower="0.375"``).
+
+	Simultaneous SLM also **splits the beam** across every spot in the hologram.
+	PV Mark Points at UI 150 often fires points one-by-one at full power; our
+	GUI packs a group (e.g. 4) into one ``-slm``, so raw 150 → ~37/spot and no
+	burns. Multiply by ``n_spots`` so the Powers field means ~per-spot UI power.
 	"""
 	del meta  # series XML scale only — kept for call-site compatibility
-	return float(power)
+	n = max(int(n_spots), 1)
+	return float(power) * n
 
 
 def _fire_mark_all_points(
