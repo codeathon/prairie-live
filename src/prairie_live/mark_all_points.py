@@ -109,8 +109,10 @@ def build_mark_all_points_parts(
 	spiral_size_fov: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
+	repetitions: int = 1,
+	rep_delay_ms: float = 0.0,
 ) -> list[str]:
-	"""Single-set -MarkAllPoints token list (compat wrapper around pack)."""
+	"""Single-group -MarkAllPoints token list (compat wrapper around pack)."""
 	return pack_mark_all_points(
 		[points],
 		power=power,
@@ -125,6 +127,8 @@ def build_mark_all_points_parts(
 		trigger_selection=trigger_selection,
 		trigger_count=trigger_count,
 		delay_ms=0.0,
+		repetitions=repetitions,
+		rep_delay_ms=rep_delay_ms,
 	)
 
 
@@ -143,6 +147,8 @@ def pack_mark_all_points(
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
 	delay_ms: float = 0.0,
+	repetitions: int = 1,
+	rep_delay_ms: float = 0.0,
 ) -> list[str]:
 	"""
 	Pack many simultaneous sets into one -slm command.
@@ -150,33 +156,50 @@ def pack_mark_all_points(
 	PV grammar: after each set's Trigger[+Count], append Delay ms except on the
 	last set. Software maps trigger pulse i → groups[i] (same order as packed).
 
+	``repetitions``: -MarkAllPoints has no Repetitions parameter, so each group
+	is emitted as ``repetitions`` identical sets. Only the first set of a group
+	waits on ``trigger_selection``; the repeats use trigger ``None`` so one
+	pulse releases the whole group. ``rep_delay_ms`` separates repeats of the
+	same group; ``delay_ms`` separates the last repeat of one group from the
+	next group.
+
 	``power`` is the total UI UncagingLaserPower for each hologram set (not
 	scaled by spot count; SLM splits that total across the spots).
 	"""
 	if not groups:
 		raise ValueError("pack_mark_all_points needs at least one group")
+	reps = max(int(repetitions), 1)
+	set_kw = dict(
+		power=power,
+		laser=laser,
+		duration_ms=duration_ms,
+		use_3d=use_3d,
+		spiral=spiral,
+		spiral_size_um=spiral_size_um,
+		spiral_revolutions=spiral_revolutions,
+		fov_width_um=fov_width_um,
+		spiral_size_fov=spiral_size_fov,
+	)
 	parts: list[str] = ["-MarkAllPoints"]
-	last = len(groups) - 1
-	for i, gpts in enumerate(groups):
-		parts.extend(
-			build_set_tokens(
-				gpts,
-				power=power,
-				laser=laser,
-				duration_ms=duration_ms,
-				use_3d=use_3d,
-				spiral=spiral,
-				spiral_size_um=spiral_size_um,
-				spiral_revolutions=spiral_revolutions,
-				fov_width_um=fov_width_um,
-				spiral_size_fov=spiral_size_fov,
-				trigger_selection=trigger_selection,
-				trigger_count=trigger_count,
+	last_group = len(groups) - 1
+	for gi, gpts in enumerate(groups):
+		for r in range(reps):
+			if r == 0:
+				trig, count = trigger_selection, trigger_count
+			else:
+				# Repeats fire straight after the previous set — no extra edge.
+				trig, count = "None", 1
+			parts.extend(
+				build_set_tokens(
+					gpts, trigger_selection=trig, trigger_count=count, **set_kw
+				)
 			)
-		)
-		# Omit Delay on the last repetition (PV requirement).
-		if i < last:
-			parts.append(str(int(round(float(delay_ms)))))
+			is_last_set = gi == last_group and r == reps - 1
+			# Omit Delay on the very last set (PV requirement).
+			if is_last_set:
+				continue
+			gap = rep_delay_ms if r < reps - 1 else delay_ms
+			parts.append(str(int(round(float(gap)))))
 	return parts
 
 
@@ -204,7 +227,38 @@ def stim_params_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
 		),
 		"trigger_count": max(1, trigger_count),
 		"initial_delay_ms": float(meta.get("initial_delay_ms", 0) or 0),
+		"repetitions": _int_or(meta.get("repetitions"), 1, minimum=1),
+		"rep_delay_ms": _rep_delay_ms(meta),
 	}
+
+
+def _int_or(v: Any, default: int, *, minimum: int = 0) -> int:
+	try:
+		n = int(float(v)) if v not in (None, "") else default
+	except (TypeError, ValueError):
+		n = default
+	return max(n, minimum)
+
+
+def _rep_delay_ms(meta: dict[str, Any]) -> float:
+	"""Gap between repeats of one group: Mark Points InterPointDelay (ms)."""
+	for key in ("inter_point_delay_ms", "inter_point_delay"):
+		v = meta.get(key)
+		if v in (None, ""):
+			continue
+		try:
+			return max(float(v), 0.0)
+		except (TypeError, ValueError):
+			continue
+	return 0.0
+
+
+def slm_burn_ms(slm_params: dict[str, Any]) -> float:
+	"""Wall time of one group's burn: all repeats plus the gaps between them."""
+	reps = max(int(slm_params.get("repetitions") or 1), 1)
+	dur = float(slm_params.get("duration_ms") or 0)
+	gap = float(slm_params.get("rep_delay_ms") or 0)
+	return reps * dur + (reps - 1) * gap
 
 
 def _fmt_num(v: Any) -> str:

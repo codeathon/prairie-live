@@ -147,3 +147,74 @@ def test_stim_params_from_meta():
 	assert p["fov_width_um"] == 500.0
 	assert p["initial_delay_ms"] == 22.1
 	assert p["trigger_count"] == 1
+
+
+def _set_triggers(parts: list[str]) -> list[str]:
+	"""Trigger token of each set (anything that is 'Trig In 1' or 'None')."""
+	return [p for p in parts if p in ("Trig In 1", "None")]
+
+
+def test_repetitions_repeat_set_first_triggered_rest_none():
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}, {"id": "2", "x": 0.3, "y": 0.4}]
+	parts = build_mark_all_points_parts(
+		pts,
+		power=140,
+		duration_ms=36,
+		spiral=False,
+		trigger_selection="Trig In 1",
+		repetitions=3,
+		rep_delay_ms=14,
+	)
+	assert parts[0] == "-MarkAllPoints"
+	# One set = 2 False x y x y 36 Monaco 140 <trig…>
+	assert parts.count("2") == 3
+	assert _set_triggers(parts) == ["Trig In 1", "None", "None"]
+	i0 = parts.index("Trig In 1")
+	# Trig In 1 → count 1 → rep Delay 14 → next set starts with point count.
+	assert parts[i0 + 1 : i0 + 4] == ["1", "14", "2"]
+	# Middle repeat: None → Delay 14 (no Trigger Count after None).
+	i1 = parts.index("None")
+	assert parts[i1 + 1 : i1 + 3] == ["14", "2"]
+	# Last set ends on its trigger with no Delay.
+	assert parts[-1] == "None"
+
+
+def test_repetitions_one_is_unchanged():
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}]
+	a = build_mark_all_points_parts(pts, power=1, spiral=False)
+	b = build_mark_all_points_parts(pts, power=1, spiral=False, repetitions=1)
+	assert a == b
+	assert a[-2:] == ["Trig In 1", "1"]
+
+
+def test_packed_groups_with_repetitions_use_group_delay_between_groups():
+	g0 = [{"id": "1", "x": 0.1, "y": 0.2}]
+	g1 = [{"id": "2", "x": 0.5, "y": 0.6}]
+	parts = pack_mark_all_points(
+		[g0, g1],
+		power=1,
+		spiral=False,
+		trigger_selection="Trig In 1",
+		delay_ms=500,
+		repetitions=2,
+		rep_delay_ms=14,
+	)
+	# Each group: triggered first set, then one untriggered repeat.
+	assert _set_triggers(parts) == ["Trig In 1", "None", "Trig In 1", "None"]
+	delays = [p for p in parts if p in ("14", "500")]
+	assert delays == ["14", "500", "14"]
+	assert parts[-1] == "None"
+
+
+def test_stim_params_carry_repetitions_and_burn_time():
+	from prairie_live.mark_all_points import slm_burn_ms
+
+	p = stim_params_from_meta(
+		{"repetitions": "5", "inter_point_delay": "14", "duration": 36}
+	)
+	assert p["repetitions"] == 5
+	assert p["rep_delay_ms"] == 14.0
+	assert slm_burn_ms(p) == 5 * 36 + 4 * 14
+	q = stim_params_from_meta({})
+	assert q["repetitions"] == 1
+	assert slm_burn_ms(q) == q["duration_ms"]

@@ -904,14 +904,14 @@ def _run_slm_packed_batch(
 
 	trigger_index i (0-based) is the i-th DTR pulse and maps to groups_pts[i].
 	"""
-	from prairie_live.mark_all_points import pack_mark_all_points
+	from prairie_live.mark_all_points import pack_mark_all_points, slm_burn_ms
 
 	n = len(groups_pts)
 	# PV Delay between packed sets: must cover the hologram + a settle so the
 	# next Trig In 1 wait is armed before the next DTR (too-short Delay → only
 	# the first group burns). Software sleeps the same gap between pulses.
 	delay_ms = (
-		float(slm_params.get("duration_ms") or 0)
+		slm_burn_ms(slm_params)
 		+ float(pad_ms)
 		+ float(inter_trial_s) * 1000.0
 		+ 250.0  # settle after burn before next wait-for-trigger
@@ -956,6 +956,8 @@ def _run_slm_packed_batch(
 		trigger_selection=trig_sel,
 		trigger_count=1,
 		delay_ms=delay_ms,
+		repetitions=slm_params.get("repetitions", 1),
+		rep_delay_ms=slm_params.get("rep_delay_ms", 0.0),
 	)
 	# Audit XML: one MarkPoint step per group (same order as packed -slm).
 	steps = []
@@ -1016,7 +1018,7 @@ def _run_slm_packed_batch(
 			print(f"  pulse_map.txt save failed: {exc}")
 
 	wait_s = (
-		float(slm_params.get("duration_ms") or 0)
+		slm_burn_ms(slm_params)
 		+ float(slm_params.get("initial_delay_ms") or 0)
 		+ pad_ms
 	) / 1000.0
@@ -1254,7 +1256,7 @@ def _run_slm_single_trial(
 	``trigger_index`` / ``n_triggers`` are the group index among this power's
 	groups (so logs show pulse 0/1, 1/1 — not 0/0 for every trial).
 	"""
-	from prairie_live.mark_all_points import pack_mark_all_points
+	from prairie_live.mark_all_points import pack_mark_all_points, slm_burn_ms
 
 	n_groups = max(int(n_groups), 1)
 	# Remap with live scan range so -slm X/Y match the cyan overlay rings.
@@ -1286,6 +1288,8 @@ def _run_slm_single_trial(
 		trigger_selection=trig_sel,
 		trigger_count=1,
 		delay_ms=0.0,
+		repetitions=slm_params.get("repetitions", 1),
+		rep_delay_ms=slm_params.get("rep_delay_ms", 0.0),
 	)
 	gname = f"PL_t{trial_index:04d}_g{gi + 1}"
 	point_ids = [str(p["id"]) for p in fire_pts]
@@ -1333,7 +1337,7 @@ def _run_slm_single_trial(
 	)
 
 	wait_s = (
-		float(slm_params.get("duration_ms") or 0)
+		slm_burn_ms(slm_params)
 		+ float(slm_params.get("initial_delay_ms") or 0)
 		+ pad_ms
 	) / 1000.0
