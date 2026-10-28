@@ -239,14 +239,21 @@ class _FakeRelayMp:
 		return {"ok": True, "cmd": "mark_points", "no_wait": no_wait}
 
 	def mark_all_points(
-		self, parts, *, wait_ms=0.0, no_wait=None, timeout=None, ensure_live_off=True
+		self,
+		parts,
+		*,
+		wait_ms=0.0,
+		no_wait=None,
+		timeout=None,
+		ensure_live_off=True,
+		release_hold=True,
 	):
 		if ensure_live_off:
 			self.calls.append(("live_off",))
 		self.calls.append(("slm", list(parts), wait_ms, no_wait, timeout))
-		# Blocking -slm must outlive the DTR arm_delay or stim_fire errors.
+		# Blocking -slm must outlive the first DTR (per-group floor is 0.5 s).
 		if not no_wait:
-			time.sleep(0.35)
+			time.sleep(0.7)
 		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts), "no_wait": no_wait}
 
 	def start_live(self):
