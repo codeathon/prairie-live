@@ -40,11 +40,17 @@ class LiveFeed:
 		self._stop.set()
 
 	def hold_for_stim(self, held: bool) -> None:
-		"""During a Run, do not call -LiveScan on (races serial -slm Trig In 1)."""
+		"""During a Run, do not call -LiveScan on (races serial -slm Trig In 1).
+
+		Also bump ``addr`` so an in-flight ``_stream`` drops its ctrl client and
+		cannot keep issuing ``-gts`` that steal the PV lock from ``-slm``.
+		"""
 		if held:
 			self._hold_stim.set()
 			with self._lock:
 				self.detail = "stim hold — not starting LiveScan"
+				# Force _stream's addr check to fail so it disconnects promptly.
+				self.live_started = False
 		else:
 			self._hold_stim.clear()
 
@@ -160,13 +166,17 @@ class LiveFeed:
 			next_geom: float | None = 0.0
 			while not self._stop.is_set():
 				# Hold flipped mid-stream (Run started): drop this session so we
-				# do not keep a client that might reconnect into -LiveScan on.
-				if self._hold_stim.is_set() and started:
+				# do not keep a client that might reconnect into -LiveScan on /
+				# -gts that block -slm on the shared PV lock.
+				if self._hold_stim.is_set():
 					with self._lock:
 						self.detail = "stim hold — releasing live client"
 						self.live_started = False
 					break
 				if next_geom is not None and time.monotonic() >= next_geom:
+					# Never start a 4× -gts burst once a Run is holding stim.
+					if self._hold_stim.is_set():
+						break
 					wait = self._poll_geometry(client)
 					next_geom = None if wait is None else time.monotonic() + wait
 				with self._lock:

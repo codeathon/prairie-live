@@ -258,6 +258,7 @@ class _FakeRelayMp:
 
 	def get_state(self, key, index=None):
 		# Live scan window for SLM fire-time galvo→FOV remap (matches overlay).
+		self.calls.append(("get_state", key, index))
 		vals = {
 			("currentScanAmplitude", "XAxis"): "4.2",
 			("currentScanAmplitude", "YAxis"): "4.2",
@@ -486,6 +487,10 @@ def test_slm_serial_one_slm_and_one_dtr_per_group(tmp_path: Path):
 	assert sum(1 for c in relay.calls if c[0] == "live_off") >= 2
 	assert sum(1 for c in relay.calls if c[0] == "live") >= 2
 	assert not any(c[0] == "load" for c in relay.calls)
+	# FOV 0–1 lists must not call -gts before -slm (that blocked real Runs).
+	assert not any(
+		isinstance(c, tuple) and c[0] == "get_state" for c in relay.calls
+	)
 
 RIG_GPL = """<?xml version="1.0" encoding="utf-8"?>
 <PVGalvoPointList>

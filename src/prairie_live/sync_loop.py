@@ -1959,14 +1959,12 @@ def _slm_fire_points(
 	dry_run: bool,
 	log_prefix: str = "  ",
 ) -> tuple[list[dict], float | None]:
-	"""Remap galvo→FOV via -gts, keep Live **off**, then ready for -slm.
+	"""Keep Live **off**, remap galvo→FOV only when needed, then ready for -slm.
 
-	Do **not** bounce Live on→off here. That was the miss: Trig In 1 is a
-	rising edge; if the one DTR lands while PV is still stopping Live or
-	building the mask, the edge is gone and -slm waits forever (no burn).
-	``-gts`` amp/center works with Live off.
+	FOV 0–1 Mark Points lists skip ``-gts`` entirely — a wedged scan-geometry
+	read was blocking every Run before any ``-MarkAllPoints`` left the PC.
 	"""
-	from prairie_live.scan_geometry import points_for_slm_fire
+	from prairie_live.scan_geometry import is_fraction_space, points_for_slm_fire
 
 	if dry_run or relay is None:
 		# Dry-run / no relay: keep whatever fractions the session lock produced.
@@ -1975,9 +1973,24 @@ def _slm_fire_points(
 	_stop_live_for_stim(
 		relay=relay, pl=pl, via_relay=via_relay, label=f"{log_prefix.strip()}pre-slm"
 	)
-	time.sleep(0.4)  # let Live actually stop before -gts / -slm
+	time.sleep(0.25)  # let Live actually stop before -slm
+	# Fat FOV exports are already 0–1 — do not touch PV script port again.
+	if is_fraction_space(gpts):
+		fire_pts = [dict(p, coord_space="fov") for p in gpts]
+		spiral_fov = None
+		su = slm_params.get("spiral_size_um")
+		fw = slm_params.get("fov_width_um")
+		if su not in (None, "") and fw not in (None, "") and float(fw) > 0:
+			spiral_fov = float(su) / float(fw)
+		note = (
+			f"SLM fire: {len(fire_pts)} FOV points as-is (skip -gts) "
+			+ (f"· spiral_fov={spiral_fov:.4g}" if spiral_fov is not None else "")
+		)
+		print(f"{log_prefix}{note}", flush=True)
+		return fire_pts, spiral_fov
+
 	print(
-		f"{log_prefix}reading scan amplitude/center (-gts) for FOV remap…",
+		f"{log_prefix}galvo points — reading -gts for FOV remap…",
 		flush=True,
 	)
 	try:
@@ -1988,28 +2001,23 @@ def _slm_fire_points(
 			fov_width_um=slm_params.get("fov_width_um"),
 		)
 	except Exception as exc:
-		# Wedged -gts must not block -slm forever; FOV 0–1 lists can fire as-is.
-		from prairie_live.scan_geometry import is_fraction_space
-
-		if not is_fraction_space(gpts):
-			raise
-		print(
-			f"{log_prefix}WARNING: scan geometry failed ({exc}); "
-			"using FOV 0–1 points as-is",
-			flush=True,
-		)
-		fire_pts, spiral_fov, note = list(gpts), None, "SLM fire: FOV as-is (no -gts)"
+		raise RuntimeError(
+			f"scan geometry failed before -slm ({exc}). "
+			"Export FOV 0–1 Mark Points from Live, or fix -gts on the scope."
+		) from exc
 	print(f"{log_prefix}{note}", flush=True)
 	for p in fire_pts[:5]:
 		gx, gy = p.get("x_galvo"), p.get("y_galvo")
 		if gx is not None and gy is not None:
 			print(
 				f"{log_prefix}  P{p['id']} galvo ({float(gx):.4f},{float(gy):.4f}) "
-				f"→ FOV ({float(p['x']):.4f},{float(p['y']):.4f})"
+				f"→ FOV ({float(p['x']):.4f},{float(p['y']):.4f})",
+				flush=True,
 			)
 		else:
 			print(
-				f"{log_prefix}  P{p['id']} FOV ({float(p['x']):.4f},{float(p['y']):.4f})"
+				f"{log_prefix}  P{p['id']} FOV ({float(p['x']):.4f},{float(p['y']):.4f})",
+				flush=True,
 			)
 	return fire_pts, spiral_fov
 
