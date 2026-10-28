@@ -14,7 +14,6 @@ class FakeRelay:
 		return {"ok": True, "value": self.values[(key, index)]}
 
 
-# Wide enough that samples/MarkPoints_rig_saved.xml points sit in-frame.
 GEOM = {
 	("currentScanAmplitude", "XAxis"): "7.6",
 	("currentScanAmplitude", "YAxis"): "-7.6",
@@ -22,7 +21,6 @@ GEOM = {
 	("currentScanCenter", "YAxis"): "0.2",
 }
 
-# Zoom-1 -gts reading on the lab rig (full scan width volts).
 ZOOM1 = {
 	("currentScanAmplitude", "XAxis"): "4.2035577285",
 	("currentScanAmplitude", "YAxis"): "4.2035577285",
@@ -59,27 +57,27 @@ def test_waiting_note_carries_reason():
 
 
 def test_galvo_points_map_into_frame():
-	# Full scan width from -gts: FOV = 0.5 + (galvo - ctr) / amp.
+	# Half-width amplitude: frame spans center ± amplitude.
 	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
 	g = fetch_scan_geometry(FakeRelay(GEOM))
 	out = overlay_points(pts, g)
 	p1 = out["points"][0]
-	assert p1["fx"] == pytest.approx(0.5 + -3.25489489483074 / 7.6, abs=1e-4)
+	assert p1["fx"] == pytest.approx(0.5 + -3.25489489483074 / 15.2, abs=1e-4)
 	# Negative Y amplitude: scan runs reversed, so negative galvo Y is low in the image.
-	assert p1["fy"] == pytest.approx(0.5 + (-3.66925337390467 - 0.2) / -7.6, abs=1e-4)
-	assert p1["r"] == pytest.approx(0.184901809118501 / 7.6 / 2, abs=1e-4)
+	assert p1["fy"] == pytest.approx(0.5 + (-3.66925337390467 - 0.2) / -15.2, abs=1e-4)
+	assert p1["r"] == pytest.approx(0.184901809118501 / 15.2 / 2, abs=1e-4)
 
 
 def test_pv_pre_run_gpl_to_post_run_fov_formula():
 	"""PV's before/after Mark Points exports are the scan-window linear map.
 
 	Lab evidence: same 4 points saved as .gpl (galvo) then as fat series after
-	a PV GUI run (FOV 0–1). Denominator equals the zoom-1 ``-gts`` reading
-	(~4.20356), i.e. full scan width — not ``2 · (-gts)``.
+	a PV GUI run (FOV 0–1). Fit recovers amp≈2.10178, center≈0 on both axes.
 	"""
 	from prairie_live.scan_geometry import galvo_to_fraction
 
-	amp = 4.2035577285
+	# currentScanAmplitude half-width implied by the export pair.
+	amp = 2.10177886425
 	geom = {"amp_x": amp, "amp_y": amp, "ctr_x": 0.0, "ctr_y": 0.0}
 	pairs = [
 		((-0.583964350325029, -1.77653289698036), (0.361078546307151, 0.0773739742086753)),
@@ -94,24 +92,33 @@ def test_pv_pre_run_gpl_to_post_run_fov_formula():
 	# SpiralSize (galvo) → SpiralWidth (FOV fraction).
 	spiral_galvo = 0.0197118768042204
 	spiral_fov = 0.00468933177022279
-	assert spiral_galvo / amp == pytest.approx(spiral_fov, abs=1e-12)
+	assert spiral_galvo / (2.0 * amp) == pytest.approx(spiral_fov, abs=1e-12)
 
 
-def test_old_half_width_formula_was_wrong_vs_export_pair():
-	"""``2 · (-gts)`` compresses toward center (~70 px at 512) — burns look far off."""
+def test_full_width_mapping_rejected_on_rig():
+	"""Treating -gts amp as full width puts zoom-1 picked points off-image.
+
+	Lab commit 6ee7ca2: amp 4.20356 is half-width (center ± amp). Using amp as
+	full width mismatched PV's Mark Points GUI (points far from burns / PV marks).
+	"""
 	from prairie_live.scan_geometry import galvo_to_fraction
 
-	amp_gts = 4.2035577285
-	gx, gy = -0.583964350325029, -1.77653289698036
-	truth = (0.361078546307151, 0.0773739742086753)
-	ok = galvo_to_fraction(gx, gy, {"amp_x": amp_gts, "amp_y": amp_gts, "ctr_x": 0, "ctr_y": 0})
-	# Buggy: treat -gts as half-width and divide by 2*amp again.
-	bad = (
-		0.5 + gx / (2 * amp_gts),
-		0.5 + gy / (2 * amp_gts),
-	)
-	assert ok[0] == pytest.approx(truth[0], abs=1e-9)
-	assert abs(bad[0] - truth[0]) * 512 > 30  # >30 px error
+	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
+	amp = 4.2035577285
+	half = {"amp_x": amp, "amp_y": amp, "ctr_x": 0.0, "ctr_y": 0.0}
+	# Wrong: divide by amp once (full-width interpretation of the same -gts value).
+	bad_in = 0
+	good_in = 0
+	for p in pts:
+		gx, gy = float(p["x"]), float(p["y"])
+		fx, fy = galvo_to_fraction(gx, gy, half)
+		if 0 <= fx <= 1 and 0 <= fy <= 1:
+			good_in += 1
+		bfx, bfy = 0.5 + gx / amp, 0.5 + gy / amp
+		if 0 <= bfx <= 1 and 0 <= bfy <= 1:
+			bad_in += 1
+	assert good_in == len(pts)
+	assert bad_in < len(pts)
 
 
 def test_fraction_galvo_roundtrip_tracks_live_fov():
@@ -132,34 +139,25 @@ def test_fraction_galvo_roundtrip_tracks_live_fov():
 	fov_pts, note = prepare_points_for_live_fov(pts, FakeRelay(GEOM))
 	assert "live FOV" in note
 	assert all(p.get("coord_space") == "fov" for p in fov_pts)
-	# Pan the scan center; series must retarget galvo so burns stay on FOV spots.
 	pan = dict(GEOM)
 	pan[("currentScanCenter", "XAxis")] = "1.0"
 	fired, fire_note = points_to_galvo_for_series(fov_pts, FakeRelay(pan))
 	assert "FOV→galvo" in fire_note
 	assert fired[0]["x"] != pytest.approx(float(pts[0]["x"]), abs=0.01)
-	# Round-trip through the panned geom recovers the FOV fraction.
 	g2 = fetch_scan_geometry(FakeRelay(pan))
 	rx, ry = galvo_to_fraction(float(fired[0]["x"]), float(fired[0]["y"]), g2)
 	assert rx == pytest.approx(float(fov_pts[0]["x"]), abs=1e-5)
 	assert ry == pytest.approx(float(fov_pts[0]["y"]), abs=1e-5)
 
 
-def test_rig_points_need_wide_scan_at_zoom1_gts():
-	"""Zoom-1 ``-gts`` ≈ 4.20 is full width; rig-saved |galvo|~3.6 is outside that FOV."""
+def test_rig_scan_puts_all_picked_points_in_frame():
+	# PV 6.1 on the rig at zoom 1: amplitude 4.2035577285, center 0 on both axes.
 	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
 	out = overlay_points(pts, fetch_scan_geometry(FakeRelay(ZOOM1)))
-	assert "outside the current scan" in out["note"]
-	# Wide amp + center 0 fits them all.
-	wide_g = {
-		("currentScanAmplitude", "XAxis"): "8.0",
-		("currentScanAmplitude", "YAxis"): "8.0",
-		("currentScanCenter", "XAxis"): "0",
-		("currentScanCenter", "YAxis"): "0",
-	}
-	wide = overlay_points(pts, fetch_scan_geometry(FakeRelay(wide_g)))
-	assert all(0 <= p["fx"] <= 1 and 0 <= p["fy"] <= 1 for p in wide["points"])
-	assert "outside" not in wide["note"]
+	assert all(0 <= p["fx"] <= 1 and 0 <= p["fy"] <= 1 for p in out["points"])
+	assert out["note"] == "PV scan X 0 ± 4.20356, Y 0 ± 4.20356"
+	p1 = out["points"][0]
+	assert round(p1["fx"] * 512) == 58 and round(p1["fy"] * 512) == 33
 
 
 def test_points_outside_scan_are_counted():
@@ -175,7 +173,6 @@ def test_galvo_points_wait_for_geometry():
 
 
 def test_empty_pool_has_no_note():
-	# A geometry-only note with no points used to shrink the live FOV on load.
 	assert overlay_points([], {"amp_x": 4.2, "amp_y": 4.2, "ctr_x": 0.0, "ctr_y": 0.0}) == {
 		"points": [],
 		"note": "",
@@ -200,7 +197,6 @@ def test_live_feed_keeps_geometry_after_dropped_session():
 	assert feed._poll_geometry(FakeRelay(GEOM)) == 2.0
 	geom_ok, _ = feed.scan_geometry()
 	assert geom_ok is not None
-	# A later drop must not wipe amplitude/center (that hid galvo MP overlays).
 	wait = feed._poll_geometry(Dropped())
 	assert wait == 30.0
 	assert "paused" in feed.scan_geometry_error() or "last scan" in feed.scan_geometry_error()
@@ -213,9 +209,8 @@ def test_live_feed_keeps_geometry_after_dropped_session():
 def test_points_for_image_maps_galvo_for_scoring():
 	from prairie_live.scan_geometry import points_for_image
 
-	# Point near center stays in-frame at zoom-1 width.
 	rig = {"amp_x": 4.2035577285, "amp_y": 4.2035577285, "ctr_x": 0.0, "ctr_y": 0.0}
-	pts = [{"id": "7", "x": 0.70059295475, "y": -0.5}]
+	pts = [{"id": "7", "x": 0.70059295475, "y": -2.02004301952917}]
 	out = points_for_image(pts, rig)
 	assert out[0]["id"] == "7"
 	assert 0 < out[0]["x"] < 1 and 0 < out[0]["y"] < 1
@@ -229,8 +224,8 @@ def test_prepare_points_for_slm_maps_galvo_via_relay():
 	class FakeRelay:
 		def get_state(self, key, index):
 			vals = {
-				("currentScanAmplitude", "XAxis"): 7.6,
-				("currentScanAmplitude", "YAxis"): 7.6,
+				("currentScanAmplitude", "XAxis"): 4.2,
+				("currentScanAmplitude", "YAxis"): 4.2,
 				("currentScanCenter", "XAxis"): 0.0,
 				("currentScanCenter", "YAxis"): 0.0,
 			}
@@ -241,7 +236,6 @@ def test_prepare_points_for_slm_maps_galvo_via_relay():
 	assert "mapped" in note
 	assert 0 < out[0]["x"] < 1 and 0 < out[0]["y"] < 1
 	assert out[0]["x_galvo"] == 0.7
-	# Already FOV → unchanged path.
 	fov = [{"id": "1", "x": 0.2, "y": 0.3}]
 	got, note2 = prepare_points_for_slm(fov, None)
 	assert "already" in note2
@@ -262,12 +256,12 @@ def test_points_for_slm_fire_remaps_galvo_with_live_amp():
 	)
 
 	stale = {
-		("currentScanAmplitude", "XAxis"): "9.0",
-		("currentScanAmplitude", "YAxis"): "9.0",
+		("currentScanAmplitude", "XAxis"): "6.0",
+		("currentScanAmplitude", "YAxis"): "6.0",
 		("currentScanCenter", "XAxis"): "0",
 		("currentScanCenter", "YAxis"): "0",
 	}
-	live = dict(GEOM)
+	live = dict(ZOOM1)
 	raw = extract_unique_points(load_mark_points_file("samples/MarkPoints_25_trig_in1.xml"))
 	locked, _ = prepare_points_for_live_fov(raw, FakeRelay(stale))
 	p11 = next(p for p in locked if str(p["id"]) == "11")
@@ -308,16 +302,10 @@ def test_slm_fire_converts_pvsaved_spiral_size_not_as_fov_frac():
 
 	raw = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
 	assert raw[0].get("spiral_space") == "galvo"
-	wide = {
-		("currentScanAmplitude", "XAxis"): "8.0",
-		("currentScanAmplitude", "YAxis"): "8.0",
-		("currentScanCenter", "XAxis"): "0",
-		("currentScanCenter", "YAxis"): "0",
-	}
-	# No µm override → galvo SpiralSize / |amp|.
-	fire, spiral, note = points_for_slm_fire([raw[0]], FakeRelay(wide))
+	# No µm override → galvo SpiralSize / (2·|amp|).
+	fire, spiral, note = points_for_slm_fire([raw[0]], FakeRelay(ZOOM1))
 	assert "spiral_fov" in note
-	correct = 0.184901809118501 / 8.0
+	correct = 0.184901809118501 / (2 * 4.2035577285)
 	assert spiral == pytest.approx(correct, abs=1e-5)
 	assert spiral != pytest.approx(0.184901809118501, abs=1e-3)
 	assert fire[0].get("spiral_space") == "galvo"
@@ -329,7 +317,7 @@ def test_score_galvo_points_after_mapping():
 	from prairie_live.scan_geometry import points_for_image
 	from prairie_live.sync_loop import score_points_dff
 
-	rig = {"amp_x": 7.6, "amp_y": 7.6, "ctr_x": 0.0, "ctr_y": 0.0}
+	rig = {"amp_x": 4.2, "amp_y": 4.2, "ctr_x": 0.0, "ctr_y": 0.0}
 	pts = [{"id": "7", "x": 0.7, "y": -2.0}]
 	mapped = points_for_image(pts, rig)
 	h = w = 64
@@ -338,7 +326,6 @@ def test_score_galvo_points_after_mapping():
 	cx = int(round(mapped[0]["x"] * (w - 1)))
 	cy = int(round(mapped[0]["y"] * (h - 1)))
 	f1[max(cy - 2, 0) : cy + 3, max(cx - 2, 0) : cx + 3] = 4.0
-	# Without mapping, galvo coords are skipped.
 	assert score_points_dff([f0], [f1], pts, radius=2) == {}
 	got = score_points_dff([f0], [f1], mapped, radius=2)
 	assert "7" in got and got["7"] > 0.5
