@@ -2025,8 +2025,9 @@ def _slm_fire_points(
 ) -> tuple[list[dict], float | None]:
 	"""Galvo→FOV convert only (Live stays on).
 
-	``-gts`` after Live off hangs PV. Prefer LiveFeed-cached geom; never leave
-	Live off here — ``_fire_mark_all_points`` does Live off then ``-slm``.
+	``-gts`` after Live off hangs PV. Prefer LiveFeed-cached geom; never Live-off
+	here. Trig In 1 arms via ``_fire_mark_all_points(ensure_live_off=True)``;
+	Trigger=None must keep Live on or -slm returns DONE with no burns.
 	"""
 	from prairie_live.scan_geometry import is_fraction_space, points_for_slm_fire
 
@@ -2096,7 +2097,7 @@ def _slm_fire_points(
 				flush=True,
 			)
 	# Do NOT Live-off here — a gap before -slm left PV idle with Live off and
-	# no MarkAllPoints. _fire_mark_all_points turns Live off then fires.
+	# no MarkAllPoints. Live off (if needed) happens inside _fire_mark_all_points.
 	return fire_pts, spiral_fov
 
 
