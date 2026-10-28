@@ -288,20 +288,29 @@ class Handler(BaseHTTPRequestHandler):
 
 	def _parse_xml(self, raw: bytes) -> None:
 		try:
+			import base64
+			import time
+
 			body = json.loads(raw.decode("utf-8") or "{}")
 			path = body.get("path")
 			b64 = body.get("content_b64")
 			name = body.get("name") or "upload.xml"
 			if b64:
-				import base64
-
+				# Unique path every Choose File — same filename used to overwrite
+				# the first upload and leave the UI stuck on the old series.
 				STATE.xml_dir.mkdir(parents=True, exist_ok=True)
-				path = str(STATE.xml_dir / Path(name).name)
-				Path(path).write_bytes(base64.b64decode(b64))
+				safe = Path(name).name or "upload.xml"
+				path = str(STATE.xml_dir / f"{int(time.time() * 1000)}_{safe}")
+				raw_xml = base64.b64decode(b64)
+				if not raw_xml.strip():
+					raise ValueError("uploaded XML is empty")
+				Path(path).write_bytes(raw_xml)
 			if not path or not Path(path).is_file():
 				raise ValueError("choose a Fat Mark Points XML")
 			fields = summarize_fat_xml(path)
 			pts = extract_unique_points(load_mark_points_file(path))
+			if not pts:
+				raise ValueError(f"no Mark Points in {Path(path).name}")
 			ng = n_groups_for_pool(len(pts))
 			sizes = group_sizes_for_pool(len(pts), n_groups=ng)
 			STATE.series_path = path
@@ -315,10 +324,15 @@ class Handler(BaseHTTPRequestHandler):
 				{
 					"ok": True,
 					"path": path,
+					"name": Path(name).name,
+					"n_points": len(pts),
 					"fields": fields,
 					"n_groups": ng,
 					"group_sizes": sizes,
-					"plan": f"{len(pts)} points → {len(sizes)} groups ({'+'.join(map(str, sizes))})",
+					"plan": (
+						f"{Path(name).name}: {len(pts)} points → "
+						f"{len(sizes)} groups ({'+'.join(map(str, sizes))})"
+					),
 				},
 			)
 		except Exception as exc:
@@ -330,8 +344,11 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		try:
 			body = json.loads(raw.decode("utf-8"))
+			# Prefer last successful Choose File path — label text is not a path.
 			series = body.get("series") or STATE.series_path
-			if not series or not Path(series).is_file():
+			if series and not Path(str(series)).is_file():
+				series = STATE.series_path
+			if not series or not Path(str(series)).is_file():
 				raise ValueError("choose a Fat Mark Points XML")
 			powers = parse_powers_field(str(body.get("powers") or ""))
 			pts = extract_unique_points(load_mark_points_file(series))

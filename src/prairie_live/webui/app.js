@@ -231,27 +231,48 @@ function syncTypedPowers() {
 }
 
 async function onXmlFile(ev) {
-  const f = ev.target.files && ev.target.files[0];
+  const input = ev.target;
+  const f = input.files && input.files[0];
   if (!f) return;
-  const b64 = await new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(",")[1] || "");
-    r.onerror = reject;
-    r.readAsDataURL(f);
-  });
-  const res = await jpost("/api/parse-xml", {
-    name: f.name,
-    content_b64: b64,
-    powers: $("powers").value,
-  });
+  // Clear so choosing another file (even same name) always fires change.
+  input.value = "";
+  $("xml_path").textContent = `loading ${f.name}…`;
+  $("plan").textContent = "";
+  let b64;
+  try {
+    b64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1] || "");
+      r.onerror = reject;
+      r.readAsDataURL(f);
+    });
+  } catch (e) {
+    $("xml_path").textContent = `read failed: ${e && e.message ? e.message : e}`;
+    return;
+  }
+  let res;
+  try {
+    res = await jpost("/api/parse-xml", {
+      name: f.name,
+      content_b64: b64,
+      powers: $("powers").value,
+    });
+  } catch (e) {
+    $("xml_path").textContent = String(e && e.message ? e.message : e);
+    return;
+  }
   if (!res.ok) {
     $("xml_path").textContent = res.error || "parse failed";
     return;
   }
-  $("xml_path").textContent = res.path;
-  $("plan").textContent = res.plan || "";
+  // Keep the real path in dataset for Run; label shows which file is active.
+  $("xml_path").dataset.path = res.path || "";
+  $("xml_path").textContent = res.name
+    ? `${res.name} (${res.n_points} pts)`
+    : res.path;
+  $("plan").textContent = res.plan || `${res.n_points || "?"} points`;
   showXmlFields(res.fields || {});
-  refreshPoints();
+  await refreshPoints();
   if (res.fields && res.fields.repetitions) $("repetitions").value = res.fields.repetitions;
   syncTypedPowers();
 }
@@ -409,18 +430,27 @@ async function boot() {
   $("run").addEventListener("click", async () => {
     lastLogText = "";
     $("log").textContent = "starting…";
-    const res = await jpost("/api/run", {
-      series: $("xml_path").textContent,
-      powers: $("powers").value,
-      seed: $("seed").value,
-      repetitions: $("repetitions").value,
-      stim_dff_min: $("stim_dff_min").value,
-      via_relay: $("via_relay").value,
-      serial: $("serial").value,
-      stim_mode: $("stim_mode").value,
-      trigger: $("trigger").value,
-      ...visualRunPayload(),
-    });
+    // dataset.path is the upload on disk; label text is display-only.
+    const series = ($("xml_path").dataset && $("xml_path").dataset.path) || "";
+    let res;
+    try {
+      res = await jpost("/api/run", {
+        series,
+        powers: $("powers").value,
+        seed: $("seed").value,
+        repetitions: $("repetitions").value,
+        stim_dff_min: $("stim_dff_min").value,
+        via_relay: $("via_relay").value,
+        serial: $("serial").value,
+        stim_mode: $("stim_mode").value,
+        trigger: $("trigger").value,
+        ...visualRunPayload(),
+      });
+    } catch (e) {
+      lastLogText = "";
+      $("log").textContent = `Run failed: ${e && e.message ? e.message : e}`;
+      return;
+    }
     if (!res.ok) {
       const err = res.error || "run failed";
       $("save_status").textContent = err;

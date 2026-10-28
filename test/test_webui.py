@@ -273,12 +273,51 @@ def test_web_ui_parse_xml_opens_power_plan(tmp_path):
 		assert res["group_sizes"] == [4, 4]
 		assert "8 points" in res["plan"]
 		assert res["fields"]["n_points"] == 8
+		assert res["n_points"] == 8
 		assert STATE.planned_powers == [75.0, 140.0, 200.0]
 		st_status, _, st_raw = _get(base + "/api/status")
 		assert st_status == 200
 		st = json.loads(st_raw.decode("utf-8"))
 		assert [b["power"] for b in st["boards"]] == [75.0, 140.0, 200.0]
 		assert all(b["ready"] is False for b in st["boards"])
+	finally:
+		httpd.shutdown()
+
+
+def test_web_ui_parse_xml_second_upload_replaces_points(tmp_path):
+	"""Choose File must not stick on the first uploaded series."""
+	import base64
+	import time
+	from pathlib import Path
+
+	from prairie_live.web_app import STATE
+
+	STATE.xml_dir = tmp_path
+	httpd, base = _http_server()
+	try:
+		eight = Path("samples/MarkPoints_8fov.xml").read_bytes()
+		ten = Path("samples/MarkPoints_10fov_trig_in1.xml").read_bytes()
+		s1, r1 = _post(
+			base + "/api/parse-xml",
+			{
+				"name": "MarkPoints_8fov.xml",
+				"content_b64": base64.b64encode(eight).decode("ascii"),
+			},
+		)
+		assert s1 == 200 and r1["ok"] and r1["n_points"] == 8
+		path1 = r1["path"]
+		time.sleep(0.02)
+		s2, r2 = _post(
+			base + "/api/parse-xml",
+			{
+				"name": "MarkPoints_10fov_trig_in1.xml",
+				"content_b64": base64.b64encode(ten).decode("ascii"),
+			},
+		)
+		assert s2 == 200 and r2["ok"] and r2["n_points"] == 10
+		assert r2["path"] != path1
+		assert STATE.series_path == r2["path"]
+		assert len(STATE.points) == 10
 	finally:
 		httpd.shutdown()
 
