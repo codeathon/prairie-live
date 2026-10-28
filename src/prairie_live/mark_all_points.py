@@ -143,7 +143,6 @@ def pack_mark_all_points(
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
 	delay_ms: float = 0.0,
-	scale_power_by_n_spots: bool = False,
 ) -> list[str]:
 	"""
 	Pack many simultaneous sets into one -slm command.
@@ -151,20 +150,18 @@ def pack_mark_all_points(
 	PV grammar: after each set's Trigger[+Count], append Delay ms except on the
 	last set. Software maps trigger pulse i → groups[i] (same order as packed).
 
-	``scale_power_by_n_spots``: multiply UI power by that set's spot count so
-	each hologram matches PV single-spot bleach at the same Powers value.
+	``power`` is the total UI UncagingLaserPower for each hologram set (not
+	scaled by spot count; SLM splits that total across the spots).
 	"""
 	if not groups:
 		raise ValueError("pack_mark_all_points needs at least one group")
 	parts: list[str] = ["-MarkAllPoints"]
 	last = len(groups) - 1
 	for i, gpts in enumerate(groups):
-		n = max(len(gpts), 1)
-		pwr = float(power) * n if scale_power_by_n_spots else float(power)
 		parts.extend(
 			build_set_tokens(
 				gpts,
-				power=pwr,
+				power=power,
 				laser=laser,
 				duration_ms=duration_ms,
 				use_3d=use_3d,

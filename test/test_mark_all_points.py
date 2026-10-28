@@ -128,23 +128,6 @@ def test_rejects_galvo_coords_for_slm():
 		)
 
 
-def test_pack_scales_power_by_spot_count():
-	g0 = [{"id": "1", "x": 0.1, "y": 0.2}, {"id": "2", "x": 0.3, "y": 0.4}]
-	g1 = [{"id": "3", "x": 0.5, "y": 0.6}]
-	parts = pack_mark_all_points(
-		[g0, g1],
-		power=150,
-		spiral=False,
-		trigger_selection="None",
-		scale_power_by_n_spots=True,
-	)
-	# First set: 2 spots → 300; second: 1 spot → 150.
-	assert parts[parts.index("Monaco") + 1] == "300"
-	# Second Monaco is the second set's laser token.
-	i1 = parts.index("Monaco", parts.index("Monaco") + 1)
-	assert parts[i1 + 1] == "150"
-
-
 def test_stim_params_from_meta():
 	meta = {
 		"uncaging_laser": "Monaco",

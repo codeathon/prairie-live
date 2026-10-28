@@ -198,8 +198,7 @@ def test_slm_script_power_keeps_ui_scale():
 	from prairie_live.sync_loop import _slm_script_power
 
 	# -slm wants UI UncagingLaserPower, not series XML ÷400.
+	# Powers is total for the hologram (not multiplied by spot count).
 	assert _slm_script_power(160.0, {}) == 160.0
 	assert _slm_script_power(0.75, {}) == 0.75
-	# Simultaneous hologram splits the beam — scale so Powers ≈ per-spot.
-	assert _slm_script_power(150.0, {}, n_spots=4) == 600.0
-	assert _slm_script_power(150.0, {}, n_spots=1) == 150.0
+	assert _slm_script_power(150.0, {}) == 150.0
