@@ -205,19 +205,17 @@ PrairieView writes two spaces for the same targets:
 Conversion (matches PV; implemented in `scan_geometry.py`):
 
 ```
-FOV  = 0.5 + (galvo − currentScanCenter) / (2 · currentScanAmplitude)
-galvo = currentScanCenter + (FOV − 0.5) · (2 · currentScanAmplitude)
-SpiralWidth_FOV = SpiralSize_galvo / (2 · |amp|)
+FOV  = 0.5 + (galvo − currentScanCenter) / currentScanAmplitude
+galvo = currentScanCenter + (FOV − 0.5) · currentScanAmplitude
+SpiralWidth_FOV = SpiralSize_galvo / |amp|
 ```
 
-`currentScanAmplitude` is the scan **half-width** (read with `-gts`). Classic
-`stim_mode=slm` remaps galvo→FOV at fire time with LiveScan on, so a `.gpl` is
-usable; a post-run FOV XML works as-is. Keep zoom fixed between export and fire
-(or re-read amp/center).
+`currentScanAmplitude` from `-gts` is the scan **full width** in volts
+(frame = center ± amp/2). Classic `stim_mode=slm` remaps galvo→FOV at fire
+time with LiveScan on. Using `2·amp` by mistake compressed points halfway
+toward center (burns far from cyan rings).
 
-**SpiralSize trap:** never-run PVSaved files store spiral in **galvo volts**
-(often ~0.02–0.2). That range overlaps FOV fractions. Sending `0.185` V to
-`-MarkAllPoints` as FOV fraction spreads the beam ~70× thinner than the real
-~2% spiral — shutters click, no visible burns, while the same UI power works
-on post-run FOV XMLs. Fire path always divides galvo `SpiralSize` by
-`2·|amp|`.
+**SpiralSize / power:** never-run PVSaved `SpiralSize` is galvo volts. For
+`-slm`, the GUI prefers lab spiral **54.5 µm / FOV µm** (≈0.048, same as
+working post-run FOV XMLs) so bleach strength matches at UI power 160.
+`-slm` power is the Mark Points UI scale (160, not XML fraction 0.4).
