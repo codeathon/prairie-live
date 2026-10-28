@@ -265,8 +265,23 @@ class Relay:
 				"timeout": float(payload.get("timeout") or 180.0),
 				"no_wait": bool(payload["no_wait"]) if "no_wait" in payload else False,
 			}
+			# Hold grab for the whole off→-slm window so nothing can sneak a
+			# -LiveScan on between ensure_live_off and MarkAllPoints.
 			self._stim_hold.set()
 			try:
+				ensure = payload.get("ensure_live_off", True)
+				if ensure and hasattr(pv, "ensure_live_off"):
+					off = pv.ensure_live_off(
+						attempts=int(payload.get("live_off_attempts") or 3),
+						settle_s=float(payload.get("live_off_settle_s") or 0.3),
+					)
+					if isinstance(off, dict) and off.get("ok") is False:
+						return {
+							"ok": False,
+							"error": f"LiveScan still on before -slm: {off}",
+							"cmd": "mark_all_points",
+						}
+					print("mark_all_points: LiveScan off ensured under stim hold", flush=True)
 				out = pv.mark_all_points(parts, **kw)
 			finally:
 				self._stim_hold.clear()

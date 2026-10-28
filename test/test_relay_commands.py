@@ -152,8 +152,41 @@ def test_stim_hold_pauses_grab_during_mark_all_points():
 	parts = ["-MarkAllPoints", "1", "False", "0.1", "0.2", "10", "Monaco", "0.75", "None"]
 	assert not r._stim_hold.is_set()
 	# mark_all_points clears hold in finally even on success.
-	assert r.handle_command({"cmd": "mark_all_points", "parts": parts})["ok"] is True
+	assert r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"ensure_live_off": True,
+			"live_off_attempts": 2,
+			"live_off_settle_s": 0,
+		}
+	)["ok"] is True
 	assert not r._stim_hold.is_set()
+	cmds = _cmds(r)
+	assert cmds.count(("-LiveScan", "off")) == 2
+	assert any(c[0] == "-Silent" for c in cmds)
+
+
+def test_mark_all_points_ensures_live_off_before_slm():
+	r = _relay()
+	parts = ["-MarkAllPoints", "1", "False", "0.5", "0.5", "36", "Monaco", "160", "Trig In 1", "1"]
+	out = r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"ensure_live_off": True,
+			"live_off_attempts": 3,
+			"live_off_settle_s": 0,
+		}
+	)
+	assert out["ok"] is True
+	cmds = _cmds(r)
+	assert cmds[:3] == [
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+	]
+	assert ("-Silent", "-Abort") not in cmds
 
 
 def test_live_off_stops_scan_without_abort():

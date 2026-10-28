@@ -131,9 +131,18 @@ class RelayClient:
 		wait_ms: float = 0.0,
 		no_wait: bool | None = None,
 		timeout: float | None = None,
+		ensure_live_off: bool = True,
 	) -> dict:
-		"""Simultaneous SLM fire (-MarkAllPoints / -slm) on the scope."""
-		payload: dict = {"cmd": "mark_all_points", "parts": list(parts)}
+		"""Simultaneous SLM fire (-MarkAllPoints / -slm) on the scope.
+
+		By default the relay ensures ``-LiveScan off`` under the same stim-hold
+		lock as ``-slm`` so nothing can turn Live back on in between.
+		"""
+		payload: dict = {
+			"cmd": "mark_all_points",
+			"parts": list(parts),
+			"ensure_live_off": bool(ensure_live_off),
+		}
 		if wait_ms and float(wait_ms) > 0:
 			payload["wait_ms"] = float(wait_ms)
 		if no_wait is not None:

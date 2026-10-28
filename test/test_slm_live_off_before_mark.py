@@ -1,4 +1,4 @@
-"""Live off must be ensured, then -MarkAllPoints with no idle gap."""
+"""Live off must be ensured under the same hold as -MarkAllPoints."""
 
 import pytest
 
@@ -9,6 +9,7 @@ class _FakeRelay:
 	def __init__(self, *, fail_times: int = 0) -> None:
 		self.calls: list[str] = []
 		self._fail_left = int(fail_times)
+		self.last_ensure: bool | None = None
 
 	def stop_live(self) -> dict:
 		self.calls.append("stop_live")
@@ -17,12 +18,14 @@ class _FakeRelay:
 			return {"ok": False, "error": "still live"}
 		return {"ok": True, "cmd": "live_off", "attempts": 3}
 
-	def mark_all_points(self, parts, **_kw) -> dict:
+	def mark_all_points(self, parts, **kw) -> dict:
+		self.last_ensure = kw.get("ensure_live_off")
 		self.calls.append("mark_all_points:" + ",".join(str(p) for p in parts[:2]))
 		return {"ok": True}
 
 
-def test_fire_mark_all_points_stops_live_then_sends_slm():
+def test_fire_mark_all_points_asks_relay_to_ensure_live_off():
+	# Client must not Live-off then release — relay does off+-slm atomically.
 	relay = _FakeRelay()
 	_fire_mark_all_points(
 		parts=["-MarkAllPoints", "1", "False", "0.5", "0.5", "36", "Monaco", "160", "Trig In 1", "1"],
@@ -32,8 +35,10 @@ def test_fire_mark_all_points_stops_live_then_sends_slm():
 		via_relay=True,
 		timeout=5.0,
 	)
-	assert relay.calls[0] == "stop_live"
-	assert relay.calls[1].startswith("mark_all_points:")
+	assert relay.calls == [
+		"mark_all_points:-MarkAllPoints,1",
+	]
+	assert relay.last_ensure is True
 
 
 def test_stop_live_for_stim_retries_until_ok():

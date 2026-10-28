@@ -1441,7 +1441,10 @@ def _run_slm_single_trial(
 			flush=True,
 		)
 		print(f"  -slm argv: {' '.join(slm_parts)}", flush=True)
-		# Always restore Live — hang/timeout used to leave Live off forever.
+		# Restore Live after a normal burn. If -slm finished before DTR, do
+		# NOT bounce Live on here — that made it look like Live was on during
+		# the failed arm (the real restart is this finally, not a race mid-slm).
+		early_done = False
 		try:
 			run_while_pulsing_dtr(
 				_do_slm,
@@ -1459,19 +1462,30 @@ def _run_slm_single_trial(
 				on_stuck=_unstick,
 			)
 			print(f"  group {gi + 1}/{n_groups}: -slm DONE")
+		except RuntimeError as exc:
+			early_done = "finished before the first DTR" in str(exc)
+			raise
 		finally:
-			_slm_group_idle(
-				relay=relay,
-				pl=pl,
-				via_relay=via_relay,
-				ttl=ttl,
-				settle_s=settle_s,
-				label=f"END group {gi + 1}/{n_groups}",
-			)
-			print(
-				f"  END group {gi + 1}/{n_groups}: Live on · "
-				f"idled {settle_s:g}s before next"
-			)
+			if early_done:
+				if ttl is not None and hasattr(ttl, "set_dtr"):
+					ttl.set_dtr(False)
+				print(
+					f"  END group {gi + 1}/{n_groups}: left Live OFF "
+					"(early -slm DONE — not restoring Live so state matches arm)"
+				)
+			else:
+				_slm_group_idle(
+					relay=relay,
+					pl=pl,
+					via_relay=via_relay,
+					ttl=ttl,
+					settle_s=settle_s,
+					label=f"END group {gi + 1}/{n_groups}",
+				)
+				print(
+					f"  END group {gi + 1}/{n_groups}: Live on · "
+					f"idled {settle_s:g}s before next"
+				)
 		if want:
 			# Baseline after Live is back; empty if grab is still dark.
 			if f0_s > 0:
@@ -2091,29 +2105,35 @@ def _fire_mark_all_points(
 	no_wait: bool = False,
 	timeout: float = 180.0,
 ) -> None:
-	"""Ensure Live off, then -MarkAllPoints (-slm) immediately.
+	"""Ensure Live off then -MarkAllPoints under one stim-hold (no Live-on gap).
 
-	PV 6.1: Live on → -slm returns DONE without waiting on Trig In 1. Convert
-	may leave Live on; this path verifies off (retry) then arms with no gap.
+	PV 6.1: Live on → -slm returns DONE without waiting on Trig In 1. Via relay,
+	off + -slm run in one command so LiveFeed / post-run clear / grab cannot
+	sneak ``-LiveScan on`` between them.
 	"""
-	_stop_live_for_stim(
-		relay=relay, pl=pl, via_relay=via_relay, label="pre-slm"
-	)
 	print(
-		f"  LiveScan off confirmed — sending -MarkAllPoints ({len(parts)} tokens)…",
+		f"  sending -MarkAllPoints ({len(parts)} tokens; ensure Live off first)…",
 		flush=True,
 	)
 	if via_relay:
 		if relay is None:
 			raise RuntimeError("via_relay set but relay client is not connected")
+		# Relay ensures Live off under the same hold as -slm (no interleave).
 		out = relay.mark_all_points(
-			parts, wait_ms=wait_ms, no_wait=no_wait, timeout=timeout
+			parts,
+			wait_ms=wait_ms,
+			no_wait=no_wait,
+			timeout=timeout,
+			ensure_live_off=True,
 		)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay mark_all_points failed: {out}")
 		return
 	if pl is None:
 		raise RuntimeError("need PrairieLink or --via-relay for stim_mode=slm")
+	_stop_live_for_stim(
+		relay=None, pl=pl, via_relay=False, label="pre-slm"
+	)
 	tokens = [str(p) for p in parts]
 	if wait_ms and float(wait_ms) > 0:
 		pl.send_command("-Wait", str(int(round(float(wait_ms)))))
