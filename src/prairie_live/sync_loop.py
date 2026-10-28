@@ -1050,6 +1050,7 @@ def _run_slm_packed_batch(
 		_pre_stim_delay(wait_ms=init_ms, pl=pl, via_relay=via_relay)
 
 		def _do_packed() -> None:
+			# Packed + DTR ⇒ Trig In 1 — Live must be off under the same hold.
 			_fire_mark_all_points(
 				parts=slm_parts,
 				wait_ms=0.0,
@@ -1058,6 +1059,7 @@ def _run_slm_packed_batch(
 				via_relay=via_relay,
 				no_wait=False,
 				timeout=mp_timeout,
+				ensure_live_off=True,
 			)
 
 		def _on_pulse(i: int) -> None:
@@ -1102,6 +1104,12 @@ def _run_slm_packed_batch(
 	else:
 		if want and not dry_run:
 			f0_shared = _collect_frames(relay, f0_s, frame_poll_s)
+		# Trigger=None packed: keep Live on so -slm uncages (off → no burns).
+		live_off = _slm_needs_live_off(trig_sel)
+		if not live_off and not dry_run:
+			_ensure_live_after_stim(
+				relay=relay, pl=pl, via_relay=via_relay, label="pre-slm-none"
+			)
 		_fire_mark_all_points(
 			parts=slm_parts,
 			wait_ms=float(slm_params.get("initial_delay_ms") or 0),
@@ -1110,6 +1118,7 @@ def _run_slm_packed_batch(
 			via_relay=via_relay,
 			no_wait=False,
 			timeout=mp_timeout,
+			ensure_live_off=live_off,
 		)
 		print(f"  packed -slm power={power} n_groups={n} (awaiting {n} triggers)")
 		print("  pulse map:")
@@ -1408,6 +1417,7 @@ def _run_slm_single_trial(
 				f"  group {gi + 1}/{n_groups}: sending -MarkAllPoints to relay…",
 				flush=True,
 			)
+			# Serial + Trig In 1: Live off under the same hold as -slm.
 			_fire_mark_all_points(
 				parts=slm_parts,
 				wait_ms=0.0,
@@ -1416,6 +1426,7 @@ def _run_slm_single_trial(
 				via_relay=via_relay,
 				no_wait=False,
 				timeout=slm_timeout,
+				ensure_live_off=True,
 			)
 
 		def _unstick() -> None:
@@ -1496,8 +1507,15 @@ def _run_slm_single_trial(
 				f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
 			f1_frames = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
 	else:
+		# trigger=none (or wait without DTR): -slm fires immediately. Live must
+		# stay ON — forcing off here was the silent no-burns regression.
+		live_off = _slm_needs_live_off(trig_sel)
 		if want and not dry_run and not visual_cfg.enabled:
 			f0_frames = _collect_frames(relay, f0_s, frame_poll_s)
+		if not live_off and not dry_run:
+			_ensure_live_after_stim(
+				relay=relay, pl=pl, via_relay=via_relay, label="pre-slm-none"
+			)
 		print("  sending -MarkAllPoints to relay…", flush=True)
 		_fire_mark_all_points(
 			parts=slm_parts,
@@ -1507,6 +1525,7 @@ def _run_slm_single_trial(
 			via_relay=via_relay,
 			no_wait=False,
 			timeout=max(180.0, wait_s + 60.0),
+			ensure_live_off=live_off,
 		)
 		print(
 			f"  single -slm trial {trial_index}: {gname} "
@@ -2010,8 +2029,9 @@ def _slm_fire_points(
 ) -> tuple[list[dict], float | None]:
 	"""Galvo→FOV convert only (Live stays on).
 
-	``-gts`` after Live off hangs PV. Prefer LiveFeed-cached geom; never leave
-	Live off here — ``_fire_mark_all_points`` does Live off then ``-slm``.
+	``-gts`` after Live off hangs PV. Prefer LiveFeed-cached geom; never Live-off
+	here. Trig In 1 arms via ``_fire_mark_all_points(ensure_live_off=True)``;
+	Trigger=None must keep Live on or -slm returns DONE with no burns.
 	"""
 	from prairie_live.scan_geometry import is_fraction_space, points_for_slm_fire
 
@@ -2081,7 +2101,7 @@ def _slm_fire_points(
 				flush=True,
 			)
 	# Do NOT Live-off here — a gap before -slm left PV idle with Live off and
-	# no MarkAllPoints. _fire_mark_all_points turns Live off then fires.
+	# no MarkAllPoints. Live off (if needed) happens inside _fire_mark_all_points.
 	return fire_pts, spiral_fov
 
 
@@ -2099,6 +2119,15 @@ def _slm_script_power(power: float, meta: dict | None = None) -> float:
 	return float(power)
 
 
+def _slm_needs_live_off(trig_sel: str) -> bool:
+	"""True when -slm waits on a BNC (Trig In 1) — Live must be off to arm.
+
+	Trigger=None fires immediately and needs Live *on* to uncage. Forcing Live
+	off for None makes PV return DONE with no burn spots (silent no-fire).
+	"""
+	return str(trig_sel or "None").strip().lower() not in ("none", "")
+
+
 def _fire_mark_all_points(
 	*,
 	parts: list[str],
@@ -2108,36 +2137,41 @@ def _fire_mark_all_points(
 	via_relay: bool,
 	no_wait: bool = False,
 	timeout: float = 180.0,
+	ensure_live_off: bool = True,
 ) -> None:
-	"""Ensure Live off then -MarkAllPoints under one stim-hold (no Live-on gap).
+	"""Send -MarkAllPoints; optionally Live-off under the same stim-hold.
 
-	PV 6.1: Live on → -slm returns DONE without waiting on Trig In 1. Via relay,
-	off + -slm run in one command so LiveFeed / post-run clear / grab cannot
-	sneak ``-LiveScan on`` between them.
+	PV 6.1 + Trig In 1: Live on → -slm returns DONE without waiting (early DONE).
+	Via relay, off + -slm run in one command so LiveFeed cannot sneak Live on.
+
+	Trigger=None: leave Live on (``ensure_live_off=False``) so the hologram
+	actually uncages — off + None → DONE with no burns.
 	"""
+	live_note = "ensure Live off first" if ensure_live_off else "Live stays on (Trigger=None)"
 	print(
-		f"  sending -MarkAllPoints ({len(parts)} tokens; ensure Live off first)…",
+		f"  sending -MarkAllPoints ({len(parts)} tokens; {live_note})…",
 		flush=True,
 	)
 	if via_relay:
 		if relay is None:
 			raise RuntimeError("via_relay set but relay client is not connected")
-		# Relay ensures Live off under the same hold as -slm (no interleave).
+		# When ensure_live_off, relay holds grab for the whole off→-slm window.
 		out = relay.mark_all_points(
 			parts,
 			wait_ms=wait_ms,
 			no_wait=no_wait,
 			timeout=timeout,
-			ensure_live_off=True,
+			ensure_live_off=bool(ensure_live_off),
 		)
 		if not out.get("ok", False):
 			raise RuntimeError(f"relay mark_all_points failed: {out}")
 		return
 	if pl is None:
 		raise RuntimeError("need PrairieLink or --via-relay for stim_mode=slm")
-	_stop_live_for_stim(
-		relay=None, pl=pl, via_relay=False, label="pre-slm"
-	)
+	if ensure_live_off:
+		_stop_live_for_stim(
+			relay=None, pl=pl, via_relay=False, label="pre-slm"
+		)
 	tokens = [str(p) for p in parts]
 	if wait_ms and float(wait_ms) > 0:
 		pl.send_command("-Wait", str(int(round(float(wait_ms)))))
