@@ -216,7 +216,20 @@ class Relay:
 			# PV 6.1 needs explicit on|off; off must precede -slm/-mp.
 			state = str(payload.get("state") or "on").strip().lower()
 			if state in ("off", "0", "false"):
-				return pv.stop_live()
+				# Pause -gi so grab cannot race / restart Live under us.
+				self._stim_hold.set()
+				try:
+					if hasattr(pv, "ensure_live_off"):
+						return pv.ensure_live_off(
+							attempts=int(payload.get("attempts") or 3),
+							settle_s=float(payload.get("settle_s") or 0.3),
+						)
+					return pv.stop_live()
+				finally:
+					# Leave hold set only if a stim cmd will clear it; otherwise
+					# release so post-stim Live on / FOV can resume.
+					if not pv._blocking_stim:
+						self._stim_hold.clear()
 			return pv.start_live()
 		if cmd == "get_state":
 			return pv.get_state(

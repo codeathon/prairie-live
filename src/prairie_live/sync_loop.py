@@ -1906,30 +1906,57 @@ def _stop_live_for_stim(
 	via_relay: bool,
 	label: str = "pre-slm",
 ) -> None:
-	"""-LiveScan off before -slm/-mp. PV 6.1 will not stop Live for us.
+	"""Ensure ``-LiveScan off`` before -slm/-mp (retry until it sticks).
 
 	Leaving Live on makes -slm return DONE without waiting on Trig In 1
-	(\"finished before the first DTR\"). Prefer off over Abort.
+	(\"finished before the first DTR\"). Prefer verified off over Abort.
 	"""
 	if via_relay and relay is not None and hasattr(relay, "stop_live"):
-		try:
-			out = relay.stop_live()
-			print(f"  {label}: -LiveScan off (so -slm can arm Trig In 1)")
-			if isinstance(out, dict) and out.get("ok") is False:
-				print(f"  WARNING: -LiveScan off failed: {out}")
-		except Exception as exc:
-			print(f"  WARNING: -LiveScan off ({label}) failed: {exc}")
-		return
+		out: dict[str, Any] | None = None
+		last_exc: Exception | None = None
+		for attempt in range(1, 4):
+			try:
+				out = relay.stop_live()
+				ok = not isinstance(out, dict) or out.get("ok", True) is not False
+				print(
+					f"  {label}: ensure -LiveScan off "
+					f"(attempt {attempt}/3, so -slm can arm Trig In 1)"
+				)
+				if ok:
+					time.sleep(0.2)
+					return
+				print(f"  WARNING: -LiveScan off not ok: {out}")
+			except Exception as exc:
+				last_exc = exc
+				print(f"  WARNING: -LiveScan off ({label}) failed: {exc}")
+			time.sleep(0.35)
+		raise RuntimeError(
+			f"{label}: could not ensure LiveScan off before arm "
+			f"(last={out!r}, err={last_exc!r}). "
+			"Click Live off in PV, then Stop and retry."
+		)
 	if via_relay and relay is not None and hasattr(relay, "start_live"):
 		# Older relay without stop_live — best-effort bare off via get_state? skip.
 		print(f"  {label}: WARNING relay has no stop_live — upgrade relay on scope PC")
 		return
 	if pl is not None:
-		try:
-			pl.send_command("-LiveScan", "off")
-			print(f"  {label}: -LiveScan off (so -slm can arm Trig In 1)")
-		except Exception as exc:
-			print(f"  WARNING: -LiveScan off ({label}) failed: {exc}")
+		last_exc = None
+		for attempt in range(1, 4):
+			try:
+				pl.send_command("-LiveScan", "off")
+				print(
+					f"  {label}: ensure -LiveScan off "
+					f"(attempt {attempt}/3, so -slm can arm Trig In 1)"
+				)
+				time.sleep(0.3)
+				return
+			except Exception as exc:
+				last_exc = exc
+				print(f"  WARNING: -LiveScan off ({label}) failed: {exc}")
+				time.sleep(0.35)
+		raise RuntimeError(
+			f"{label}: could not ensure LiveScan off before arm ({last_exc!r})"
+		)
 
 
 def _slm_group_idle(
@@ -1963,11 +1990,10 @@ def _slm_fire_points(
 	dry_run: bool,
 	log_prefix: str = "  ",
 ) -> tuple[list[dict], float | None]:
-	"""Galvo→FOV convert, then Live **off**, then ready for -slm.
+	"""Galvo→FOV convert only (Live stays on).
 
-	Order matters: ``-gts`` after Live off was hanging on the scope (relay showed
-	amp/center X then silence — no ``-MarkAllPoints``). Read geometry while Live
-	is still on, do the conversion in Python, *then* Live off for Trig In 1.
+	``-gts`` after Live off hangs PV. Prefer LiveFeed-cached geom; never leave
+	Live off here — ``_fire_mark_all_points`` does Live off then ``-slm``.
 	"""
 	from prairie_live.scan_geometry import is_fraction_space, points_for_slm_fire
 
@@ -2036,12 +2062,8 @@ def _slm_fire_points(
 				f"{log_prefix}  P{p['id']} FOV ({float(p['x']):.4f},{float(p['y']):.4f})",
 				flush=True,
 			)
-
-	# Live off only after conversion — required before -slm Trig In 1 on PV 6.1.
-	_stop_live_for_stim(
-		relay=relay, pl=pl, via_relay=via_relay, label=f"{log_prefix.strip()}pre-slm"
-	)
-	time.sleep(0.25)
+	# Do NOT Live-off here — a gap before -slm left PV idle with Live off and
+	# no MarkAllPoints. _fire_mark_all_points turns Live off then fires.
 	return fire_pts, spiral_fov
 
 
@@ -2069,11 +2091,18 @@ def _fire_mark_all_points(
 	no_wait: bool = False,
 	timeout: float = 180.0,
 ) -> None:
-	"""Send -MarkAllPoints (-slm); prefer relay when via_relay.
+	"""Ensure Live off, then -MarkAllPoints (-slm) immediately.
 
-	Keep ``no_wait=False`` for photostim: pulse DTR while this blocks (stim_fire).
-	For serial+DTR, call ``_script_wait`` first, then this with ``wait_ms=0``.
+	PV 6.1: Live on → -slm returns DONE without waiting on Trig In 1. Convert
+	may leave Live on; this path verifies off (retry) then arms with no gap.
 	"""
+	_stop_live_for_stim(
+		relay=relay, pl=pl, via_relay=via_relay, label="pre-slm"
+	)
+	print(
+		f"  LiveScan off confirmed — sending -MarkAllPoints ({len(parts)} tokens)…",
+		flush=True,
+	)
 	if via_relay:
 		if relay is None:
 			raise RuntimeError("via_relay set but relay client is not connected")

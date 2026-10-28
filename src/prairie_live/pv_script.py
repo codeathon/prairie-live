@@ -273,8 +273,35 @@ class PvScript:
 		starts. Leaving Live on → -slm returns DONE immediately (no Trig In 1
 		wait) → \"finished before the first DTR\".
 		"""
-		self.send("-LiveScan", "off")
-		return {"ok": True, "cmd": "live_off"}
+		return self.ensure_live_off()
+
+	def ensure_live_off(
+		self, *, attempts: int = 3, settle_s: float = 0.3
+	) -> dict:
+		"""Send ``-LiveScan off`` repeatedly until it sticks, then settle.
+
+		A single off can race grab/-gi or return before PV finishes stopping;
+		arming -slm in that window → DONE before DTR. Retry + settle here.
+		"""
+		attempts = max(int(attempts), 1)
+		last: str | None = None
+		errors: list[str] = []
+		for i in range(attempts):
+			try:
+				last = str(self.send("-LiveScan", "off") or "")
+			except Exception as exc:
+				errors.append(f"{type(exc).__name__}:{exc}")
+				last = None
+			if settle_s > 0:
+				time.sleep(float(settle_s))
+		ok = last is not None or not errors
+		return {
+			"ok": ok,
+			"cmd": "live_off",
+			"attempts": attempts,
+			"pv": last,
+			"errors": errors,
+		}
 
 	def disable_mark_points_metadata(self) -> dict:
 		"""Turn off ad-hoc Mark Points disk saves (persists in PV until changed)."""

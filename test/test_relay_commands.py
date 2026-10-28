@@ -159,8 +159,16 @@ def test_stim_hold_pauses_grab_during_mark_all_points():
 def test_live_off_stops_scan_without_abort():
 	"""PV 6.1: -slm will not wait on Trig In 1 while Live is still running."""
 	r = _relay()
-	assert r.handle_command({"cmd": "live", "state": "off"})["ok"] is True
-	assert _cmds(r) == [("-LiveScan", "off")]
+	out = r.handle_command(
+		{"cmd": "live", "state": "off", "attempts": 3, "settle_s": 0}
+	)
+	assert out["ok"] is True
+	assert out.get("attempts") == 3
+	assert _cmds(r) == [
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+	]
 	assert ("-Silent", "-Abort") not in _cmds(r)
 
 
