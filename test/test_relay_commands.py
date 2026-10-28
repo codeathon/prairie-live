@@ -266,9 +266,21 @@ def test_mark_all_points_waits_whole_ms_then_fires():
 		"Trig In 1",
 		"1",
 	]
-	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1})
+	# Trig In 1: Live off under hold, then -Wait, then -slm.
+	out = r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"wait_ms": 22.1,
+			"ensure_live_off": True,
+			"live_off_attempts": 2,
+			"live_off_settle_s": 0,
+		}
+	)
 	assert out["ok"] is True
 	assert _cmds(r) == [
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
 		("-Wait", "22"),
 		("-Silent", *parts),
 	]
@@ -288,10 +300,19 @@ def test_mark_all_points_no_wait_false_when_trigger_none():
 		"0.75",
 		"None",
 	]
-	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "no_wait": False})
+	# Trigger=None must not Live-off (that yields DONE with no burns).
+	out = r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"no_wait": False,
+			"ensure_live_off": False,
+		}
+	)
 	assert out["ok"] is True
 	assert _cmds(r) == [("-Silent", *parts)]
 	assert out.get("no_wait") is False
+	assert ("-LiveScan", "off") not in _cmds(r)
 
 
 def test_grab_one_stores_gi_frame():
