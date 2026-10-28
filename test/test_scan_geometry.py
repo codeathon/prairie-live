@@ -282,6 +282,32 @@ def test_points_for_slm_fire_rejects_oob():
 		points_for_slm_fire(pts, FakeRelay(tiny))
 
 
+def test_slm_fire_converts_pvsaved_spiral_size_not_as_fov_frac():
+	"""Never-run PVSaved SpiralSize ~0.185 V must not go to -slm as FOV 0.185.
+
+	That bug opened the shutter with ~70× lower fluence than the real spiral
+	(same UI power burned fine on post-run FOV XMLs).
+	"""
+	from prairie_live.scan_geometry import points_for_slm_fire
+
+	rig = {
+		("currentScanAmplitude", "XAxis"): "4.2035577285",
+		("currentScanAmplitude", "YAxis"): "4.2035577285",
+		("currentScanCenter", "XAxis"): "0",
+		("currentScanCenter", "YAxis"): "0",
+	}
+	# Raw extract — no prepare_points_for_live_fov (matches sync_loop fire path).
+	raw = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
+	assert raw[0].get("spiral_space") == "galvo"
+	fire, spiral, note = points_for_slm_fire([raw[0]], FakeRelay(rig))
+	assert "spiral_fov" in note
+	correct = 0.184901809118501 / (2 * 4.2035577285)
+	assert spiral == pytest.approx(correct, abs=1e-5)
+	# Must not be the raw galvo SpiralSize mistaken for FOV fraction.
+	assert spiral != pytest.approx(0.184901809118501, abs=1e-3)
+	assert fire[0].get("spiral_space") == "galvo"
+
+
 def test_score_galvo_points_after_mapping():
 	import numpy as np
 

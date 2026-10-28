@@ -681,7 +681,9 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 		if point_els:
 			for pt_el in point_els:
 				idx = pt_el.attrib.get("Index", str(len(group["points"]) + 1))
-				group["points"].append({
+				# Nested <Point SpiralWidth> is FOV fraction (post-run fat series).
+				sw = pt_el.attrib.get("SpiralWidth", "")
+				row = {
 					"id": str(idx),
 					"name": f"Point {idx}",
 					"is_active": True,
@@ -691,17 +693,20 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 					"duration": dur,
 					"power": pwr,
 					"is_spiral": pt_el.attrib.get("IsSpiral", "False"),
-					"spiral_width": pt_el.attrib.get("SpiralWidth", ""),
+					"spiral_width": sw,
 					"spiral_height": pt_el.attrib.get("SpiralHeight", ""),
 					"spiral_size_um": pt_el.attrib.get("SpiralSizeInMicrons", ""),
-				})
+				}
+				if sw not in (None, "") or pt_el.attrib.get("SpiralSizeInMicrons"):
+					row["spiral_space"] = "fov"
+				group["points"].append(row)
 		elif galvo and "X" in galvo[0].attrib and "Y" in galvo[0].attrib:
 			# PV's saved series: one point per PVGalvoPointElement, X/Y inline
 			# in galvo units, spiral as SpiralSize in the same units.
 			g0 = galvo[0]
 			idx = (indices or str(i + 1)).split(",")[0].strip()
 			size = g0.attrib.get("SpiralSize")
-			group["points"].append({
+			row = {
 				"id": idx,
 				"name": points_attr.strip() or f"Point {idx}",
 				"is_active": True,
@@ -715,7 +720,11 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 				"spiral_height": g0.attrib.get("SpiralHeight", size or ""),
 				"spiral_size_fov": size,
 				"spiral_size_um": g0.attrib.get("SpiralSizeInMicrons", ""),
-			})
+			}
+			# Tag galvo SpiralSize so -slm never treats 0.185 V as FOV fraction.
+			if size not in (None, "") or row["spiral_width"] not in (None, ""):
+				row["spiral_space"] = "galvo"
+			group["points"].append(row)
 		else:
 			names = _split_points_attr(points_attr) or [f"Step {i}"]
 			for j, pname in enumerate(names):

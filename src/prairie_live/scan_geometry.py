@@ -192,6 +192,11 @@ def _spiral_fov_frac_for_slm(
 
 	Prefer PV-saved galvo ``SpiralSize`` / (2·|amp|) so burns match series size.
 	Fall back to spiral_size_um / fov_width_um when the file has no SpiralSize.
+
+	Why not ``0 < s ≤ 1 ⇒ FOV``: PV-saved ``SpiralSize`` is often ~0.02–0.2 V
+	(galvo), which overlaps FOV fractions. Treating 0.185 V as 18% of the FOV
+	spread the beam ~70× thinner than the real ~2% spiral — shutters clicked,
+	no visible burns (same UI power worked on post-run FOV XMLs).
 	"""
 	ax = abs(2.0 * float(geom["amp_x"]))
 	if ax <= 0:
@@ -204,9 +209,16 @@ def _spiral_fov_frac_for_slm(
 		if raw in (None, ""):
 			continue
 		s = float(raw)
-		if space == "fov" or (space != "galvo" and 0.0 < s <= 1.0):
+		if space == "fov":
 			return min(max(s, 0.0), 1.0)
-		# Galvo volts (PV-saved SpiralSize) → fraction of live FOV width.
+		# Explicit galvo, or still carrying pre-remap volts → divide by FOV width.
+		if space == "galvo" or p.get("x_galvo") not in (None, "") or p.get(
+			"y_galvo"
+		) not in (None, ""):
+			return min(max(s / ax, 0.0), 1.0)
+		# Unmarked: values already in 0–1 are FOV SpiralWidth; larger → galvo.
+		if 0.0 < s <= 1.0:
+			return min(max(s, 0.0), 1.0)
 		return min(max(s / ax, 0.0), 1.0)
 	if spiral_size_um not in (None, "") and fov_width_um not in (None, ""):
 		return spiral_size_fov_frac_um(float(spiral_size_um), float(fov_width_um))
@@ -250,10 +262,12 @@ def points_for_slm_fire(
 		row = dict(p)
 		gx = p.get("x_galvo")
 		gy = p.get("y_galvo")
+		from_galvo = False
 		# Prefer stored galvo so a pan/zoom after session-start lock still tracks tissue.
 		if gx not in (None, "") and gy not in (None, ""):
 			fx, fy = galvo_to_fraction(float(gx), float(gy), geom)
 			row["x_galvo"], row["y_galvo"] = float(gx), float(gy)
+			from_galvo = True
 			n_from_galvo += 1
 		elif p.get("coord_space") == "fov" or (
 			0.0 <= float(p["x"]) <= 1.0 and 0.0 <= float(p["y"]) <= 1.0
@@ -262,9 +276,17 @@ def points_for_slm_fire(
 		else:
 			fx, fy = galvo_to_fraction(float(p["x"]), float(p["y"]), geom)
 			row["x_galvo"], row["y_galvo"] = float(p["x"]), float(p["y"])
+			from_galvo = True
 			n_from_galvo += 1
 		row["x"], row["y"] = fx, fy
 		row["coord_space"] = "fov"
+		# Keep SpiralSize tagged as galvo volts when we remapped from galvo so
+		# ``_spiral_fov_frac_for_slm`` does not treat 0.185 V as FOV fraction.
+		if from_galvo and str(row.get("spiral_space") or "") != "fov":
+			if row.get("spiral_size_fov") not in (None, "") or row.get(
+				"spiral_width"
+			) not in (None, ""):
+				row["spiral_space"] = "galvo"
 		out.append(row)
 	oob = [
 		p
