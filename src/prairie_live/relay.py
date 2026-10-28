@@ -179,11 +179,11 @@ class Relay:
 			return pv.abort()
 		if cmd == "force_interrupt":
 			# Dedicated path for a second ctrl client while -slm is mid-recv.
-			# Only while stim hold / blocking stim — never for a mere -gi lock.
 			why = str(payload.get("why") or "ctrl force_interrupt")
-			if not (self._stim_hold.is_set() or pv._blocking_stim):
+			force = bool(payload.get("force"))
+			if not force and not (self._stim_hold.is_set() or pv._blocking_stim):
 				return {"ok": True, "cmd": "force_interrupt", "interrupted": False}
-			hit = pv.force_interrupt(why)
+			hit = pv.force_interrupt(why, force=force)
 			return {"ok": True, "cmd": "force_interrupt", "interrupted": bool(hit)}
 		if cmd == "abort_clear_stim":
 			# GUI Stop: kill armed Mark Points / -slm, replace series, restore Live.

@@ -368,6 +368,9 @@ class Handler(BaseHTTPRequestHandler):
 			STATE.planned_powers = unique_powers(powers)
 			STATE.n_trials = n_t
 			STATE.boards = {}
+			# Fresh Trial log every Run so a stuck prior display cannot look empty.
+			with STATE.lock:
+				STATE.log = []
 			STATE.live.set_addr(str(opt.get("via_relay") or DEFAULT_RELAY))
 			vis = "on" if opt.get("visual_enabled") else "off"
 			STATE.append(
@@ -376,9 +379,6 @@ class Handler(BaseHTTPRequestHandler):
 				f"COM={opt['serial']}  mode={opt['stim_mode']}  "
 				f"trigger={opt['trigger']}  visual={vis}  "
 				f"lead_ms={opt.get('visual_lead_ms')}  trials={n_t}"
-			)
-			STATE.append(
-				"clearing any leftover PV Mark Points / -slm from a prior run…"
 			)
 
 			def work() -> None:
@@ -391,7 +391,10 @@ class Handler(BaseHTTPRequestHandler):
 				# LiveFeed must not -LiveScan on during -slm (PV 6.1 race →
 				# DONE before DTR). Sync loop owns Live off/on per group.
 				STATE.live.hold_for_stim(True)
-				STATE.append("live FOV paused for stim (no LiveScan on until Run ends)")
+				STATE.append(
+					"live FOV paused for stim — LiveScan stays off until first "
+					"group arms (normal for SLM Trig In 1)"
+				)
 				# Tee stim prints into the Trial log so Copy works for DTR/Live lines.
 				_real_print = builtins.print
 
@@ -407,6 +410,7 @@ class Handler(BaseHTTPRequestHandler):
 				builtins.print = _gui_print
 				addr = str(opt.get("via_relay") or DEFAULT_RELAY)
 				try:
+					STATE.append("connecting relay / clearing leftover -slm…")
 					trials = execute_session(
 						opt,
 						on_trial=lambda row: STATE.q.put(("trial", dict(row))),

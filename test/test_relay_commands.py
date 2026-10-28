@@ -99,6 +99,54 @@ def test_force_interrupt_closes_sock_while_slm_held():
 	assert r.pv.link is None
 
 
+def test_abort_drops_socket_when_lock_held():
+	"""Abort must not block forever behind hung -slm (blank Run / Live off)."""
+	import threading
+	import time as _t
+
+	r = _relay()
+	closed = {"n": 0}
+	wake = threading.Event()
+
+	class BlockingLink(FakeLink):
+		def send_command(self, *parts):
+			wake.wait(5.0)
+			raise ConnectionResetError("socket closed")
+
+		def close(self):
+			closed["n"] += 1
+			wake.set()
+
+	r.pv.link = BlockingLink()
+	r.pv._started = True
+	r.pv._opened_at = 0.0
+
+	def _open():
+		r.pv.link = FakeLink()
+		r.pv.gi = None
+
+	r.pv._open = _open  # type: ignore[method-assign]
+	err: list = []
+
+	def _hung():
+		r.pv._blocking_stim = True
+		try:
+			r.pv.send("-Silent", "-MarkAllPoints", "x", timeout=30.0)
+		except Exception as exc:  # noqa: BLE001
+			err.append(exc)
+		finally:
+			r.pv._blocking_stim = False
+
+	th = threading.Thread(target=_hung, daemon=True)
+	th.start()
+	_t.sleep(0.15)
+	out = r.handle_command({"cmd": "abort"})
+	th.join(3.0)
+	assert out["ok"] is True
+	assert closed["n"] >= 1
+	assert err, "hung -slm should have raised after socket drop"
+
+
 def test_stim_hold_pauses_grab_during_mark_all_points():
 	r = _relay()
 	parts = ["-MarkAllPoints", "1", "False", "0.1", "0.2", "10", "Monaco", "0.75", "None"]

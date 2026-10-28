@@ -2511,11 +2511,17 @@ def execute_session(
 		if not opt.get("dry_run"):
 			from prairie_live.pv_cleanup import clear_prior_stim_on_client
 
+			print(
+				"session start: Abort leftover -slm "
+				f"(Live will stay {'on' if stim_mode != 'slm' else 'off'})…"
+			)
 			clr = clear_prior_stim_on_client(
-				relay, pl, restore_live=(stim_mode != "slm")
+				relay,
+				pl,
+				restore_live=(stim_mode != "slm"),
 			)
 			print(
-				"session start: clear leftover PV stim → "
+				"session start: clear done → "
 				+ ", ".join(str(n) for n in (clr.get("notes") or []))
 			)
 

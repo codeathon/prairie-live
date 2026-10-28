@@ -38,23 +38,7 @@ def abort_and_clear_stim(
 	notes: list[str] = []
 	ok = True
 
-	# Wake a blocked -slm/-mp before Abort; no-op when no stim is armed.
-	# PvScript returns bool; RelayClient returns {"interrupted": bool}.
-	if hasattr(client, "force_interrupt"):
-		try:
-			out = client.force_interrupt("abort_and_clear_stim")
-			notes.append("force_interrupt")
-			hit = (
-				bool(out.get("interrupted"))
-				if isinstance(out, dict)
-				else bool(out)
-			)
-			if hit:
-				notes.append("interrupted")
-				time.sleep(0.2)
-		except Exception as exc:
-			notes.append(f"force_interrupt_err:{exc}")
-
+	# abort() waits ~0.75s for -gi then drops a hung -slm socket itself.
 	try:
 		out = client.abort()
 		notes.append("abort")

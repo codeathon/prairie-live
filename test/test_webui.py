@@ -88,15 +88,17 @@ def test_candidate_clear_is_selection_not_list():
 	assert "green highlight" in html
 
 
-def test_trial_log_refresh_resumes_after_copy_selection():
-	"""Leftover Copy/select must not freeze the Trial log on blank/stale text."""
+def test_trial_log_always_refreshes():
+	"""Trial log must not pause-on-select (that froze blank for whole Runs)."""
 	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
 		encoding="utf-8"
 	)
-	assert "logSelectedText" in js
-	assert "clearLogSelection" in js
-	assert "Pause only while there is real selected text" in js
-	assert "lastLogText = \"\"" in js
+	html = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/index.html").read_text(
+		encoding="utf-8"
+	)
+	assert "Always refresh" in js
+	assert "logSelectedText" not in js
+	assert "app.js?v=" in html
 
 
 def test_com_ports_never_empty():
@@ -232,7 +234,7 @@ def test_web_ui_serves_page_not_tk_form():
 		assert "tile-caps" in text
 		assert "Fat Mark Points XML" in text
 		assert "tkinter" not in text.lower()
-		assert 'src="/app.js"' in text
+		assert 'src="/app.js' in text
 		js_status, js_ctype, js = _get(base + "/app.js")
 		assert js_status == 200
 		assert b"ensurePowerTiles" in js

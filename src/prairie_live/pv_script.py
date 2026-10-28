@@ -165,27 +165,10 @@ class PvScript:
 		except Exception as exc:
 			print(f"recover_after_stuck_stim metadata: {exc}", flush=True)
 
-	def force_interrupt(self, why: str = "operator Abort") -> bool:
-		"""Close the script socket *without* taking ``lock``.
-
-		Why: ``send(-slm/-mp)`` holds ``lock`` until DONE/timeout. Stop/Abort
-		from another thread then queues behind that wait (tens of seconds),
-		and Mark Points stays frozen on Trig In 1. Closing the sock wakes the
-		blocked recv; ``_call`` drops/reopens under the lock, then Abort can
-		run.
-
-		Only interrupts an in-flight stim (``_blocking_stim``). Dropping the
-		socket while ``-gi`` holds the lock was killing Live/arm and yielding
-		one-trial runs with no burns.
-		"""
-		if not self._blocking_stim:
-			return False
+	def _drop_socket_unlocked(self, why: str) -> bool:
+		"""Close the script socket without taking ``lock`` (wakes hung recv)."""
 		link = self.link
 		if link is None:
-			return False
-		# Lock free ⇒ stim flag is stale; Abort can proceed without a drop.
-		if self.lock.acquire(blocking=False):
-			self.lock.release()
 			return False
 		print(f"force_interrupt PV script ({why})", flush=True)
 		gi = self.gi
@@ -203,6 +186,37 @@ class PvScript:
 		except Exception:
 			pass
 		return True
+
+	def force_interrupt(self, why: str = "operator Abort", *, force: bool = False) -> bool:
+		"""Close the script socket *without* taking ``lock``.
+
+		Why: ``send(-slm/-mp)`` holds ``lock`` until DONE/timeout. Stop/Abort
+		from another thread then queues behind that wait (tens of seconds).
+
+		Default: only when ``_blocking_stim`` (armed -slm/-mp). ``force=True``
+		drops whenever the lock is held (Abort after a short wait).
+		"""
+		if not force and not self._blocking_stim:
+			return False
+		if self.lock.acquire(blocking=False):
+			self.lock.release()
+			return False
+		return self._drop_socket_unlocked(why)
+
+	def abort(self) -> dict:
+		# -Silent: Abort mid-Mark-Points otherwise pops E:\\Markpoints
+		# "directory already exists — delete and continue?"
+		# Wait briefly for a normal -gi; if the lock is still held, drop the
+		# socket so Abort cannot queue forever behind a hung -slm (session
+		# start / Stop looked like a blank Run with Live stuck off).
+		got = self.lock.acquire(timeout=0.75)
+		if got:
+			self.lock.release()
+		else:
+			self._drop_socket_unlocked("abort: lock busy >0.75s")
+			time.sleep(0.2)
+		self.send("-Silent", "-Abort", timeout=15.0)
+		return {"ok": True, "cmd": "abort"}
 
 	def send(self, *parts: str, timeout: float = 60.0) -> str:
 		"""One script command; waits for PV's DONE (TimeoutError otherwise)."""
@@ -239,16 +253,6 @@ class PvScript:
 	def start_tseries(self) -> dict:
 		self.send("-TSeries")
 		return {"ok": True, "cmd": "tseries"}
-
-	def abort(self) -> dict:
-		# -Silent: Abort mid-Mark-Points otherwise pops E:\\Markpoints
-		# "directory already exists — delete and continue?"
-		# If -slm/-mp holds the lock, drop the socket first so Abort is not
-		# stuck behind the hang timeout (GUI Stop felt like "PV won't Abort").
-		if self.force_interrupt("abort"):
-			time.sleep(0.2)
-		self.send("-Silent", "-Abort", timeout=15.0)
-		return {"ok": True, "cmd": "abort"}
 
 	def start_live(self) -> dict:
 		# PV 6.1: explicit on|off (bare -LiveScan still means on).

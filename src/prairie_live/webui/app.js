@@ -286,42 +286,10 @@ function renderCandidates(ranked) {
 
 let lastLogText = "";
 
-function logSelectedText() {
-  const el = $("log");
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return "";
-  if (!(el.contains(sel.anchorNode) || el.contains(sel.focusNode))) return "";
-  return sel.toString();
-}
-
-function clearLogSelection() {
-  const el = $("log");
-  const sel = window.getSelection();
-  if (!sel || !sel.rangeCount) return;
-  if (el.contains(sel.anchorNode) || el.contains(sel.focusNode)) {
-    sel.removeAllRanges();
-  }
-}
-
 function renderLog(lines) {
   const el = $("log");
-  const head = $("log_copy");
   const text = (lines || []).join("\n");
-  // Pause only while there is real selected text in the log. A leftover
-  // Copy/select-all range used to freeze the display on blank/stale content
-  // for the whole Run.
-  const picking = logSelectedText();
-  if (picking) {
-    if (head && head.dataset.paused !== "1") {
-      head.dataset.paused = "1";
-      head.title = "Log refresh paused while text is selected — click away to resume";
-    }
-    return;
-  }
-  if (head && head.dataset.paused === "1") {
-    head.dataset.paused = "0";
-    head.title = "Copy full log to clipboard";
-  }
+  // Always refresh — pause-on-select froze the Trial log blank for whole Runs.
   if (text === lastLogText) return;
   const pinBottom =
     el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -331,17 +299,21 @@ function renderLog(lines) {
 }
 
 async function tick() {
-  const st = await jget("/api/status");
-  renderLog(st.log || []);
-  $("run").disabled = !!st.running;
-  $("stop").disabled = !st.running;
-  if (st.has_candidates) renderCandidates(st.ranked);
-  if (st.error) $("save_status").textContent = st.error;
-  if (st.live) $("live_cap").textContent = st.live.detail || "";
-  if (st.boards && st.boards.length) {
-    // Before a run the Powers box decides which tiles exist.
-    const typed = new Set(powerListFromBox().map((p) => String(p)));
-    ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready || typed.has(String(b.power))));
+  try {
+    const st = await jget("/api/status");
+    renderLog(st.log || []);
+    $("run").disabled = !!st.running;
+    $("stop").disabled = !st.running;
+    if (st.has_candidates) renderCandidates(st.ranked);
+    if (st.error) $("save_status").textContent = st.error;
+    if (st.live) $("live_cap").textContent = st.live.detail || "";
+    if (st.boards && st.boards.length) {
+      // Before a run the Powers box decides which tiles exist.
+      const typed = new Set(powerListFromBox().map((p) => String(p)));
+      ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready || typed.has(String(b.power))));
+    }
+  } catch (e) {
+    console.warn("status poll failed", e);
   }
 }
 
@@ -394,30 +366,28 @@ async function boot() {
     const text = $("log").textContent || "";
     try {
       await navigator.clipboard.writeText(text);
-      clearLogSelection();
       $("log_copy").textContent = "Copied";
       setTimeout(() => {
         $("log_copy").textContent = "Copy";
       }, 1200);
     } catch (_) {
-      // Fallback when clipboard API is blocked — leave selection for Ctrl+C,
-      // but do not keep it forever (resume refresh after a few seconds).
+      // Fallback when clipboard API is blocked.
       const r = document.createRange();
       r.selectNodeContents($("log"));
       const sel = window.getSelection();
       sel.removeAllRanges();
       sel.addRange(r);
-      $("log_copy").textContent = "Select all — Ctrl+C";
+      document.execCommand("copy");
+      sel.removeAllRanges();
+      $("log_copy").textContent = "Copied";
       setTimeout(() => {
-        clearLogSelection();
         $("log_copy").textContent = "Copy";
-      }, 4000);
+      }, 1200);
     }
   });
   $("run").addEventListener("click", async () => {
-    // Drop any leftover log selection so the Trial log can update this Run.
-    clearLogSelection();
     lastLogText = "";
+    $("log").textContent = "starting…";
     const res = await jpost("/api/run", {
       series: $("xml_path").textContent,
       powers: $("powers").value,
