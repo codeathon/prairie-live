@@ -1376,6 +1376,8 @@ def _run_slm_single_trial(
 		from prairie_live.stim_fire import run_while_pulsing_dtr
 
 		arm_s = max(float(slm_arm_delay_s), 0.0)
+		# Keep re-poking Trig In 1 while mask builds (first edge is often early).
+		rescue_s = max(arm_s * 2.0, 6.0)
 		settle_s = max(float(slm_group_settle_s), float(inter_trial_s), 0.0)
 		# Idle-low before arm so the next rising edge is clean.
 		if hasattr(ttl, "set_dtr"):
@@ -1391,43 +1393,55 @@ def _run_slm_single_trial(
 				relay=relay,
 				via_relay=via_relay,
 				no_wait=False,
-				timeout=max(180.0, wait_s + arm_s + 60.0),
+				timeout=max(120.0, wait_s + arm_s + rescue_s + 30.0),
 			)
+
+		def _unstick() -> None:
+			# Timeout path only — Abort clears a hung -slm so Live can restart.
+			try:
+				if via_relay and relay is not None and hasattr(relay, "abort"):
+					relay.abort()
+				elif pl is not None:
+					pl.send_command("-Silent", "-Abort")
+			except Exception as exc:
+				print(f"  unstick Abort failed: {exc}")
 
 		print(
 			f"  BEGIN group {gi + 1}/{n_groups}: arm -slm "
-			f"(Live off · mask {arm_s:g}s → 1 DTR → burn) "
-			f"pts={point_ids} power={power:g} "
-			f"trig={trig_sel!r} parts={slm_parts}"
+			f"(Live off · first DTR @ {arm_s:g}s · rescue {rescue_s:g}s) "
+			f"pts={point_ids} power={power:g} trig={trig_sel!r}"
 		)
-		# One DTR per group. Live already off (see _slm_fire_points). Long
-		# arm_delay covers mask generation. No Abort between groups.
-		run_while_pulsing_dtr(
-			_do_slm,
-			ttl=ttl,
-			n_pulses=1,
-			ttl_width_s=ttl_width_s,
-			arm_delay_s=arm_s,
-			rescue_window_s=0.0,
-			join_timeout_s=max(180.0, wait_s + arm_s + 60.0),
-			row=row,
-			on_pulse=lambda _i: print(
-				f"  group {gi + 1}/{n_groups}: DTR pulsed → pts={point_ids}"
-			),
-		)
-		# Burn done: restore LiveScan and idle before the next group's -slm.
-		_slm_group_idle(
-			relay=relay,
-			pl=pl,
-			via_relay=via_relay,
-			ttl=ttl,
-			settle_s=settle_s,
-			label=f"END group {gi + 1}/{n_groups}",
-		)
-		print(
-			f"  END group {gi + 1}/{n_groups}: burn done · "
-			f"idled {settle_s:g}s before next"
-		)
+		# Always restore Live — hang/timeout used to leave Live off forever.
+		try:
+			run_while_pulsing_dtr(
+				_do_slm,
+				ttl=ttl,
+				n_pulses=1,
+				ttl_width_s=ttl_width_s,
+				arm_delay_s=arm_s,
+				rescue_window_s=rescue_s,
+				rescue_gap_s=0.5,
+				join_timeout_s=max(90.0, wait_s + arm_s + rescue_s + 30.0),
+				row=row,
+				on_pulse=lambda _i: print(
+					f"  group {gi + 1}/{n_groups}: DTR pulsed → pts={point_ids}"
+				),
+				on_stuck=_unstick,
+			)
+			print(f"  group {gi + 1}/{n_groups}: -slm DONE")
+		finally:
+			_slm_group_idle(
+				relay=relay,
+				pl=pl,
+				via_relay=via_relay,
+				ttl=ttl,
+				settle_s=settle_s,
+				label=f"END group {gi + 1}/{n_groups}",
+			)
+			print(
+				f"  END group {gi + 1}/{n_groups}: Live on · "
+				f"idled {settle_s:g}s before next"
+			)
 		if want:
 			f1_frames = _collect_frames(relay, max(f1_s, 0.2), frame_poll_s)
 	else:
@@ -1913,24 +1927,23 @@ def _slm_fire_points(
 	dry_run: bool,
 	log_prefix: str = "  ",
 ) -> tuple[list[dict], float | None]:
-	"""LiveScan on → remap galvo→FOV with *current* amp/center for -slm.
+	"""Remap galvo→FOV via -gts, keep Live **off**, then ready for -slm.
 
-	Session-start FOV lock alone is not enough: it can run on a stale scan
-	range right after -Abort, so burns land on the FOV but miss the cyan rings.
+	Do **not** bounce Live on→off here. That was the miss: Trig In 1 is a
+	rising edge; if the one DTR lands while PV is still stopping Live or
+	building the mask, the edge is gone and -slm waits forever (no burn).
+	``-gts`` amp/center works with Live off.
 	"""
 	from prairie_live.scan_geometry import points_for_slm_fire
 
 	if dry_run or relay is None:
 		# Dry-run / no relay: keep whatever fractions the session lock produced.
 		return list(gpts), None
-	_ensure_live_after_stim(
-		relay=relay,
-		pl=pl,
-		via_relay=via_relay,
-		# Short settle: amp/center must match the live overlay before -slm.
-		settle_s=0.35,
-		label="pre-slm",
+	# Live must be off before -slm (PV 6.1). No Live-on first.
+	_stop_live_for_stim(
+		relay=relay, pl=pl, via_relay=via_relay, label=f"{log_prefix.strip()}pre-slm"
 	)
+	time.sleep(0.4)  # let Live actually stop before -gts / -slm
 	fire_pts, spiral_fov, note = points_for_slm_fire(
 		gpts,
 		relay,
@@ -1949,10 +1962,6 @@ def _slm_fire_points(
 			print(
 				f"{log_prefix}  P{p['id']} FOV ({float(p['x']):.4f},{float(p['y']):.4f})"
 			)
-	# Geometry read needs Live on; -slm needs Live off (PV 6.1).
-	_stop_live_for_stim(
-		relay=relay, pl=pl, via_relay=via_relay, label=f"{log_prefix.strip()}pre-slm"
-	)
 	return fire_pts, spiral_fov
 
 

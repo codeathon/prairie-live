@@ -8,12 +8,12 @@ Order that works (exactly the planned edges — typically one per group):
   2. Start blocking -MarkPoints / -slm on a worker thread.
   3. After ``arm_delay_s``, pulse DTR (Trig In 1) on the main thread.
   4. For multi-pulse (packed SLM): sleep ``gap_s``, then next planned pulse.
-  5. Optional short *arm-phase* rescue only if the first edge was early.
-  6. Join until PV returns DONE with **no** further DTR.
+  5. Single-pulse: re-poke DTR while still armed until DONE or arm window ends
+	 (mask gen can outlast the first edge).
+  6. Join until PV returns DONE with **no** further DTR after the window.
 
-Rescue used to fire for the whole stim dwell (thread still alive while the
-hologram/series runs). That added extra Trig In 1 edges and broke
-\"one TTL per group\". Rescues now stop once the arming window ends.
+Packed multi-group (n_pulses>1) disables rescues — an extra edge would release
+the next hologram early.
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ def run_while_pulsing_dtr(
 	gap_s: float = 0.0,
 	arm_delay_s: float = 0.25,
 	rescue_window_s: float = 0.75,
+	rescue_gap_s: float = 0.4,
 	join_timeout_s: float | None = None,
 	row: dict[str, Any] | None = None,
 	on_pulse: Callable[[int], None] | None = None,
@@ -43,10 +44,10 @@ def run_while_pulsing_dtr(
 	``arm_delay_s``: pause after starting ``fn`` so PV can enter Wait-for-Trigger
 	before the first rising edge. Finish load/Wait before calling this helper.
 
-	``rescue_window_s``: after the *first* planned pulse, allow a few re-pokes
-	only until ``arm_delay_s + rescue_window_s`` from thread start — for a
-	missed first arm. Set 0 to disable (required for packed multi-group SLM,
-	where an extra edge would release the next group early).
+	``rescue_window_s``: after the *first* planned pulse, re-poke DTR every
+	``rescue_gap_s`` until ``arm_delay_s + rescue_window_s`` from start or until
+	``fn`` returns (DONE). Covers slow SLM mask gen that misses the first edge.
+	Forced to 0 when ``n_pulses > 1`` (packed multi-group).
 	"""
 	n_pulses = max(int(n_pulses), 1)
 	# Extra edges between packed sets would steal the next group's trigger.
@@ -104,25 +105,27 @@ def run_while_pulsing_dtr(
 				on_pulse(i)
 			if i < n_pulses - 1 and gap_s > 0:
 				time.sleep(float(gap_s))
-		# Arm-phase rescue only (not during hologram/series dwell).
+		# Re-poke while still armed: first edge often lands during mask gen.
 		arm_deadline = t0 + max(float(arm_delay_s), 0.0) + max(
 			float(rescue_window_s), 0.0
 		)
+		gap = max(float(rescue_gap_s), 0.1)
 		rescues = 0
+		max_rescues = 30 if float(rescue_window_s) > 0 else 0
 		while (
 			th.is_alive()
 			and not errors
-			and rescues < 4
+			and rescues < max_rescues
 			and time.monotonic() < arm_deadline
 		):
-			time.sleep(0.2)
+			time.sleep(gap)
 			if not th.is_alive() or errors or time.monotonic() >= arm_deadline:
 				break
 			ttl.pulse_dtr(float(ttl_width_s))
 			rescues += 1
 			print(
 				f"  DTR rescue pulse {rescues} "
-				"(still waiting on Trig In 1 in arm window)"
+				"(still waiting on Trig In 1 — mask/arm)"
 			)
 	finally:
 		th.join(timeout=join_s)

@@ -174,12 +174,13 @@ def test_packed_slm_emits_exactly_one_dtr_per_group_no_rescue():
 	assert ttl.pulses == [0.01, 0.01, 0.01]
 
 
-def test_single_dtr_no_rescue_during_long_stim_dwell():
-	"""Thread stays alive while hologram burns — that is not a missed arm."""
+def test_single_dtr_rescue_while_still_armed():
+	"""Slow mask: first edge early → rescue until DONE (then stop)."""
 	ttl = _FakeTtl()
 
 	def _slm() -> str:
-		time.sleep(0.6)
+		# Still armed past first DTR; DONE after a couple of rescues.
+		time.sleep(0.55)
 		return "ok"
 
 	out = run_while_pulsing_dtr(
@@ -188,10 +189,33 @@ def test_single_dtr_no_rescue_during_long_stim_dwell():
 		n_pulses=1,
 		ttl_width_s=0.01,
 		arm_delay_s=0.05,
-		rescue_window_s=0.1,  # arm window ends ~0.15s; dwell continues
+		rescue_window_s=0.8,
+		rescue_gap_s=0.15,
 	)
 	assert out == "ok"
-	assert ttl.pulses == [0.01]
+	assert len(ttl.pulses) >= 2
+
+
+def test_single_dtr_stops_rescue_after_done():
+	"""Once -slm returns, do not keep pulsing."""
+	ttl = _FakeTtl()
+
+	def _slm() -> str:
+		time.sleep(0.12)
+		return "ok"
+
+	out = run_while_pulsing_dtr(
+		_slm,
+		ttl=ttl,
+		n_pulses=1,
+		ttl_width_s=0.01,
+		arm_delay_s=0.05,
+		rescue_window_s=0.5,
+		rescue_gap_s=0.2,
+	)
+	assert out == "ok"
+	# First pulse + at most one rescue before DONE; not a full rescue storm.
+	assert 1 <= len(ttl.pulses) <= 3
 
 
 def test_slm_script_power_keeps_ui_scale():
