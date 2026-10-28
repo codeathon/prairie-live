@@ -322,24 +322,12 @@ function renderCandidates(ranked) {
   }
 }
 
-let lastLogText = "";
-
-function renderLog(lines) {
-  const el = $("log");
-  const text = (lines || []).join("\n");
-  // Always refresh — pause-on-select froze the Trial log blank for whole Runs.
-  if (text === lastLogText) return;
-  const pinBottom =
-    el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-  el.textContent = text;
-  lastLogText = text;
-  if (pinBottom) el.scrollTop = el.scrollHeight;
-}
-
 async function tick() {
   try {
     const st = await jget("/api/status");
-    renderLog(st.log || []);
+    // Simple trial log: server lines only (start / trial rows / done / error).
+    $("log").textContent = (st.log || []).join("\n");
+    $("log").scrollTop = $("log").scrollHeight;
     $("run").disabled = !!st.running;
     $("stop").disabled = !st.running;
     if (st.has_candidates) renderCandidates(st.ranked);
@@ -408,72 +396,30 @@ async function boot() {
     applyMarksVisibility();
   });
   applyMarksVisibility();
-  $("log_copy").addEventListener("click", async () => {
-    const text = $("log").textContent || "";
-    try {
-      await navigator.clipboard.writeText(text);
-      $("log_copy").textContent = "Copied";
-      setTimeout(() => {
-        $("log_copy").textContent = "Copy";
-      }, 1200);
-    } catch (_) {
-      // Fallback when clipboard API is blocked.
-      const r = document.createRange();
-      r.selectNodeContents($("log"));
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(r);
-      document.execCommand("copy");
-      sel.removeAllRanges();
-      $("log_copy").textContent = "Copied";
-      setTimeout(() => {
-        $("log_copy").textContent = "Copy";
-      }, 1200);
-    }
-  });
   $("run").addEventListener("click", async () => {
-    lastLogText = "";
-    $("log").textContent = "starting…";
     // dataset.path is the upload on disk; label text is display-only.
     const series = ($("xml_path").dataset && $("xml_path").dataset.path) || "";
-    let res;
-    try {
-      res = await jpost("/api/run", {
-        series,
-        powers: $("powers").value,
-        seed: $("seed").value,
-        repetitions: $("repetitions").value,
-        stim_dff_min: $("stim_dff_min").value,
-        via_relay: $("via_relay").value,
-        serial: $("serial").value,
-        stim_mode: $("stim_mode").value,
-        trigger: $("trigger").value,
-        ...visualRunPayload(),
-      });
-    } catch (e) {
-      lastLogText = "";
-      $("log").textContent = `Run failed: ${e && e.message ? e.message : e}`;
-      return;
-    }
+    const res = await jpost("/api/run", {
+      series,
+      powers: $("powers").value,
+      seed: $("seed").value,
+      repetitions: $("repetitions").value,
+      stim_dff_min: $("stim_dff_min").value,
+      via_relay: $("via_relay").value,
+      serial: $("serial").value,
+      stim_mode: $("stim_mode").value,
+      trigger: $("trigger").value,
+      ...visualRunPayload(),
+    });
     if (!res.ok) {
-      const err = res.error || "run failed";
-      $("save_status").textContent = err;
-      // "starting…" is client-only — replace it so a 409 does not look hung.
-      lastLogText = "";
-      $("log").textContent =
-        err.includes("already")
-          ? "Run rejected — already running. Hit Stop, then Run again."
-          : `Run failed: ${err}`;
+      $("save_status").textContent = res.error || "run failed";
       return;
     }
-    // Pull server log immediately (do not wait for the 800ms poll).
-    lastLogText = "";
     await tick();
   });
   $("stop").addEventListener("click", async () => {
     $("save_status").textContent = "stopping…";
     await jpost("/api/stop", {});
-    lastLogText = "";
     await tick();
   });
   $("sel_top").addEventListener("click", () => {

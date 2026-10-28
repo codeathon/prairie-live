@@ -88,16 +88,19 @@ def test_candidate_clear_is_selection_not_list():
 	assert "green highlight" in html
 
 
-def test_trial_log_always_refreshes():
-	"""Trial log must not pause-on-select (that froze blank for whole Runs)."""
+def test_trial_log_is_simple_poll():
+	"""Trial log is plain server lines — no Copy / starting… / selection pause."""
 	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
 		encoding="utf-8"
 	)
 	html = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/index.html").read_text(
 		encoding="utf-8"
 	)
-	assert "Always refresh" in js
+	assert 'id="log_copy"' not in html
+	assert "log_copy" not in js
+	assert "starting…" not in js
 	assert "logSelectedText" not in js
+	assert '$("log").textContent = (st.log || []).join("\\n")' in js
 	assert "app.js?v=" in html
 
 

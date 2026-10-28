@@ -257,26 +257,21 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		if u.path == "/api/stop":
 			STATE.stop.set()
+			# Allow a new Run immediately; worker exits via should_stop.
+			STATE.running = False
 			addr = str(
 				(STATE.opt or {}).get("via_relay")
 				or getattr(STATE.live, "addr", None)
 				or DEFAULT_RELAY
-			)
-			STATE.append(
-				"stop requested — Abort + clear Mark Points on PV, then finish trial"
 			)
 
 			def _pv_stop_cleanup() -> None:
 				try:
 					from prairie_live.pv_cleanup import abort_and_clear_at
 
-					out = abort_and_clear_at(addr)
-					notes = out.get("notes") or []
-					STATE.append(
-						"PV cleared: " + (", ".join(str(n) for n in notes) or str(out))
-					)
-				except Exception as exc:
-					STATE.append(f"PV clear failed: {exc}")
+					abort_and_clear_at(addr)
+				except Exception:
+					pass
 
 			threading.Thread(target=_pv_stop_cleanup, daemon=True).start()
 			_json(self, {"ok": True, "relay": addr})
@@ -398,9 +393,8 @@ class Handler(BaseHTTPRequestHandler):
 				f"lead_ms={opt.get('visual_lead_ms')}  trials={n_t}"
 			)
 
-			# Snapshot amp/center NOW — before stim hold drops LiveFeed's -gts
-			# poll. Mid-Run -gts after Live off hangs PV and MarkAllPoints never
-			# starts; sync_loop converts galvo→FOV from this cache instead.
+			# Stash LiveFeed amp/center before stim hold (no mid-Run -gts).
+			# Silent — Trial log stays trial data only.
 			geom, _ = STATE.live.scan_geometry()
 			if (
 				isinstance(geom, dict)
@@ -413,47 +407,16 @@ class Handler(BaseHTTPRequestHandler):
 					"ctr_x": float(geom.get("ctr_x") or 0.0),
 					"ctr_y": float(geom.get("ctr_y") or 0.0),
 				}
-				STATE.append(
-					f"scan geom cached for SLM "
-					f"(amp {opt['scan_geometry']['amp_x']:g}/"
-					f"{opt['scan_geometry']['amp_y']:g})"
-				)
-			elif str(opt.get("stim_mode") or "").lower() == "slm":
-				STATE.append(
-					"WARNING: no LiveFeed scan amp/center — wait for cyan "
-					"overlay before Run, or galvo→FOV may hang on -gts"
-				)
 
 			def work() -> None:
-				import builtins
-				import sys
-
 				from prairie_live.pv_cleanup import abort_and_clear_at
 				from prairie_live.sync_loop import execute_session
 
 				# LiveFeed must not -LiveScan on during -slm (PV 6.1 race →
 				# DONE before DTR). Sync loop owns Live off/on per group.
 				STATE.live.hold_for_stim(True)
-				STATE.append(
-					"live FOV paused for stim — LiveScan stays off until first "
-					"group arms (normal for SLM Trig In 1)"
-				)
-				# Tee stim prints into the Trial log so Copy works for DTR/Live lines.
-				_real_print = builtins.print
-
-				def _gui_print(*args, **kwargs):
-					try:
-						buf = kwargs.get("file")
-						if buf in (None, sys.stdout, sys.stderr):
-							STATE.append(" ".join(str(a) for a in args))
-					except Exception:
-						pass
-					_real_print(*args, **kwargs)
-
-				builtins.print = _gui_print
 				addr = str(opt.get("via_relay") or DEFAULT_RELAY)
 				try:
-					STATE.append("connecting relay / starting session…")
 					trials = execute_session(
 						opt,
 						on_trial=lambda row: STATE.q.put(("trial", dict(row))),
@@ -464,18 +427,11 @@ class Handler(BaseHTTPRequestHandler):
 				except Exception as exc:
 					STATE.q.put(("error", str(exc)))
 				finally:
-					builtins.print = _real_print
-					# Always Abort leftover -slm or Mark Points UI stays frozen
-					# on Trig In 1 after a one-group hang / early error.
+					# Abort leftover -slm so Mark Points UI is not left frozen.
 					try:
-						out = abort_and_clear_at(addr)
-						notes = out.get("notes") or []
-						STATE.append(
-							"post-run PV clear: "
-							+ (", ".join(str(n) for n in notes) or str(out))
-						)
-					except Exception as exc:
-						STATE.append(f"post-run PV clear failed: {exc}")
+						abort_and_clear_at(addr)
+					except Exception:
+						pass
 					STATE.live.hold_for_stim(False)
 
 			threading.Thread(target=work, daemon=True).start()
