@@ -14,6 +14,23 @@ So every approach that fired groups one by one from Python (per-group `-slm`, pa
 early-DONE handling) relied on timing PV does not expose. Replace it with PV's own
 sequencing, as in Bruker's benchmark (`Spots_.gpl` + `Spots_.xml`, 400 masks ≈ 7 s).
 
+## Bruker answers (Oct 30)
+
+- **SLM out**: always a short 5 V pulse when a mask changes; the mask is loaded
+  **2 ms** after the edge. (Alternative: the laser artifact in the imaging.)
+- Two supported workflows, both a saved series (Mark Points grid: *Wait for Trigger*
+  = `TriggerFrequency`, *Trigger Selection*, *Voltage Recording Experiment* per line):
+  1. **Trigger the first line only.** Group 1 `First Repetition` / `Trig In 1`, the rest
+     `Never`; PV then runs the lines back to back (`InitialDelay` + `Interval`). All masks
+     *and* waveforms are generated/uploaded first, so allow a long delay before the
+     trigger. (Bruker screenshot: 22.1 ms then 2 ms initial delays, 100.26 ms interval.)
+  2. **Trigger every line.** Each line `First Repetition` / `Trig In 1`. Masks are made up
+     front; each line's waveform uploads only after the previous line's trigger runs
+     (~ms). Only the first trigger needs the long wait. **Target workflow** — one DTR
+     per group, software/visual-stim controls the spacing.
+
+Rig tests: C = option 1, F = option 2 (`dtr_train.py` for the pulses).
+
 ## Script sequence (one run)
 
 | # | Command | Notes |
@@ -25,7 +42,7 @@ sequencing, as in Bruker's benchmark (`Spots_.gpl` + `Spots_.xml`, 400 masks ≈
 | 5 | `-LiveScan on` (or T-series) | imaging for ΔF/F |
 | 6 | start Voltage Recording | via series link (test E) or `-VoltageRecording …` |
 | 7 | `-MarkPoints` | PV builds masks, then steps groups by hardware |
-| 8 | optional single DTR (Trig In 1, FirstRepetition on element 1) | only if test C shows it starts the run |
+| 8 | DTR pulses: one per group (option 2) or one to start (option 1) | first pulse after mask-gen wait; later ones ≥ burn + few ms apart |
 | 9 | wait DONE / planned end; `-Abort` only on Stop; `-Exit` | |
 
 Group spacing = per-element `InitialDelay` (e.g. 3000 ms). Power is per element, so
@@ -62,8 +79,8 @@ PC (few-ms error vs relay frame stamps), or schedule-only times checked against 
 - Does a series element fire its group simultaneously via SLM (no `AllPointsAtOnce` attr)?
 - Mask build time on our rig vs Bruker's 7 s / 400.
 - Is the group gap exactly `InitialDelay + Duration`, or + variable mask-switch time?
-- Does a Trig In 1 wait on element 1 begin only after masks are built?
 - Does `-MarkPoints` return DONE early while Live runs?
 - Series power units: Out (0.4 ≈ 160 UI) — confirm on a bleach slide.
-- SLM out signal: level, polarity, width, one edge per mask switch? Active for script-run series?
-- How PV stores a VR link in a saved series (test E).
+- SLM out pulse width (sample VR fast enough); edges present for script-run series?
+- Option 2: shortest safe first-pulse wait and minimum group spacing on our rig (test F).
+- How PV stores the per-line *Voltage Recording Experiment* in the saved XML (test E).
