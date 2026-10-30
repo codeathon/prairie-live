@@ -57,8 +57,10 @@ def format_trial_summary(row: dict[str, Any]) -> str:
 	trig = row.get("trigger_index")
 	n = row.get("n_triggers")
 	parts = [f"trial {ti}"]
-	if trig is not None and n is not None:
-		parts.append(f"pulse {trig}/{int(n) - 1}")
+	# 1-based group label: "group 1/3" — avoids the confusing "pulse 0/0"
+	# when each single -slm had n_triggers=1.
+	if trig is not None and n is not None and int(n) > 0:
+		parts.append(f"group {int(trig) + 1}/{int(n)}")
 	parts.append(f"points [{pts}]")
 	parts.append(f"power {power}")
 	parts.append(f"mode {mode}")
@@ -97,10 +99,10 @@ def format_trial_readable(row: dict[str, Any]) -> str:
 	pts = ", ".join(str(p) for p in row.get("point_ids") or [])
 	trig = row.get("trigger_index")
 	n = row.get("n_triggers")
-	if trig is not None and n is not None:
-		pulse = f"{trig} of {int(n) - 1}  (0-based pulse index among {n} packed groups)"
+	if trig is not None and n is not None and int(n) > 0:
+		pulse = f"group {int(trig) + 1}/{int(n)}  (one DTR per group)"
 	else:
-		pulse = "n/a (series mode or single trial)"
+		pulse = "n/a"
 	score = row.get("score")
 	score_s = (
 		f"{float(score):.6f}  ({row.get('score_kind')})"

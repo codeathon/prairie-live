@@ -101,6 +101,33 @@ def test_spiral_requires_fov():
 		)
 
 
+def test_spiral_size_fov_overrides_um():
+	# Galvo SpiralSize→FOV frac from fire-time geometry must win over µm defaults.
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}]
+	parts = build_mark_all_points_parts(
+		pts,
+		power=160,
+		spiral=True,
+		spiral_size_um=54.5,
+		fov_width_um=1136.7,
+		spiral_size_fov=0.022,
+		trigger_selection="None",
+	)
+	assert parts[parts.index("True") + 1] == "0.022"
+
+
+def test_rejects_galvo_coords_for_slm():
+	# Sending raw galvo volts as -slm FOV fractions misplaces burns.
+	pts = [{"id": "1", "x": -3.0, "y": -2.0}]
+	with pytest.raises(ValueError, match="outside FOV 0–1"):
+		build_mark_all_points_parts(
+			pts,
+			power=160,
+			spiral=False,
+			trigger_selection="None",
+		)
+
+
 def test_stim_params_from_meta():
 	meta = {
 		"uncaging_laser": "Monaco",
@@ -120,3 +147,123 @@ def test_stim_params_from_meta():
 	assert p["fov_width_um"] == 500.0
 	assert p["initial_delay_ms"] == 22.1
 	assert p["trigger_count"] == 1
+
+
+def _set_triggers(parts: list[str]) -> list[str]:
+	"""Trigger token of each set (anything that is 'Trig In 1' or 'None')."""
+	return [p for p in parts if p in ("Trig In 1", "None")]
+
+
+def test_bnc_repetitions_collapsed_to_one_set():
+	# Trig In 1 + Live off cannot pack Trigger=None repeats (early DONE / no fire).
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}, {"id": "2", "x": 0.3, "y": 0.4}]
+	parts = build_mark_all_points_parts(
+		pts,
+		power=140,
+		duration_ms=36,
+		spiral=False,
+		trigger_selection="Trig In 1",
+		repetitions=3,
+		rep_delay_ms=14,
+	)
+	assert parts[0] == "-MarkAllPoints"
+	assert parts.count("2") == 1
+	assert _set_triggers(parts) == ["Trig In 1"]
+	assert parts[-2:] == ["Trig In 1", "1"]
+	assert "14" not in parts
+
+
+def test_none_trigger_repetitions_pack_followup_sets():
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}, {"id": "2", "x": 0.3, "y": 0.4}]
+	parts = build_mark_all_points_parts(
+		pts,
+		power=140,
+		duration_ms=36,
+		spiral=False,
+		trigger_selection="None",
+		repetitions=3,
+		rep_delay_ms=14,
+	)
+	assert parts.count("2") == 3
+	assert _set_triggers(parts) == ["None", "None", "None"]
+	i0 = parts.index("None")
+	assert parts[i0 + 1 : i0 + 3] == ["14", "2"]
+	assert parts[-1] == "None"
+
+
+def test_repetitions_one_is_unchanged():
+	pts = [{"id": "1", "x": 0.1, "y": 0.2}]
+	a = build_mark_all_points_parts(pts, power=1, spiral=False)
+	b = build_mark_all_points_parts(pts, power=1, spiral=False, repetitions=1)
+	assert a == b
+	assert a[-2:] == ["Trig In 1", "1"]
+
+
+def test_packed_bnc_groups_one_set_each_with_group_delay():
+	g0 = [{"id": "1", "x": 0.1, "y": 0.2}]
+	g1 = [{"id": "2", "x": 0.5, "y": 0.6}]
+	parts = pack_mark_all_points(
+		[g0, g1],
+		power=1,
+		spiral=False,
+		trigger_selection="Trig In 1",
+		delay_ms=500,
+		repetitions=2,
+		rep_delay_ms=14,
+	)
+	# BNC: one set per group (reps collapsed); Delay only between groups.
+	assert _set_triggers(parts) == ["Trig In 1", "Trig In 1"]
+	assert "500" in parts
+	assert "14" not in parts
+	assert parts[-2:] == ["Trig In 1", "1"]
+
+
+def test_stim_params_carry_repetitions_and_burn_time():
+	from prairie_live.mark_all_points import slm_burn_ms
+
+	p = stim_params_from_meta(
+		{"repetitions": "5", "inter_point_delay": "14", "duration": 36}
+	)
+	assert p["repetitions"] == 5
+	assert p["rep_delay_ms"] == 14.0
+	assert slm_burn_ms(p) == 5 * 36 + 4 * 14
+	q = stim_params_from_meta({})
+	assert q["repetitions"] == 1
+	assert slm_burn_ms(q) == q["duration_ms"]
+
+
+def test_bnc_repetitions_keep_repeats_with_trigger():
+	g0 = [{"id": "1", "x": 0.1, "y": 0.2}]
+	g1 = [{"id": "2", "x": 0.5, "y": 0.6}]
+	kw = dict(power=1, spiral=False, trigger_selection="Trig In 1",
+		delay_ms=100, repetitions=3, rep_delay_ms=14)
+	off = pack_mark_all_points([g0, g1], **kw)
+	assert [p for p in off if p in ("Trig In 1", "None")] == ["Trig In 1"] * 2
+	on = pack_mark_all_points([g0, g1], bnc_repetitions=True, **kw)
+	assert [p for p in on if p in ("Trig In 1", "None")] == [
+		"Trig In 1", "None", "None", "Trig In 1", "None", "None"
+	]
+	assert [p for p in on if p in ("14", "100")] == ["14", "14", "100", "14", "14"]
+	assert on[-1] == "None"
+
+
+def test_dtr_gap_covers_burn_delay_and_windows():
+	from prairie_live.sync_loop import slm_dtr_gap_s
+
+	# Floor wins when everything is short.
+	assert slm_dtr_gap_s(burn_ms=36, delay_ms=100, min_gap_s=3, f0_s=0.5, f1_s=1) == 3
+	# Long burn + Delay: re-arm margin binds (burn + Delay + 1 s).
+	g = slm_dtr_gap_s(burn_ms=4000, delay_ms=900, min_gap_s=1, f0_s=0.1, f1_s=0.1)
+	assert g == pytest.approx(5.9)
+	# Windows: f0 + burn + f1 must fit between pulses.
+	g = slm_dtr_gap_s(burn_ms=200, delay_ms=0, min_gap_s=0, f0_s=2, f1_s=3)
+	assert g == pytest.approx(5.2)
+
+
+def test_slice_group_frames_windows():
+	from prairie_live.sync_loop import slice_group_frames
+
+	stamped = [(10.0 + 0.1 * i, i) for i in range(40)]  # t = 10.0 … 13.9
+	f0, f1 = slice_group_frames(stamped, t_pulse=12.0, f0_s=0.5, f1_s=0.5, skip_s=0.2)
+	assert f0 == [15, 16, 17, 18, 19]  # 11.5 ≤ t < 12.0
+	assert f1 == [23, 24, 25, 26, 27]  # 12.2 < t ≤ 12.7

@@ -61,6 +61,10 @@ class Relay:
 		self._latest = None
 		self._lock = threading.Lock()
 		self._stop = threading.Event()
+		# Set while -slm/-mp holds pv.lock so -gi cannot starve Abort/Stop.
+		self._stim_hold = threading.Event()
+		# Coalesce concurrent Stop / post-run / session Abort storms.
+		self._abort_clear_lock = threading.Lock()
 		self._logged_first_grab = False
 		self._hb_t = 0.0
 		self._send_n = 0
@@ -89,6 +93,11 @@ class Relay:
 			) from e
 		h, w = self.pv.wh
 		print(f"PV script port {self.pv.host}:{self.pv.port}  FOV {int(w)}x{int(h)}")
+		try:
+			self.pv.disable_mark_points_metadata()
+			print("MarkPointsMetadata=False (no ad-hoc E:\\Markpoints spills)")
+		except Exception as e:
+			print(f"MarkPointsMetadata False failed ({e})")
 		if not self._grab_enabled:
 			print("grab OFF (default); pass --grab for live frames")
 			return
@@ -110,6 +119,11 @@ class Relay:
 
 	def _grab_loop(self) -> None:
 		while not self._stop.is_set():
+			# Why: -gi and -slm share one lock; grab during an armed stim makes
+			# Stop/Abort wait behind every frame until the hang times out.
+			if self._stim_hold.is_set():
+				time.sleep(0.05)
+				continue
 			self._grab_one()
 			# The PV lock is not fair; this gap lets Mark Points commands in.
 			time.sleep(0.01)
@@ -165,7 +179,68 @@ class Relay:
 			return pv.start_tseries()
 		if cmd == "abort":
 			return pv.abort()
+		if cmd == "force_interrupt":
+			# Dedicated path for a second ctrl client while -slm is mid-recv.
+			why = str(payload.get("why") or "ctrl force_interrupt")
+			force = bool(payload.get("force"))
+			if not force and not (self._stim_hold.is_set() or pv._blocking_stim):
+				return {"ok": True, "cmd": "force_interrupt", "interrupted": False}
+			hit = pv.force_interrupt(why, force=force)
+			return {"ok": True, "cmd": "force_interrupt", "interrupted": bool(hit)}
+		if cmd == "abort_clear_stim":
+			# GUI Stop: kill armed Mark Points / -slm, restore Live.
+			# One at a time — overlapping Stop/post-run/session clears were
+			# flooding PV with -Abort while the Trial log sat on "starting…".
+			from prairie_live.pv_cleanup import abort_and_clear_stim
+
+			restore = payload.get("restore_live")
+			kw = {}
+			if restore is not None:
+				kw["restore_live"] = bool(restore)
+			if not self._abort_clear_lock.acquire(blocking=False):
+				print("abort_clear_stim skipped (already in progress)", flush=True)
+				return {
+					"ok": True,
+					"cmd": "abort_clear_stim",
+					"notes": ["skipped_busy"],
+				}
+			try:
+				return {
+					"ok": True,
+					"cmd": "abort_clear_stim",
+					**abort_and_clear_stim(pv, **kw),
+				}
+			finally:
+				self._abort_clear_lock.release()
+		if cmd == "stim_hold":
+			# Pause/resume -gi for the whole serial arm (Live-off → -slm → DTR).
+			# Without this, grab -gi between Live-off and -slm can restart Live
+			# → -slm DONE before Trig In 1 (finished before first DTR).
+			held = bool(payload.get("held", True))
+			if held:
+				self._stim_hold.set()
+			else:
+				self._stim_hold.clear()
+			print(f"stim_hold held={held}", flush=True)
+			return {"ok": True, "cmd": "stim_hold", "held": held}
 		if cmd == "live":
+			# PV 6.1 needs explicit on|off; off must precede -slm/-mp.
+			state = str(payload.get("state") or "on").strip().lower()
+			if state in ("off", "0", "false"):
+				# Pause -gi so grab cannot race / restart Live under us.
+				keep_hold = bool(payload.get("keep_hold", False))
+				self._stim_hold.set()
+				try:
+					if hasattr(pv, "ensure_live_off"):
+						return pv.ensure_live_off(
+							attempts=int(payload.get("attempts") or 3),
+							settle_s=float(payload.get("settle_s") or 0.3),
+						)
+					return pv.stop_live()
+				finally:
+					# keep_hold: caller spans Live-off → -slm under one hold.
+					if not keep_hold and not pv._blocking_stim:
+						self._stim_hold.clear()
 			return pv.start_live()
 		if cmd == "get_state":
 			return pv.get_state(
@@ -181,15 +256,63 @@ class Relay:
 		if cmd == "mark_points":
 			self._n_fired += 1
 			t0 = time.monotonic()
-			out = pv.mark_points()
+			no_wait = bool(payload["no_wait"]) if "no_wait" in payload else False
+			timeout = float(payload.get("timeout") or 180.0)
+			# Pause -gi so Abort from Stop is not queued behind grab frames.
+			self._stim_hold.set()
+			try:
+				out = pv.mark_points(no_wait=no_wait, timeout=timeout)
+			finally:
+				self._stim_hold.clear()
 			dt = (time.monotonic() - t0) * 1000.0
-			print(f"mark_points #{self._n_fired} DONE in {dt:.0f} ms")
+			print(f"mark_points #{self._n_fired} DONE in {dt:.0f} ms no_wait={out.get('no_wait')}")
 			return out
 		if cmd == "mark_all_points":
 			parts = payload.get("parts") or []
 			if not isinstance(parts, list) or not parts:
 				raise ValueError("mark_all_points requires non-empty parts list")
-			return pv.mark_all_points(parts, wait_ms=float(payload.get("wait_ms") or 0.0))
+			kw: dict = {
+				"wait_ms": float(payload.get("wait_ms") or 0.0),
+				"timeout": float(payload.get("timeout") or 180.0),
+				"no_wait": bool(payload["no_wait"]) if "no_wait" in payload else False,
+			}
+			# Hold grab for the whole off→-slm window so nothing can sneak a
+			# -LiveScan on between ensure_live_off and MarkAllPoints.
+			# If the caller already held (serial arm), leave it held afterward
+			# so -gi cannot restart Live before DTR.
+			was_held = self._stim_hold.is_set()
+			self._stim_hold.set()
+			t0 = time.monotonic()
+			out: dict = {"ok": False, "cmd": "mark_all_points"}
+			try:
+				ensure = payload.get("ensure_live_off", True)
+				if ensure and hasattr(pv, "ensure_live_off"):
+					off = pv.ensure_live_off(
+						attempts=int(payload.get("live_off_attempts") or 3),
+						settle_s=float(payload.get("live_off_settle_s") or 0.3),
+					)
+					if isinstance(off, dict) and off.get("ok") is False:
+						out = {
+							"ok": False,
+							"error": f"LiveScan still on before -slm: {off}",
+							"cmd": "mark_all_points",
+						}
+						return out
+					print("mark_all_points: LiveScan off ensured under stim hold", flush=True)
+				out = pv.mark_all_points(parts, **kw)
+			finally:
+				# Only drop hold if we acquired it here and caller allows release.
+				if not was_held and bool(payload.get("release_hold", True)):
+					self._stim_hold.clear()
+			dt = (time.monotonic() - t0) * 1000.0
+			pv_raw = str(out.get("pv") or "")[:160]
+			out["elapsed_ms"] = round(dt, 1)
+			print(
+				f"mark_all_points DONE in {dt:.0f} ms no_wait={out.get('no_wait')} "
+				f"parts0={parts[0] if parts else None} pv={pv_raw!r}",
+				flush=True,
+			)
+			return out
 		return {"ok": False, "error": f"unknown cmd {cmd}"}
 
 

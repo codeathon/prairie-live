@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import socket
 import threading
+from pathlib import Path
 
 from prairie_live.com_ports import list_com_ports
 from prairie_live.gui_session import apply_gui_overrides
@@ -51,6 +52,66 @@ def test_apply_overrides_without_json():
 	assert opt["trigger_selection"] == "Trig In 1"
 	assert opt["cover_all"] is True
 	assert opt["n_groups"] == 2
+	assert opt["visual_enabled"] is False
+
+
+def test_webui_exposes_psychopy_controls():
+	html = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/index.html").read_text(
+		encoding="utf-8"
+	)
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	assert 'id="visual_enabled"' in html
+	assert 'id="visual_lead_ms"' in html
+	assert "visual_enabled" in js
+	assert "visualRunPayload" in js
+	from prairie_live.web_app import _body_bool, _body_float, _body_int
+
+	assert _body_bool({"visual_enabled": True}, "visual_enabled") is True
+	assert _body_bool({"visual_enabled": "false"}, "visual_enabled") is False
+	assert _body_int({"visual_screen": "1"}, "visual_screen") == 1
+	assert _body_float({"visual_lead_ms": "100"}, "visual_lead_ms") == 100.0
+
+
+def test_candidate_clear_is_selection_not_list():
+	html = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/index.html").read_text(
+		encoding="utf-8"
+	)
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	assert "Clear selection" in html
+	assert "rankedSig" in js
+	assert "selectionCleared" in js
+	assert "do not re-select after the user hits Clear" in js
+	assert "green highlight" in html
+
+
+def test_trial_log_is_simple_poll():
+	"""Trial log is plain server lines — no Copy / starting… / selection pause."""
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	html = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/index.html").read_text(
+		encoding="utf-8"
+	)
+	assert 'id="log_copy"' not in html
+	assert "log_copy" not in js
+	assert "starting…" not in js
+	assert "logSelectedText" not in js
+	assert '$("log").textContent = (st.log || []).join("\\n")' in js
+	assert "app.js?v=" in html
+
+
+def test_xml_file_keeps_filename_visible():
+	"""After Choose File, leave the input value so it is not 'No file chosen'."""
+	js = (Path(__file__).resolve().parents[1] / "src/prairie_live/webui/app.js").read_text(
+		encoding="utf-8"
+	)
+	assert "Leave input.value set" in js
+	assert 'addEventListener("click"' in js
+	assert "Loaded:" in js
 
 
 def test_com_ports_never_empty():
@@ -186,7 +247,7 @@ def test_web_ui_serves_page_not_tk_form():
 		assert "tile-caps" in text
 		assert "Fat Mark Points XML" in text
 		assert "tkinter" not in text.lower()
-		assert 'src="/app.js"' in text
+		assert 'src="/app.js' in text
 		js_status, js_ctype, js = _get(base + "/app.js")
 		assert js_status == 200
 		assert b"ensurePowerTiles" in js
@@ -225,12 +286,51 @@ def test_web_ui_parse_xml_opens_power_plan(tmp_path):
 		assert res["group_sizes"] == [4, 4]
 		assert "8 points" in res["plan"]
 		assert res["fields"]["n_points"] == 8
+		assert res["n_points"] == 8
 		assert STATE.planned_powers == [75.0, 140.0, 200.0]
 		st_status, _, st_raw = _get(base + "/api/status")
 		assert st_status == 200
 		st = json.loads(st_raw.decode("utf-8"))
 		assert [b["power"] for b in st["boards"]] == [75.0, 140.0, 200.0]
 		assert all(b["ready"] is False for b in st["boards"])
+	finally:
+		httpd.shutdown()
+
+
+def test_web_ui_parse_xml_second_upload_replaces_points(tmp_path):
+	"""Choose File must not stick on the first uploaded series."""
+	import base64
+	import time
+	from pathlib import Path
+
+	from prairie_live.web_app import STATE
+
+	STATE.xml_dir = tmp_path
+	httpd, base = _http_server()
+	try:
+		eight = Path("samples/MarkPoints_8fov.xml").read_bytes()
+		ten = Path("samples/MarkPoints_10fov_trig_in1.xml").read_bytes()
+		s1, r1 = _post(
+			base + "/api/parse-xml",
+			{
+				"name": "MarkPoints_8fov.xml",
+				"content_b64": base64.b64encode(eight).decode("ascii"),
+			},
+		)
+		assert s1 == 200 and r1["ok"] and r1["n_points"] == 8
+		path1 = r1["path"]
+		time.sleep(0.02)
+		s2, r2 = _post(
+			base + "/api/parse-xml",
+			{
+				"name": "MarkPoints_10fov_trig_in1.xml",
+				"content_b64": base64.b64encode(ten).decode("ascii"),
+			},
+		)
+		assert s2 == 200 and r2["ok"] and r2["n_points"] == 10
+		assert r2["path"] != path1
+		assert STATE.series_path == r2["path"]
+		assert len(STATE.points) == 10
 	finally:
 		httpd.shutdown()
 

@@ -69,8 +69,30 @@ class RelayClient:
 	def abort(self) -> dict:
 		return self._command({"cmd": "abort"})
 
+	def force_interrupt(self, why: str = "operator Abort") -> dict:
+		"""Ask the relay to drop the hung PV script socket (does not wait on -slm)."""
+		return self._command({"cmd": "force_interrupt", "why": str(why)})
+
+	def abort_clear_stim(self) -> dict:
+		"""Abort in-flight stim, load empty Mark Points series, restart LiveScan."""
+		return self._command({"cmd": "abort_clear_stim"})
+
 	def start_live(self) -> dict:
-		return self._command({"cmd": "live"})
+		return self._command({"cmd": "live", "state": "on"})
+
+	def stop_live(self, *, keep_hold: bool = False) -> dict:
+		"""-LiveScan off (no Abort). Call before -slm/-mp on PV 6.1.
+
+		``keep_hold=True`` leaves the relay stim-hold set so -gi cannot restart
+		Live before the following ``mark_all_points``.
+		"""
+		return self._command(
+			{"cmd": "live", "state": "off", "keep_hold": bool(keep_hold)}
+		)
+
+	def set_stim_hold(self, held: bool) -> dict:
+		"""Pause/resume relay -gi for a multi-command serial arm window."""
+		return self._command({"cmd": "stim_hold", "held": bool(held)})
 
 	def ping(self) -> dict:
 		return self._command({"cmd": "ping"})
@@ -98,15 +120,51 @@ class RelayClient:
 			payload["path"] = path
 		return self._command(payload)
 
-	def mark_points(self) -> dict:
+	def mark_points(
+		self,
+		*,
+		no_wait: bool | None = None,
+		timeout: float | None = None,
+	) -> dict:
 		"""Run current Mark Points series on the scope (-MarkPoints)."""
-		return self._command({"cmd": "mark_points"})
+		payload: dict = {"cmd": "mark_points"}
+		if no_wait is not None:
+			payload["no_wait"] = bool(no_wait)
+		if timeout is not None:
+			payload["timeout"] = float(timeout)
+		return self._command(payload)
 
-	def mark_all_points(self, parts: list[str], *, wait_ms: float = 0.0) -> dict:
-		"""Simultaneous SLM fire (-MarkAllPoints / -slm) on the scope."""
-		payload: dict = {"cmd": "mark_all_points", "parts": list(parts)}
+	def mark_all_points(
+		self,
+		parts: list[str],
+		*,
+		wait_ms: float = 0.0,
+		no_wait: bool | None = None,
+		timeout: float | None = None,
+		ensure_live_off: bool = True,
+		release_hold: bool = True,
+	) -> dict:
+		"""Simultaneous SLM fire (-MarkAllPoints / -slm) on the scope.
+
+		By default the relay ensures ``-LiveScan off`` under the same stim-hold
+		lock as ``-slm`` so nothing can turn Live back on in between.
+
+		When the caller already set ``stim_hold`` (serial arm), pass
+		``release_hold=False`` or leave hold set beforehand so -gi stays paused
+		until DTR finishes.
+		"""
+		payload: dict = {
+			"cmd": "mark_all_points",
+			"parts": list(parts),
+			"ensure_live_off": bool(ensure_live_off),
+			"release_hold": bool(release_hold),
+		}
 		if wait_ms and float(wait_ms) > 0:
 			payload["wait_ms"] = float(wait_ms)
+		if no_wait is not None:
+			payload["no_wait"] = bool(no_wait)
+		if timeout is not None:
+			payload["timeout"] = float(timeout)
 		return self._command(payload)
 
 	def _command(self, payload: dict) -> dict:

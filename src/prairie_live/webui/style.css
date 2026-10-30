@@ -112,12 +112,12 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   background: #12151c;
 }
 
-/* Two sub-columns: Rig + Session | Fat XML; log (+ candidates) share the rest. */
+/* Two sub-columns: Rig + Visual + Session | Fat XML; log (+ candidates) share the rest. */
 .side {
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   gap: 8px;
 }
 .card {
@@ -127,14 +127,33 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   min-height: 0;
 }
 .rig-card { grid-column: 1; grid-row: 1; }
-.session-card { grid-column: 1; grid-row: 2; }
-.xml-card { grid-column: 2; grid-row: 1 / span 2; display: flex; flex-direction: column; }
+.visual-card { grid-column: 1; grid-row: 2; }
+.session-card { grid-column: 1; grid-row: 3; }
+.xml-card { grid-column: 2; grid-row: 1 / span 3; display: flex; flex-direction: column; }
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+  cursor: pointer;
+}
+.check input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.visual-opts { margin-top: 4px; }
+.visual-opts[hidden] { display: none !important; }
 .xml-card .fields { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.log-card { grid-column: 1 / -1; grid-row: 3; display: flex; flex-direction: column; }
+.log-card { grid-column: 1 / -1; grid-row: 4; display: flex; flex-direction: column; }
 .side.has-cands .log-card { grid-column: 1; }
 /* At least 5 readable lines even on a short window. */
-.log-card pre { flex: 1 1 auto; min-height: 7.5em; margin: 0; }
-#cand_box:not([hidden]) { grid-column: 2; grid-row: 3; display: flex; flex-direction: column; }
+.log-card pre {
+  flex: 1 1 auto;
+  min-height: 7.5em;
+  margin: 0;
+}
+#cand_box:not([hidden]) { grid-column: 2; grid-row: 4; display: flex; flex-direction: column; }
 .table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
 
 label { display: block; margin: 3px 0; }

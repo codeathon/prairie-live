@@ -34,13 +34,21 @@ def normalize_trigger_selection(name: str | None) -> str:
 
 
 def trigger_identifier_for(selection: str | None, explicit: str | None = None) -> str:
-	"""GUID for PVSaved XML. Prefer an ID from the loaded file; else lab Trig In 1."""
-	ex = str(explicit or "").strip()
-	if ex and ex != NO_TRIGGER_IDENTIFIER:
-		return ex
+	"""GUID for PVSaved XML.
+
+	Selection wins: trigger=none / TriggerSelection=None must use the null GUID
+	even if the loaded file still carries a Trig In 1 identifier (that combo
+	has crashed PV's spiral DAC on -LoadMarkPoints).
+	"""
+	sel_raw = str(selection or "").strip()
+	if sel_raw in ("None", "none", ""):
+		return NO_TRIGGER_IDENTIFIER
 	sel = normalize_trigger_selection(selection)
 	if sel in ("None", "none", ""):
 		return NO_TRIGGER_IDENTIFIER
+	ex = str(explicit or "").strip()
+	if ex and ex != NO_TRIGGER_IDENTIFIER:
+		return ex
 	return DEFAULT_TRIGGER_IDENTIFIER
 
 
@@ -51,7 +59,8 @@ def lab_defaults() -> dict[str, Any]:
 		"trigger": "serial",
 		"trigger_selection": DEFAULT_TRIGGER_SELECTION,
 		"stim_mode": DEFAULT_STIM_MODE,
-		"slm_pack": False,
+		# One packed -MarkAllPoints per power; one DTR (Trig In 1) per group.
+		"slm_pack": True,
 		"cover_all": True,
 		"password": "0000",
 		"host": "127.0.0.1",
@@ -75,6 +84,20 @@ def lab_defaults() -> dict[str, Any]:
 		"pixel_size_um": 2.220,
 		"ttl_width": 0.01,
 		"inter_trial": 0.5,
+		# Seconds after -slm starts before the first DTR — covers SLM mask
+		# generation so Trig In 1 is armed. Too short → -slm DONE before DTR.
+		# Do not Abort between groups (Abort kills LiveScan).
+		"slm_arm_delay_s": 3.0,
+		# Idle after each group burn before the next -slm (LiveScan settle only).
+		"slm_group_settle_s": 2.5,
+		# Packed serial: min seconds between per-group DTR pulses (raised
+		# automatically to cover burn + PV Delay + F0/F1 windows).
+		"slm_group_gap_s": 3.0,
+		# PV Delay between packed groups — short; each group still waits on
+		# its own Trig In 1 edge.
+		"slm_group_delay_ms": 100.0,
+		# Keep LiveScan on through the packed sequence (per-group ΔF/F).
+		"slm_live_during_stim": True,
 		"pad_ms": 100.0,
 		"f0_s": 0.5,
 		"f1_s": 1.0,

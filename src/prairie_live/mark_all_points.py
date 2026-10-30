@@ -31,6 +31,7 @@ def build_set_tokens(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
+	spiral_size_fov: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
 ) -> list[str]:
@@ -40,6 +41,9 @@ def build_set_tokens(
 	Shape (2D + spiral + countable trigger):
 	  N False x0 y0 … xN-1 yN-1 duration_ms laser power True spiral_frac revs
 	  Trigger TriggerCount
+
+	``spiral_size_fov`` (0–1) wins when set — used so PV-saved galvo SpiralSize
+	matches the cyan overlay rings instead of only µm/fov_width_um.
 	"""
 	if not points:
 		raise ValueError("MarkAllPoints set needs at least one point")
@@ -52,8 +56,15 @@ def build_set_tokens(
 		"True" if use_3d else "False",
 	]
 	for pt in points:
-		parts.append(_fmt_num(pt["x"]))
-		parts.append(_fmt_num(pt["y"]))
+		# -slm X/Y are imaging FOV fractions 0–1 (not galvo volts).
+		x, y = float(pt["x"]), float(pt["y"])
+		if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+			raise ValueError(
+				f"MarkAllPoints point {pt.get('id')} has X/Y ({x:g},{y:g}) "
+				"outside FOV 0–1 — convert galvo→FOV before -slm"
+			)
+		parts.append(_fmt_num(x))
+		parts.append(_fmt_num(y))
 		if use_3d:
 			parts.append(_fmt_num(pt.get("z", 0)))
 
@@ -62,14 +73,17 @@ def build_set_tokens(
 	parts.append(_fmt_num(power))
 
 	if spiral:
-		if spiral_size_um is None:
-			raise ValueError("spiral=True requires spiral_size_um")
-		if fov_width_um is None:
-			raise ValueError(
-				"spiral=True requires fov_width_um in experiment.json "
-				"(to convert spiral_size_um → FOV fraction for -slm)"
-			)
-		frac = spiral_size_fov_frac(float(spiral_size_um), float(fov_width_um))
+		if spiral_size_fov not in (None, ""):
+			frac = min(max(float(spiral_size_fov), 0.0), 1.0)
+		else:
+			if spiral_size_um is None:
+				raise ValueError("spiral=True requires spiral_size_um or spiral_size_fov")
+			if fov_width_um is None:
+				raise ValueError(
+					"spiral=True requires fov_width_um in experiment.json "
+					"(to convert spiral_size_um → FOV fraction for -slm)"
+				)
+			frac = spiral_size_fov_frac(float(spiral_size_um), float(fov_width_um))
 		parts.extend(["True", _fmt_num(frac), str(int(spiral_revolutions))])
 
 	trig = str(trigger_selection or "None")
@@ -92,10 +106,13 @@ def build_mark_all_points_parts(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
+	spiral_size_fov: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
+	repetitions: int = 1,
+	rep_delay_ms: float = 0.0,
 ) -> list[str]:
-	"""Single-set -MarkAllPoints token list (compat wrapper around pack)."""
+	"""Single-group -MarkAllPoints token list (compat wrapper around pack)."""
 	return pack_mark_all_points(
 		[points],
 		power=power,
@@ -106,9 +123,12 @@ def build_mark_all_points_parts(
 		spiral_size_um=spiral_size_um,
 		spiral_revolutions=spiral_revolutions,
 		fov_width_um=fov_width_um,
+		spiral_size_fov=spiral_size_fov,
 		trigger_selection=trigger_selection,
 		trigger_count=trigger_count,
 		delay_ms=0.0,
+		repetitions=repetitions,
+		rep_delay_ms=rep_delay_ms,
 	)
 
 
@@ -123,39 +143,81 @@ def pack_mark_all_points(
 	spiral_size_um: float | None = 54.5,
 	spiral_revolutions: float | int = 8,
 	fov_width_um: float | None = None,
+	spiral_size_fov: float | None = None,
 	trigger_selection: str = DEFAULT_TRIGGER_SELECTION,
 	trigger_count: int | str = 1,
 	delay_ms: float = 0.0,
+	repetitions: int = 1,
+	rep_delay_ms: float = 0.0,
+	bnc_repetitions: bool = False,
 ) -> list[str]:
 	"""
 	Pack many simultaneous sets into one -slm command.
 
 	PV grammar: after each set's Trigger[+Count], append Delay ms except on the
 	last set. Software maps trigger pulse i → groups[i] (same order as packed).
+
+	``repetitions``: -MarkAllPoints has no Repetitions parameter. With
+	``TriggerSelection=None`` (Live on), each group is emitted as
+	``repetitions`` identical sets so one command burns N times.
+
+	With a BNC trigger (``Trig In 1``), serial mode must keep Live *off* to
+	arm. Mixing ``Trig In 1`` then ``None`` repeats in one -slm has returned
+	DONE before DTR (group never fires). BNC packs therefore emit **one set
+	per group**; XML/GUI Repetitions > 1 are ignored here (one burn per DTR).
+
+	``bnc_repetitions=True`` (packed Live-on path) keeps repetitions with a BNC
+	trigger: each group's first set waits on the trigger, its repeats use
+	``None`` and follow immediately, so one DTR still releases one whole group.
+	That early-DONE observation came from the Live-off single-group path, where
+	PV also failed to burn with Trigger=None — it is not evidence against
+	repeats when Live stays on.
+
+	``delay_ms`` separates groups. ``rep_delay_ms`` separates repeats of one
+	group.
+
+	``power`` is the total UI UncagingLaserPower for each hologram set (not
+	scaled by spot count; SLM splits that total across the spots).
 	"""
 	if not groups:
 		raise ValueError("pack_mark_all_points needs at least one group")
+	trig0 = str(trigger_selection or "None").strip()
+	bnc_wait = trig0.lower() not in ("none", "")
+	# BNC + Live off cannot use Trigger=None follow-ups in the same -slm.
+	reps = (
+		1 if (bnc_wait and not bnc_repetitions) else max(int(repetitions), 1)
+	)
+	set_kw = dict(
+		power=power,
+		laser=laser,
+		duration_ms=duration_ms,
+		use_3d=use_3d,
+		spiral=spiral,
+		spiral_size_um=spiral_size_um,
+		spiral_revolutions=spiral_revolutions,
+		fov_width_um=fov_width_um,
+		spiral_size_fov=spiral_size_fov,
+	)
 	parts: list[str] = ["-MarkAllPoints"]
-	last = len(groups) - 1
-	for i, gpts in enumerate(groups):
-		parts.extend(
-			build_set_tokens(
-				gpts,
-				power=power,
-				laser=laser,
-				duration_ms=duration_ms,
-				use_3d=use_3d,
-				spiral=spiral,
-				spiral_size_um=spiral_size_um,
-				spiral_revolutions=spiral_revolutions,
-				fov_width_um=fov_width_um,
-				trigger_selection=trigger_selection,
-				trigger_count=trigger_count,
+	last_group = len(groups) - 1
+	for gi, gpts in enumerate(groups):
+		for r in range(reps):
+			if r == 0:
+				trig, count = trigger_selection, trigger_count
+			else:
+				# None-trigger repeats only (Live on / trigger=none path).
+				trig, count = "None", 1
+			parts.extend(
+				build_set_tokens(
+					gpts, trigger_selection=trig, trigger_count=count, **set_kw
+				)
 			)
-		)
-		# Omit Delay on the last repetition (PV requirement).
-		if i < last:
-			parts.append(str(int(round(float(delay_ms)))))
+			is_last_set = gi == last_group and r == reps - 1
+			# Omit Delay on the very last set (PV requirement).
+			if is_last_set:
+				continue
+			gap = rep_delay_ms if r < reps - 1 else delay_ms
+			parts.append(str(int(round(float(gap)))))
 	return parts
 
 
@@ -183,7 +245,38 @@ def stim_params_from_meta(meta: dict[str, Any]) -> dict[str, Any]:
 		),
 		"trigger_count": max(1, trigger_count),
 		"initial_delay_ms": float(meta.get("initial_delay_ms", 0) or 0),
+		"repetitions": _int_or(meta.get("repetitions"), 1, minimum=1),
+		"rep_delay_ms": _rep_delay_ms(meta),
 	}
+
+
+def _int_or(v: Any, default: int, *, minimum: int = 0) -> int:
+	try:
+		n = int(float(v)) if v not in (None, "") else default
+	except (TypeError, ValueError):
+		n = default
+	return max(n, minimum)
+
+
+def _rep_delay_ms(meta: dict[str, Any]) -> float:
+	"""Gap between repeats of one group: Mark Points InterPointDelay (ms)."""
+	for key in ("inter_point_delay_ms", "inter_point_delay"):
+		v = meta.get(key)
+		if v in (None, ""):
+			continue
+		try:
+			return max(float(v), 0.0)
+		except (TypeError, ValueError):
+			continue
+	return 0.0
+
+
+def slm_burn_ms(slm_params: dict[str, Any]) -> float:
+	"""Wall time of one group's burn: all repeats plus the gaps between them."""
+	reps = max(int(slm_params.get("repetitions") or 1), 1)
+	dur = float(slm_params.get("duration_ms") or 0)
+	gap = float(slm_params.get("rep_delay_ms") or 0)
+	return reps * dur + (reps - 1) * gap
 
 
 def _fmt_num(v: Any) -> str:

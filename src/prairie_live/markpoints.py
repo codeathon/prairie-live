@@ -29,9 +29,15 @@ _SPIRAL_DEFAULTS = {
 _DEFAULT_LASER = "Monaco"
 _DEFAULT_SPIRAL_REVS = "8"
 _DEFAULT_USE_3D = "False"
-# PV's saved series stores UncagingLaserPower as a fraction of this UI value
-# (rig file: 0.4 at UI 160, 0.625 at UI 250).
-POWER_FULL_SCALE = 400.0
+# Monaco laser (lab PV Mark Points / laser panel):
+#   Out min/max  = 0.0 … 2.5   (what series XML UncagingLaserPower stores)
+#   Display max  = 1000        (what the Mark Points GUI and -slm use)
+# XML Out ↔ GUI Display: display = out * (DISPLAY_MAX / OUT_MAX) = out * 400
+#   e.g. XML 0.4 → GUI 160, XML 0.625 → GUI 250.
+MONACO_OUT_MIN = 0.0
+MONACO_OUT_MAX = 2.5
+MONACO_DISPLAY_MAX = 1000.0
+POWER_FULL_SCALE = MONACO_DISPLAY_MAX / MONACO_OUT_MAX  # 400.0
 _NO_TRIGGER_ID = NO_TRIGGER_IDENTIFIER
 
 
@@ -277,6 +283,11 @@ def extract_unique_points(steps: list[dict]) -> list[dict]:
 			# Carry spiral defaults so rewritten XML stays loadable.
 			for k, v in _SPIRAL_DEFAULTS.items():
 				row.setdefault(k, v)
+			# PV-saved series keep SpiralRevolutions on the step, not the point.
+			if row.get("spiral_revolutions") in (None, ""):
+				revs = step.get("spiral_revolutions")
+				if revs not in (None, ""):
+					row["spiral_revolutions"] = str(revs)
 			out.append(row)
 	if not out:
 		raise ValueError(
@@ -353,21 +364,28 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 
 
 def xml_power(power: float, meta: dict[str, Any] | None = None) -> float:
-	"""UI power (e.g. 160) → PV series UncagingLaserPower fraction (0.4)."""
+	"""GUI Display UncagingLaserPower (e.g. 160) → series XML Out (e.g. 0.4).
+
+	XML stores Monaco **Out** (0–``MONACO_OUT_MAX``), not Display/1000.
+	"""
 	scale = float((meta or {}).get("power_full_scale") or POWER_FULL_SCALE)
-	frac = float(power) / scale
-	if not 0.0 <= frac <= 1.0:
+	out = float(power) / scale
+	if not 0.0 <= out <= float(MONACO_OUT_MAX) + 1e-9:
 		raise ValueError(
-			f"power {power:g} is outside 0–{scale:g} (PV full scale); "
+			f"power {power:g} is outside Display 0–{scale:g} "
+			f"(Out 0–{MONACO_OUT_MAX:g}); "
 			"enter powers as shown in PV's Mark Points window"
 		)
-	return round(frac, 6)
+	return round(out, 6)
 
 
 def ui_power(raw: Any) -> float:
-	"""PV series UncagingLaserPower fraction → UI power (0.4 → 160)."""
+	"""Series XML Out (e.g. 0.4) → GUI Display UncagingLaserPower (160).
+
+	Values already > Out max are treated as Display already.
+	"""
 	val = float(raw or 0)
-	return round(val * POWER_FULL_SCALE, 6) if val <= 1.0 else val
+	return round(val * POWER_FULL_SCALE, 6) if val <= MONACO_OUT_MAX else val
 
 
 def build_group_step(
@@ -505,9 +523,11 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 	"""
 	Write PV's own saved-series layout (PVSavedMarkPointSeriesElements).
 
-	Each point is its own PVMarkPointElement with X/Y inline. When a trigger
-	line is set, every point waits (FirstRepetition + Trig In 1 GUID) — same
-	as a PV UI export. Software must pulse DTR once per point.
+	Each point is its own PVMarkPointElement with X/Y inline. For serial
+	trigger, only the **first** point of each group waits on Trig In 1 /
+	FirstRepetition — one DTR releases the whole group; later points fire
+	with Frequency=None (null GUID). A PV UI export that tags every point
+	would need one pulse per point; mp-sync wants one pulse per group.
 	"""
 	meta = groups[0] if groups else {}
 	root = ET.Element("PVSavedMarkPointSeriesElements")
@@ -519,12 +539,15 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 		if not g.get("is_active", True):
 			continue
 		trig = str(g.get("trigger_selection", "None"))
+		want_trig = trig not in ("None", "none", "")
 		freq = (
 			str(g.get("trigger_frequency", DEFAULT_TRIGGER_FREQUENCY))
-			if trig not in ("None", "none", "")
+			if want_trig
 			else "None"
 		)
 		tid = trigger_identifier_for(trig, g.get("trigger_identifier"))
+		# One wait-for-trigger at the start of this group; rest free-run.
+		group_first = True
 		for pt in g["points"]:
 			if not pt.get("is_active", True):
 				continue
@@ -532,10 +555,13 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 			el.set("Repetitions", str(g["repetitions"]))
 			el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
 			el.set("UncagingLaserPower", str(g.get("xml_power", g["laser_pwr"])))
-			el.set("TriggerFrequency", freq)
-			if trig not in ("None", "none", ""):
+			if want_trig and group_first:
+				el.set("TriggerFrequency", freq)
 				el.set("TriggerSelection", trig)
-			el.set("TriggerIdentifier", tid)
+				el.set("TriggerIdentifier", tid)
+			else:
+				el.set("TriggerFrequency", "None")
+				el.set("TriggerIdentifier", _NO_TRIGGER_ID)
 			el.set("TriggerCount", str(g.get("trigger_count", "1")))
 			el.set("AsyncSyncFrequency", str(g.get("async_sync_frequency", "None")))
 			el.set("VoltageOutputCategoryName", str(g.get("voltage_output_category", "None")))
@@ -555,6 +581,7 @@ def groups_to_saved_xml(groups: list[dict]) -> str:
 			if size not in (None, ""):
 				galvo.set("SpiralSize", str(size))
 			first = False
+			group_first = False
 	return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 
@@ -667,7 +694,9 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 		if point_els:
 			for pt_el in point_els:
 				idx = pt_el.attrib.get("Index", str(len(group["points"]) + 1))
-				group["points"].append({
+				# Nested <Point SpiralWidth> is FOV fraction (post-run fat series).
+				sw = pt_el.attrib.get("SpiralWidth", "")
+				row = {
 					"id": str(idx),
 					"name": f"Point {idx}",
 					"is_active": True,
@@ -677,17 +706,20 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 					"duration": dur,
 					"power": pwr,
 					"is_spiral": pt_el.attrib.get("IsSpiral", "False"),
-					"spiral_width": pt_el.attrib.get("SpiralWidth", ""),
+					"spiral_width": sw,
 					"spiral_height": pt_el.attrib.get("SpiralHeight", ""),
 					"spiral_size_um": pt_el.attrib.get("SpiralSizeInMicrons", ""),
-				})
+				}
+				if sw not in (None, "") or pt_el.attrib.get("SpiralSizeInMicrons"):
+					row["spiral_space"] = "fov"
+				group["points"].append(row)
 		elif galvo and "X" in galvo[0].attrib and "Y" in galvo[0].attrib:
 			# PV's saved series: one point per PVGalvoPointElement, X/Y inline
 			# in galvo units, spiral as SpiralSize in the same units.
 			g0 = galvo[0]
 			idx = (indices or str(i + 1)).split(",")[0].strip()
 			size = g0.attrib.get("SpiralSize")
-			group["points"].append({
+			row = {
 				"id": idx,
 				"name": points_attr.strip() or f"Point {idx}",
 				"is_active": True,
@@ -701,7 +733,11 @@ def _parse_mark_point_elements(root: ET.Element, series_meta: dict) -> list[dict
 				"spiral_height": g0.attrib.get("SpiralHeight", size or ""),
 				"spiral_size_fov": size,
 				"spiral_size_um": g0.attrib.get("SpiralSizeInMicrons", ""),
-			})
+			}
+			# Tag galvo SpiralSize so -slm never treats 0.185 V as FOV fraction.
+			if size not in (None, "") or row["spiral_width"] not in (None, ""):
+				row["spiral_space"] = "galvo"
+			group["points"].append(row)
 		else:
 			names = _split_points_attr(points_attr) or [f"Step {i}"]
 			for j, pname in enumerate(names):

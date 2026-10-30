@@ -52,7 +52,193 @@ def test_live_tseries_abort_are_script_commands():
 	r = _relay()
 	for cmd in ("live", "tseries", "abort"):
 		assert r.handle_command({"cmd": cmd})["ok"] is True
-	assert _cmds(r) == [("-LiveScan",), ("-TSeries",), ("-Abort",)]
+	assert _cmds(r) == [("-LiveScan", "on"), ("-TSeries",), ("-Silent", "-Abort")]
+
+
+def test_force_interrupt_noop_when_lock_free():
+	r = _relay()
+	out = r.handle_command({"cmd": "force_interrupt", "why": "test"})
+	assert out == {"ok": True, "cmd": "force_interrupt", "interrupted": False}
+	assert r.pv.link is not None
+	assert _cmds(r) == []
+
+
+def test_force_interrupt_ignores_grab_lock():
+	"""Do not drop the socket when only -gi holds the lock (no burns bug)."""
+	r = _relay()
+	assert r.pv.lock.acquire(blocking=False)
+	try:
+		out = r.handle_command({"cmd": "force_interrupt", "why": "grab"})
+	finally:
+		r.pv.lock.release()
+	assert out["interrupted"] is False
+	assert r.pv.link is not None
+
+
+def test_force_interrupt_closes_sock_while_slm_held():
+	"""Stop/Abort must not wait on hung -slm DONE — drop the socket instead."""
+	r = _relay()
+	closed = {"n": 0}
+	link = r.pv.link
+
+	def _close():
+		closed["n"] += 1
+
+	link.close = _close  # type: ignore[method-assign]
+	r.pv._blocking_stim = True
+	r._stim_hold.set()
+	assert r.pv.lock.acquire(blocking=False)
+	try:
+		out = r.handle_command({"cmd": "force_interrupt", "why": "hung-slm"})
+	finally:
+		r.pv.lock.release()
+		r.pv._blocking_stim = False
+		r._stim_hold.clear()
+	assert out["interrupted"] is True
+	assert closed["n"] == 1
+	assert r.pv.link is None
+
+
+def test_abort_drops_socket_when_lock_held():
+	"""Abort must not block forever behind hung -slm (blank Run / Live off)."""
+	import threading
+	import time as _t
+
+	r = _relay()
+	closed = {"n": 0}
+	wake = threading.Event()
+
+	class BlockingLink(FakeLink):
+		def send_command(self, *parts):
+			wake.wait(5.0)
+			raise ConnectionResetError("socket closed")
+
+		def close(self):
+			closed["n"] += 1
+			wake.set()
+
+	r.pv.link = BlockingLink()
+	r.pv._started = True
+	r.pv._opened_at = 0.0
+
+	def _open():
+		r.pv.link = FakeLink()
+		r.pv.gi = None
+
+	r.pv._open = _open  # type: ignore[method-assign]
+	err: list = []
+
+	def _hung():
+		r.pv._blocking_stim = True
+		try:
+			r.pv.send("-Silent", "-MarkAllPoints", "x", timeout=30.0)
+		except Exception as exc:  # noqa: BLE001
+			err.append(exc)
+		finally:
+			r.pv._blocking_stim = False
+
+	th = threading.Thread(target=_hung, daemon=True)
+	th.start()
+	_t.sleep(0.15)
+	out = r.handle_command({"cmd": "abort"})
+	th.join(3.0)
+	assert out["ok"] is True
+	assert closed["n"] >= 1
+	assert err, "hung -slm should have raised after socket drop"
+
+
+def test_stim_hold_pauses_grab_during_mark_all_points():
+	r = _relay()
+	parts = ["-MarkAllPoints", "1", "False", "0.1", "0.2", "10", "Monaco", "0.75", "None"]
+	assert not r._stim_hold.is_set()
+	# mark_all_points clears hold in finally even on success.
+	assert r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"ensure_live_off": True,
+			"live_off_attempts": 2,
+			"live_off_settle_s": 0,
+		}
+	)["ok"] is True
+	assert not r._stim_hold.is_set()
+	cmds = _cmds(r)
+	assert cmds.count(("-LiveScan", "off")) == 2
+	assert any(c[0] == "-Silent" for c in cmds)
+
+
+def test_stim_hold_cmd_and_serial_arm_keeps_hold_after_slm():
+	# Serial arm: hold -gi across Live-off → -slm → DTR so grab cannot
+	# restart Live (that caused finished-before-first-DTR).
+	r = _relay()
+	parts = [
+		"-MarkAllPoints",
+		"1",
+		"False",
+		"0.5",
+		"0.5",
+		"36",
+		"Monaco",
+		"160",
+		"Trig In 1",
+		"1",
+	]
+	assert r.handle_command({"cmd": "stim_hold", "held": True})["held"] is True
+	assert r._stim_hold.is_set()
+	out = r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"ensure_live_off": True,
+			"live_off_attempts": 2,
+			"live_off_settle_s": 0,
+			"release_hold": False,
+		}
+	)
+	assert out["ok"] is True
+	assert "elapsed_ms" in out
+	# Hold must survive -slm so DTR can still land while grab is paused.
+	assert r._stim_hold.is_set()
+	assert r.handle_command({"cmd": "stim_hold", "held": False})["held"] is False
+	assert not r._stim_hold.is_set()
+
+
+def test_mark_all_points_ensures_live_off_before_slm():
+	r = _relay()
+	parts = ["-MarkAllPoints", "1", "False", "0.5", "0.5", "36", "Monaco", "160", "Trig In 1", "1"]
+	out = r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"ensure_live_off": True,
+			"live_off_attempts": 3,
+			"live_off_settle_s": 0,
+		}
+	)
+	assert out["ok"] is True
+	cmds = _cmds(r)
+	assert cmds[:3] == [
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+	]
+	assert ("-Silent", "-Abort") not in cmds
+
+
+def test_live_off_stops_scan_without_abort():
+	"""PV 6.1: -slm will not wait on Trig In 1 while Live is still running."""
+	r = _relay()
+	out = r.handle_command(
+		{"cmd": "live", "state": "off", "attempts": 3, "settle_s": 0}
+	)
+	assert out["ok"] is True
+	assert out.get("attempts") == 3
+	assert _cmds(r) == [
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+	]
+	assert ("-Silent", "-Abort") not in _cmds(r)
 
 
 def test_get_state_uses_gts():
@@ -87,7 +273,13 @@ def test_load_and_fire_mark_points_on_one_session(tmp_path):
 	assert out["ok"] is True and out["path"] == path
 	assert (tmp_path / "trial.xml").read_text() == "<x/>"
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	assert r.pv.link.sent == [(("-LoadMarkPoints", path), 60.0), (("-MarkPoints",), 60.0)]
+	# Block on -MarkPoints (no -NoWait): caller pulses DTR while DONE waits.
+	# -Silent -LoadMarkPoints + MarkPointsMetadata=False avoid E:\Markpoints
+	# "file already present" dialogs that stuck APA on group 1.
+	cmds = [c[0] for c in r.pv.link.sent]
+	assert ("-MarkPointsMetadata", "False") in cmds
+	assert ("-Silent", "-LoadMarkPoints", path) in cmds
+	assert ("-Silent", "-MarkPoints") in cmds
 	assert r.pv.link.timeout == 10.0
 
 
@@ -110,9 +302,53 @@ def test_mark_all_points_waits_whole_ms_then_fires():
 		"Trig In 1",
 		"1",
 	]
-	out = r.handle_command({"cmd": "mark_all_points", "parts": parts, "wait_ms": 22.1})
+	# Trig In 1: Live off under hold, then -Wait, then -slm.
+	out = r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"wait_ms": 22.1,
+			"ensure_live_off": True,
+			"live_off_attempts": 2,
+			"live_off_settle_s": 0,
+		}
+	)
 	assert out["ok"] is True
-	assert _cmds(r) == [("-Wait", "22"), tuple(parts)]
+	assert _cmds(r) == [
+		("-LiveScan", "off"),
+		("-LiveScan", "off"),
+		("-Wait", "22"),
+		("-Silent", *parts),
+	]
+	assert out.get("no_wait") is False
+
+
+def test_mark_all_points_no_wait_false_when_trigger_none():
+	r = _relay()
+	parts = [
+		"-MarkAllPoints",
+		"1",
+		"False",
+		"0.1",
+		"0.2",
+		"10",
+		"Monaco",
+		"0.75",
+		"None",
+	]
+	# Trigger=None must not Live-off (that yields DONE with no burns).
+	out = r.handle_command(
+		{
+			"cmd": "mark_all_points",
+			"parts": parts,
+			"no_wait": False,
+			"ensure_live_off": False,
+		}
+	)
+	assert out["ok"] is True
+	assert _cmds(r) == [("-Silent", *parts)]
+	assert out.get("no_wait") is False
+	assert ("-LiveScan", "off") not in _cmds(r)
 
 
 def test_grab_one_stores_gi_frame():
@@ -234,7 +470,7 @@ def test_dropped_session_reconnects_and_names_the_command(monkeypatch, capsys):
 	assert opened == [1]
 	assert "during '-gts currentScanAmplitude XAxis'" in capsys.readouterr().out
 	assert r.handle_command({"cmd": "mark_points"})["ok"] is True
-	assert _cmds(r) == [("-MarkPoints",)]
+	assert _cmds(r) == [("-Silent", "-MarkPoints")]
 
 
 def test_prairie_link_raises_when_pv_closes_socket():

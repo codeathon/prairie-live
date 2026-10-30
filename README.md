@@ -33,7 +33,7 @@ $env:PYTHONPATH = "$PWD\src"
 
 ### Analysis PC only — PsychoPy gratings (optional)
 
-Only needed when `visual_enabled` is `true` in `experiment.json`.
+Only needed when PsychoPy gratings are enabled in the web UI (`visual_enabled`).
 Python 3.12: do **not** run plain `pip install psychopy` (pulls broken `pywinhook`).
 
 ```powershell
@@ -104,8 +104,9 @@ up there (and as a red flash on the FOV) even without an XML of those points.
 PrairieView has no GetMarkPoints — colored disk traces and cyan rings come
 only from `--series` / `--config` (same `disk_mean` as mp-sync ΔF/F). Export
 the fat MarkPoints XML of the points you actually fire and pass that file, or
-the per-id lines will sit on the sample 8-point list. `--config experiment.json`
-reads `series` and `disk_radius`. Later panels go on this grid, not extra windows.
+the per-id lines will sit on the sample 8-point list. Optional `--config`
+JSON can supply `series` and `disk_radius`. Later panels go on this grid, not
+extra windows.
 
 Title `max=` is the latest raw PMT peak. `max=0` on a 512² frame means grab is
 empty (wrong `--channel`, or Live not running in PV).
@@ -114,7 +115,7 @@ empty (wrong `--channel`, or Live not running in PV).
 ```powershell
 python -m prairie_live view --relay 10.33.107.221:25100
 python -m prairie_live view --relay 10.33.107.221:25100 --avg-s 0.5
-python -m prairie_live view --relay 10.33.107.221:25100 --config experiment.json --avg-s 0.5 --window-s 8
+python -m prairie_live view --relay 10.33.107.221:25100 --series samples/MarkPoints_8fov.xml --avg-s 0.5 --window-s 8
 python -m prairie_live view --mock --series samples/MarkPoints_8fov.xml
 ```
 
@@ -147,18 +148,27 @@ it. `--roi-radius` sets the click-disk radius (default 8 px).
 python -m prairie_live view --relay 10.33.107.221:25100 --avg-s 0.5 --roi-radius 8
 ```
 
-## Analysis PC — run mp-sync
-
-Edit `experiment.json` (series path, relay IP, COM port, powers, etc.), then:
+## Analysis PC — run (preferred: web UI)
 
 ```powershell
 cd C:\Users\schollab\code\prairie-live
 $env:PYTHONPATH = "$PWD\src"
-python -m prairie_live mp-sync --config experiment.json
+python -m prairie_live gui
 ```
 
-CLI flags override the file, e.g. `--iterations 2` or `--visual` to force
-gratings on for one run.
+Open `http://127.0.0.1:8765/`. Pick your Mark Points `.xml` / `.gpl`, relay, COM,
+powers, stim mode, and trigger. **For PV-saved series XML, Duration / SpiralRevs /
+InterPointDelay / Repetitions / X,Y,SpiralSize come from that file** — no
+`experiment.json` is required (and lab defaults will not rewrite those fields).
+
+### CLI mp-sync (optional)
+
+```powershell
+python -m prairie_live mp-sync --series samples/MarkPoints_25_trig_in1.xml --stim-mode series --trigger none --via-relay 10.33.107.221:25100 --powers 160
+```
+
+Optional `--config path.json` still works for session logistics (relay, powers,
+group size). Stim dwell/spiral for PV-saved Mark Points stay on the XML.
 
 ### Outputs
 
@@ -173,71 +183,44 @@ gratings on for one run.
 | `trial_images/run_…/next_series.xml` | User-picked candidates from the GUI Save XML button |
 | `trial_images/run_…/summary.txt` | One line per trial |
 
-## `experiment.json` reference
+## Optional `--config` JSON
 
-Keys starting with `_` in the file are comments only and are ignored at load time.
-CLI flag names use hyphens (`--via-relay`, `--n-groups`, …).
+`experiment.json` is **not** required. The web UI uses lab defaults + your Mark
+Points file. If you pass `--config path.json` to CLI `mp-sync` / `view`, keys
+starting with `_` are comments. Useful keys: `series`, `via_relay`, `serial`,
+`powers`, `stim_mode`, `trigger`, `n_groups`, `group_size`, `fov_width_um`
+(SLM spiral µm→FOV). For **PV-saved** Mark Points XML, do **not** put
+`duration_ms` / `spiral_revolutions` / `inter_point_delay_ms` in the config —
+those stay on the XML.
 
-| Key | Type | Description |
-|-----|------|-------------|
-| `series` | string | Mark Points input: `.xml` or `.gpl` path (FOV-normalized X/Y 0–1 for `stim_mode=slm`) |
-| `scope_xml` | string \| null | Local path on scope PC when not using relay push (usually `null`; use `via_relay` instead) |
-| `via_relay` | string | Relay address for Mark Points + frames, e.g. `10.33.107.221:25100` |
-| `relay` | string \| null | Alternate relay host for frame scoring only (usually `null`; `via_relay` covers both) |
-| `log` | string | JSONL trial log path (default `trials.jsonl`) |
-| `host` | string | PrairieView script host when not using relay (scope loopback `127.0.0.1`) |
-| `port` | int | PrairieView script TCP port (default `1236`) |
-| `password` | string | PrairieView script password |
-| `iterations` | int | How many times to reshuffle groups and run the full power sweep |
-| `n_groups` | int | Number of random point groups per iteration |
-| `group_size` | int | Target points per group (minimum 3 enforced) |
-| `powers` | list[float] | Uncaging laser powers — same scale as PV UI `UncagingLaserPower` (not 0–1) |
-| `repetitions` | int | Fixed Mark Points / SLM repetitions on every generated trial (≥1) |
-| `stim_dff_min` | float | Disk ΔF/F threshold to count a point as stimulated (f0/f1) |
-| `seed` | int | RNG seed for group formation (`0` = deterministic) |
-| `trigger` | string | TTL mode: `serial` (DTR on `serial` port), `wait` (PFI wait), or `none` |
-| `serial` | string | COM port for DTR photostim pulse, e.g. `COM3` |
-| `ttl_width` | float | DTR pulse width in seconds |
-| `inter_trial` | float | Pause between trials in seconds |
-| `pad_ms` | float | Extra settle time after PrairieView ack before TTL (ms) |
-| `elite_frac` | float | Fraction of top-scoring points biased into later group draws (0–1) |
-| `mock_scores` | bool | Fake ΔF/F scores (dry testing without relay frames) |
-| `f0_s` | float | Pre-TTL baseline window for scoring (seconds) |
-| `f1_s` | float | Post-TTL response window for scoring (seconds) |
-| `frame_poll` | float | Relay frame poll interval during F0/F1 capture (seconds) |
-| `disk_radius` | int | Pixel radius around each point for disk-mean ΔF/F |
-| `dry_run` | bool | Plan trials and log without firing PrairieView or TTL |
-| `inspect` | bool | Print group/plan details and exit without running |
-| `images_dir` | string | Root for trial PNG folders; each run → `images_dir/run_YYYYMMDD_HHMMSS/` (needs relay `--grab`) |
-| `stim_mode` | string | `slm` (`-MarkAllPoints` / `-slm`) or `series` (`-LoadMarkPoints` / `-MarkPoints`) |
-| `slm_pack` | bool | `true`: one packed `-MarkAllPoints` per power; `false`: one per group |
-| `laser` | string | Uncaging laser name in Mark Points XML, e.g. `Monaco` |
-| `use_3d` | bool | Match series `Use3D`; set `true` when points have nonzero Z |
-| `all_points_at_once` | bool | PrairieView `AllPointsAtOnce` flag |
-| `spiral` | bool | Spiral scan on each point |
-| `spiral_size_um` | float | Spiral diameter in µm |
-| `spiral_revolutions` | float | Number of spiral revolutions |
-| `image_width_px` | int | Frame width in pixels (relay `--width`) |
-| `image_height_px` | int | Frame height in pixels (relay `--height`) |
-| `fov_width_um` | float | Optical FOV width in µm (converts spiral size for `-slm`) |
-| `fov_height_um` | float | Optical FOV height in µm |
-| `pixel_size_um` | float | µm per pixel at current zoom |
-| `duration_ms` | float | Stim duration per point (ms); match `.gpl` / UI |
-| `initial_delay_ms` | float | Delay before first point fires (ms) |
-| `inter_point_delay_ms` | float | Delay between points in a group (ms) |
-| `interval_ms` | float | Reference interval ≈ duration + inter-point delay (documentation) |
-| `trigger_selection` | string | PrairieView trigger line, e.g. `Trig In 1` |
-| `visual_enabled` | bool | Run embedded PsychoPy gratings on analysis PC (owns COM3 RTS+DTR) |
-| `visual_screen` | int | Monitor index (`0` = primary, `1` = second display) |
-| `visual_refresh_hz` | float | Display refresh rate used for frame timing |
-| `visual_isi_s` | float | Inter-stimulus interval between gratings (seconds) |
-| `visual_lead_ms` | float | Delay from grating onset (RTS) to DTR photostim pulse (ms) |
-| `visual_dtr_frames` | int | DTR hold length in display frames |
-| `visual_grating_frames` | int | Grating epoch length in display frames |
-| `visual_orientations` | list[float] | Grating orientations in degrees |
-| `visual_contrasts` | list[float] | Michelson contrasts in percent (e.g. `16` = 16%) |
-| `visual_spatial_freq` | float | Spatial frequency (cycles/degree) |
-| `visual_temporal_freq` | float | Temporal frequency (Hz) |
-| `visual_stim_size_deg` | float | Grating aperture diameter (degrees) |
-| `visual_texture` | string | PsychoPy texture, e.g. `sqr` |
-| `visual_random` | bool | Randomize orientation/contrast each trial |
+## Mark Points coordinates (galvo vs FOV)
+
+PrairieView writes two spaces for the same targets:
+
+| When you save | Typical file | X/Y meaning |
+|---------------|--------------|-------------|
+| Point list / save before running | `.gpl` / `PVSavedMarkPointSeriesElements` | **Galvo volts** (can be &lt;0 or \|Y\|&gt;1) |
+| Fat series after a Mark Points run | `PVMarkPointSeriesElements` + nested `<Point>` | **FOV fractions 0–1** of the Live image |
+
+Conversion (matches PV; implemented in `scan_geometry.py`):
+
+```
+FOV  = 0.5 + (galvo − currentScanCenter) / currentScanAmplitude
+galvo = currentScanCenter + (FOV − 0.5) · currentScanAmplitude
+SpiralWidth_FOV = SpiralSize_galvo / |amp|
+```
+
+`currentScanAmplitude` from `-gts` is the scan **full width** (frame =
+center ± amp/2). Using `2·amp` compressed the constellation toward center
+(cyan rings too close vs PV’s Mark Points GUI). Classic `stim_mode=slm`
+remaps galvo→FOV at fire time with LiveScan on.
+
+**SpiralSize / power:** never-run PVSaved `SpiralSize` is galvo volts (do not
+send ~0.185 as FOV fraction). For `-slm`, the GUI prefers lab spiral
+**54.5 µm / FOV µm** (≈0.048).
+
+**Monaco laser power (lab):** Out min/max **0–2.5**, Display max **1000**.
+Mark Points GUI and `-slm` use **Display** (e.g. Powers `150`). Series XML
+`UncagingLaserPower` stores **Out** (`150/1000×2.5 = 0.375`). Conversion
+factor Display/Out = 400. Powers is the **total** for the group hologram;
+simultaneous SLM splits that across spots (~150/4 if the group has 4).
