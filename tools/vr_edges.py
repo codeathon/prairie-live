@@ -84,7 +84,34 @@ def load_binary(path):
 	return ["Time(ms)", *names], rows
 
 
+def resolve_recording(path):
+	"""Accept a run folder or any file in it; return the VoltageRecording data file."""
+	import glob
+	import os
+
+	if os.path.isdir(path):
+		folder = path
+	elif path.lower().endswith(".csv") or path.endswith("_VoltageRecording_001"):
+		return path
+	else:
+		folder = os.path.dirname(path) or "."
+	hits = sorted(
+		glob.glob(os.path.join(folder, "*_VoltageRecording_0*.csv"))
+		+ [
+			f for f in glob.glob(os.path.join(folder, "*_VoltageRecording_0*"))
+			if os.path.splitext(f)[1] == ""
+		]
+	)
+	if not hits:
+		raise SystemExit(f"no *_VoltageRecording_* data file in {folder}")
+	if len(hits) > 1:
+		print(f"note: {len(hits)} recordings in folder, using {os.path.basename(hits[0])}")
+	print(f"recording: {hits[0]}")
+	return hits[0]
+
+
 def load(path):
+	path = resolve_recording(path)
 	if not path.lower().endswith(".csv"):
 		return load_binary(path)
 	with open(path, newline="", encoding="utf-8-sig") as f:
