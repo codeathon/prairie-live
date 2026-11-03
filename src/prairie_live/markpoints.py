@@ -353,13 +353,18 @@ def template_meta(steps: list[dict]) -> dict[str, Any]:
 	)
 	meta = {k: s0.get(k, template_meta([])[k]) for k in keys}
 	# PV saved series often omit TriggerSelection and only store the GUID.
+	# Name it only from a GUID confirmed on this rig; never assume Trig In 1.
 	tid = str(meta.get("trigger_identifier") or _NO_TRIGGER_ID)
 	if tid != _NO_TRIGGER_ID and str(meta.get("trigger_selection") or "None") in (
 		"None",
 		"none",
 		"",
 	):
-		meta["trigger_selection"] = DEFAULT_TRIGGER_SELECTION
+		from prairie_live.lab_defaults import describe_file_trigger
+
+		meta["trigger_selection"] = describe_file_trigger(None, tid)
+	meta["file_trigger_selection"] = meta.get("trigger_selection")
+	meta["file_trigger_identifier"] = tid
 	return meta
 
 

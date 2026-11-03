@@ -20,36 +20,119 @@ DEFAULT_TRIGGER_FREQUENCY = "FirstRepetition"
 STIM_MODES = ("slm", "series")
 # serial: PV waits on Trig In 1 for our DTR pulse. none: PV fires as soon as the command lands.
 TRIGGERS = ("serial", "none")
-_LEGACY_TRIGGER_LINES = frozenset(
-	{"", "None", "none", "PFI1", "pfi1", "TrigIn1", "TrigIn 1", "Trig In1"}
-)
+# Old spellings of the Trig In 1 BNC. "None"/"" mean NO trigger — never Trig In 1.
+_LEGACY_TRIGGER_LINES = frozenset({"PFI1", "pfi1", "TrigIn1", "TrigIn 1", "Trig In1"})
+_NONE_NAMES = frozenset({"", "None", "none"})
+
+# PV saved series store only the trigger GUID. Only GUIDs confirmed on this rig
+# go here; anything else is reported as unknown instead of guessed.
+KNOWN_TRIGGER_GUIDS: dict[str, str] = {
+	DEFAULT_TRIGGER_IDENTIFIER: "Trig In 1",
+}
 
 
 def normalize_trigger_selection(name: str | None) -> str:
-	"""Map empty / legacy PFI1 names to the lab Trig In 1 line."""
+	"""Legacy PFI1 spellings → 'Trig In 1'; empty / None → 'None' (no trigger)."""
 	s = str(name or "").strip()
+	if s in _NONE_NAMES:
+		return "None"
 	if s in _LEGACY_TRIGGER_LINES:
 		return DEFAULT_TRIGGER_SELECTION
 	return s
 
 
-def trigger_identifier_for(selection: str | None, explicit: str | None = None) -> str:
-	"""GUID for PVSaved XML.
+def _guid(g: str | None) -> str:
+	return str(g or "").strip().lower()
 
-	Selection wins: trigger=none / TriggerSelection=None must use the null GUID
-	even if the loaded file still carries a Trig In 1 identifier (that combo
-	has crashed PV's spiral DAC on -LoadMarkPoints).
+
+def trigger_name_for_guid(guid: str | None) -> str | None:
+	"""'None' for the null GUID, the input name for a known GUID, else None."""
+	g = _guid(guid)
+	if not g or g == NO_TRIGGER_IDENTIFIER:
+		return "None"
+	return KNOWN_TRIGGER_GUIDS.get(g)
+
+
+def guid_for_trigger_name(name: str | None) -> str | None:
+	sel = normalize_trigger_selection(name)
+	if sel == "None":
+		return NO_TRIGGER_IDENTIFIER
+	for g, n in KNOWN_TRIGGER_GUIDS.items():
+		if n == sel:
+			return g
+	return None
+
+
+def trigger_identifier_for(selection: str | None, explicit: str | None = None) -> str:
+	"""GUID PV must see for ``selection``.
+
+	The GUID always follows the selected input: a known name uses its known GUID
+	even if the file carried another one (that mismatch is what made the log say
+	Trig In 1 while PV waited on a different input). ``explicit`` is only used
+	for an input whose GUID is not in KNOWN_TRIGGER_GUIDS.
 	"""
-	sel_raw = str(selection or "").strip()
-	if sel_raw in ("None", "none", ""):
-		return NO_TRIGGER_IDENTIFIER
 	sel = normalize_trigger_selection(selection)
-	if sel in ("None", "none", ""):
+	if sel == "None":
 		return NO_TRIGGER_IDENTIFIER
-	ex = str(explicit or "").strip()
+	known = guid_for_trigger_name(sel)
+	if known:
+		return known
+	ex = _guid(explicit)
 	if ex and ex != NO_TRIGGER_IDENTIFIER:
 		return ex
-	return DEFAULT_TRIGGER_IDENTIFIER
+	raise ValueError(
+		f"no GUID known for trigger input {sel!r}: save a series with that input "
+		"in PV's Mark Points window and add its TriggerIdentifier to "
+		"lab_defaults.KNOWN_TRIGGER_GUIDS"
+	)
+
+
+def describe_file_trigger(selection: str | None, guid: str | None) -> str:
+	"""What a loaded file says, without guessing: name, GUID-derived name, or unknown."""
+	sel = normalize_trigger_selection(selection)
+	g = _guid(guid)
+	if sel != "None":
+		return sel
+	name = trigger_name_for_guid(g)
+	if name is not None:
+		return name
+	return f"unknown trigger GUID {g}"
+
+
+def resolve_trigger(
+	chosen: str | None, file_selection: str | None, file_guid: str | None
+) -> dict[str, Any]:
+	"""Decide the trigger input + GUID for a run and say where it came from.
+
+	``chosen``: the GUI / CLI trigger line (what DTR is wired to).
+	Returns selection, identifier, file (what the file said), source, warnings.
+	"""
+	sel = normalize_trigger_selection(chosen)
+	file_desc = describe_file_trigger(file_selection, file_guid)
+	warnings: list[str] = []
+	if sel == "None":
+		return {"selection": "None", "identifier": NO_TRIGGER_IDENTIFIER,
+			"file": file_desc, "source": "no trigger", "warnings": warnings}
+	file_g = _guid(file_guid)
+	known = guid_for_trigger_name(sel)
+	if known:
+		ident = known
+	elif file_desc == sel and file_g and file_g != NO_TRIGGER_IDENTIFIER:
+		ident = file_g  # file labels this input with its GUID: trust the pair
+	else:
+		ident = trigger_identifier_for(sel)  # raises: GUID unknown
+	if file_desc == sel:
+		source = "file"
+	elif file_desc == "None":
+		source = "prairie-live (file had no trigger)"
+	else:
+		source = f"prairie-live (file had {file_desc})"
+		warnings.append(
+			f"trigger: file uses {file_desc}, run uses {sel} ({ident}) — "
+			"check the DTR cable goes to " + sel
+		)
+	return {"selection": sel, "identifier": ident, "file": file_desc,
+		"source": source, "warnings": warnings}
 
 
 def lab_defaults() -> dict[str, Any]:

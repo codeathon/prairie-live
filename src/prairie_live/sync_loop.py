@@ -326,12 +326,37 @@ def run_sync_loop(
 		# File often still has Trig In 1's GUID — that + Frequency=None crashes PV.
 		meta["trigger_identifier"] = "00000000-0000-0000-0000-000000000000"
 	elif trigger in ("serial", "wait"):
-		# Intermediate XML / -slm tokens must use the Bruker BNC name + GUID.
-		trig_sel = normalize_trigger_selection(trig_sel) or DEFAULT_TRIGGER_SELECTION
-		meta["trigger_selection"] = trig_sel
-		meta["trigger_identifier"] = trigger_identifier_for(
-			trig_sel, meta.get("trigger_identifier")
+		from prairie_live.lab_defaults import resolve_trigger
+
+		# Intermediate XML / -slm tokens must use the Bruker BNC name + GUID —
+		# and the GUID must belong to the named input (never the file's GUID
+		# under a "Trig In 1" label).
+		chosen = normalize_trigger_selection(trig_sel)
+		default_note = ""
+		if chosen == "None":
+			chosen = DEFAULT_TRIGGER_SELECTION
+			default_note = " — no line chosen, using lab default"
+		res = resolve_trigger(
+			chosen,
+			meta.get("file_trigger_selection", meta.get("trigger_selection")),
+			meta.get("file_trigger_identifier", meta.get("trigger_identifier")),
 		)
+		trig_sel = res["selection"]
+		meta["trigger_selection"] = trig_sel
+		meta["trigger_identifier"] = res["identifier"]
+		_SESSION_TRIGGER.clear()
+		_SESSION_TRIGGER.update(
+			trigger_identifier=res["identifier"],
+			trigger_source=res["source"] + default_note,
+			trigger_file=res["file"],
+		)
+		print(
+			f"trigger line: {trig_sel} (GUID {res['identifier']}) · "
+			f"source: {res['source']}{default_note} · file said: {res['file']}",
+			flush=True,
+		)
+		for w in res["warnings"]:
+			print(f"WARNING: {w}", flush=True)
 		# One DTR pulse releases the whole group (matches PV Wait for Trigger).
 		if str(meta.get("trigger_frequency") or "None") in ("None", "none", ""):
 			meta["trigger_frequency"] = DEFAULT_TRIGGER_FREQUENCY
@@ -832,6 +857,9 @@ def _finish_trial_frames(
 		print("  images_dir set but no frames (relay --grab + Live/T-series?)")
 
 
+_SESSION_TRIGGER: dict[str, str] = {}
+
+
 def _finalize_trial_log(row: dict, *, log: Any, run_root: Path | None) -> None:
 	"""Attach summary, write lean JSONL + pretty sidecars, print one line."""
 	from prairie_live.trial_record import (
@@ -839,6 +867,11 @@ def _finalize_trial_log(row: dict, *, log: Any, run_root: Path | None) -> None:
 		format_trial_summary,
 		write_trial_sidecars,
 	)
+
+	# Record which input/GUID the run actually used and where that came from.
+	if str(row.get("trigger") or "").lower() in ("serial", "wait"):
+		for k, v in _SESSION_TRIGGER.items():
+			row.setdefault(k, v)
 
 	row["summary"] = format_trial_summary(row)
 	# Drop argv spam from per-trial rows (still on phase=slm_packed).

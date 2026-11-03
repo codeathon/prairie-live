@@ -70,7 +70,10 @@ def format_trial_summary(row: dict[str, Any]) -> str:
 		parts.append(f"trigger {trig_mode}")
 	sel = row.get("trigger_selection")
 	if sel and trig_mode in ("serial", "wait"):
-		parts.append(f"line {sel}")
+		gid = str(row.get("trigger_identifier") or "")
+		src = str(row.get("trigger_source") or "")
+		extra = ", ".join(x for x in (gid[:8] and f"GUID {gid[:8]}", src) if x)
+		parts.append(f"line {sel}" + (f" ({extra})" if extra else ""))
 	if trig_mode == "serial":
 		if row.get("t_ttl") is not None or row.get("t_ttl_mono") is not None:
 			parts.append("DTR pulsed")
