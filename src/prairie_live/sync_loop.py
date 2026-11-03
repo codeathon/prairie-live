@@ -2893,7 +2893,14 @@ def execute_session(
 				raise SystemExit("--trigger serial requires --serial COMx (or config)")
 			from prairie_live.ttl_serial import SerialTtl
 
-			ttl = SerialTtl(str(opt["serial"]))
+			ttl = SerialTtl(
+				str(opt["serial"]), trigger_line=str(opt.get("ttl_line") or "dtr")
+			)
+			print(
+				f"TTL: {opt['serial']} photostim on {ttl.trigger_line.upper()} "
+				"(→ Trig In 1), opened with both lines low",
+				flush=True,
+			)
 			print(
 				f"TTL: {opt['serial']} DTR → wire to PV Trig In 1 "
 				f"(width={float(opt.get('ttl_width') or 0.01):g}s). "

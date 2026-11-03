@@ -8,6 +8,8 @@ from typing import Any
 # Scope DHCP address changes; `gui --relay` / PRAIRIE_LIVE_RELAY override it.
 DEFAULT_RELAY = os.environ.get("PRAIRIE_LIVE_RELAY") or "10.33.107.221:25100"
 DEFAULT_SERIAL = "COM3"
+# Serial pin cabled to Trig In 1: "dtr" (default wiring) or "rts".
+DEFAULT_TTL_LINE = (os.environ.get("PRAIRIE_LIVE_TTL_LINE") or "dtr").lower()
 DEFAULT_STIM_MODE = "slm"
 # Bruker System Trigger BNC label (DTR → Trig In 1). Older configs used "PFI1".
 DEFAULT_TRIGGER_SELECTION = "Trig In 1"
@@ -139,6 +141,7 @@ def lab_defaults() -> dict[str, Any]:
 	return {
 		"via_relay": DEFAULT_RELAY,
 		"serial": DEFAULT_SERIAL,
+		"ttl_line": (os.environ.get("PRAIRIE_LIVE_TTL_LINE") or DEFAULT_TTL_LINE).lower(),
 		"trigger": "serial",
 		"trigger_selection": DEFAULT_TRIGGER_SELECTION,
 		"stim_mode": DEFAULT_STIM_MODE,
