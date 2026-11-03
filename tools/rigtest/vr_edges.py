@@ -109,11 +109,19 @@ def load(path: str):
 # ---------------------------------------------------------------- edges
 
 
+MIN_SWING_V = 1.0  # smaller than any real pulse here (TTL ~7 V, SLM out ~3 V)
+
+
 def find_edges(v: np.ndarray, dt_ms: float, thresh: float | None):
-	"""Rising-edge times, falling-edge times (ms) and the threshold used."""
+	"""Rising-edge times, falling-edge times (ms) and the threshold used.
+
+	No threshold given: an input whose min-to-max swing is below MIN_SWING_V
+	is treated as having no pulses (otherwise a 30 % threshold sits inside the
+	noise and every wiggle counts as an edge).
+	"""
 	lo, hi = float(v.min()), float(v.max())
 	if thresh is None:
-		if hi - lo < 0.02:
+		if hi - lo < MIN_SWING_V:
 			return np.array([]), np.array([]), None
 		thresh = lo + 0.3 * (hi - lo)
 	high = v > thresh
@@ -135,10 +143,15 @@ def widths(ups: np.ndarray, downs: np.ndarray) -> np.ndarray:
 
 def describe(name, v, ups, downs, th, verbose):
 	if th is None:
-		print(f"  {name:<14} range {v.min():7.3f}..{v.max():7.3f} V  FLAT")
+		print(
+			f"  {name:<14} range {v.min():7.3f}..{v.max():7.3f} V  NO PULSES "
+			f"(swing < {MIN_SWING_V:g} V: idle/noise only)"
+		)
 		return
 	w = widths(ups, downs)
 	wtxt = f"width {np.nanmedian(w):.3f} ms" if np.isfinite(w).any() else ""
+	if np.isfinite(w).any() and np.nanmedian(w) < 0.2 and len(ups) > 1000:
+		wtxt += "  WARNING: many very short edges, looks like noise (set a threshold)"
 	print(
 		f"  {name:<14} range {v.min():7.3f}..{v.max():7.3f} V  thr {th:6.3f} V  "
 		f"{len(ups):4d} edges  {wtxt}"
