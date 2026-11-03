@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PVGalvoPointList>
+  <PVGalvoPoint X="-3.05925590240833" Y="-3.47961167525833" Name="Point 1" Index="0" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="-1.79818858385833" Y="-3.5379944214875" Name="Point 2" Index="1" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="2.65057667880417" Y="-3.73649575866667" Name="Point 3" Index="2" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="3.012549705425" Y="-2.40536914464167" Name="Point 4" Index="3" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="1.0158597843875" Y="-3.6781130124375" Name="Point 5" Index="4" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="0.303590280391667" Y="-2.09010231500417" Name="Point 6" Index="5" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="-1.3661562617625" Y="-1.93830717480833" Name="Point 7" Index="6" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="-2.70895942503333" Y="-1.98501337179167" Name="Point 8" Index="7" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="-2.9775200576875" Y="-0.8757411934375" Name="Point 9" Index="8" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPoint X="1.471245204975" Y="-2.30028020142917" Name="Point 10" Index="9" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPointGroup Indices="0,1,2,3" Name="Group 1" Index="10" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPointGroup Indices="4,5,6" Name="Group 2" Index="11" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+  <PVGalvoPointGroup Indices="7,8,9" Name="Group 3" Index="12" ActivityType="MarkPoints" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="36" IsSpiral="True" SpiralSize="0.184901809118501" SpiralRevolutions="8" />
+</PVGalvoPointList>

@@ -16,69 +16,136 @@ import csv
 
 
 def load(path):
-	with open(path, newline="", encoding="utf-8-sig") as f:
-		rows = list(csv.reader(f))
-	head = [h.strip() for h in rows[0]]
-	data = []
-	for r in rows[1:]:
-		try:
-			data.append([float(v) for v in r[: len(head)]])
-		except ValueError:
-			continue
-	return head, data
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.reader(f))
+    head = [h.strip() for h in rows[0]]
+    data = []
+    for r in rows[1:]:
+        try:
+            data.append([float(v) for v in r[: len(head)]])
+        except ValueError:
+            continue
+    return head, data
 
 
 def edges(t, v, thresh):
-	ups, downs = [], []
-	hi = v[0] > thresh
-	for i in range(1, len(v)):
-		now = v[i] > thresh
-		if now and not hi:
-			ups.append(t[i])
-		elif hi and not now:
-			downs.append(t[i])
-		hi = now
-	return ups, downs
+    ups, downs = [], []
+    hi = v[0] > thresh
+    for i in range(1, len(v)):
+        now = v[i] > thresh
+        if now and not hi:
+            ups.append(t[i])
+        elif hi and not now:
+            downs.append(t[i])
+        hi = now
+    return ups, downs
 
 
 def report(name, t, v, thresh):
-	ups, downs = edges(t, v, thresh)
-	print(f"\n{name}: {len(ups)} rising edges (threshold {thresh} V, range "
-		f"{min(v):.2f}…{max(v):.2f} V)")
-	for i, u in enumerate(ups):
-		w = next((d - u for d in downs if d > u), None)
-		gap = f"  gap {u - ups[i - 1]:9.2f} ms" if i else ""
-		ws = f"  width {w:7.2f} ms" if w is not None else ""
-		print(f"  #{i + 1:3d}  t={u:10.2f} ms{ws}{gap}")
-	return ups
+    ups, downs = edges(t, v, thresh)
+    print(
+        f"\n{name}: {len(ups)} rising edges (threshold {thresh} V, range "
+        f"{min(v):.2f}…{max(v):.2f} V)"
+    )
+    for i, u in enumerate(ups):
+        w = next((d - u for d in downs if d > u), None)
+        gap = f"  gap {u - ups[i - 1]:9.2f} ms" if i else ""
+        ws = f"  width {w:7.2f} ms" if w is not None else ""
+        print(f"  #{i + 1:3d}  t={u:10.2f} ms{ws}{gap}")
+    return ups
 
 
 def main():
-	ap = argparse.ArgumentParser()
-	ap.add_argument("csv")
-	ap.add_argument("--slm", help="column name for SLM out (default: 2nd column)")
-	ap.add_argument("--laser", help="column name for laser gate (optional)")
-	ap.add_argument("--thresh", type=float, default=1.5, help="volts")
-	a = ap.parse_args()
-	head, data = load(a.csv)
-	print("columns:", head, f"· {len(data)} samples")
-	t = [r[0] for r in data]
+    ap = argparse.ArgumentParser()
+    ap.add_argument("csv")
+    ap.add_argument(
+        "--slm", help="column name for SLM out (default: 2nd column)"
+    )
+    ap.add_argument("--laser", help="column name for laser gate (optional)")
+    ap.add_argument(
+        "--ttl",
+        help="column name for the photostim TTL (pairs each TTL with SLM out)",
+    )
+    ap.add_argument(
+        "--window",
+        type=float,
+        default=500.0,
+        help="ms after a TTL in which its SLM-out edge must appear (default 500)",
+    )
+    ap.add_argument("--thresh", type=float, default=1.5, help="volts")
+    a = ap.parse_args()
+    head, data = load(a.csv)
+    print("columns:", head, f"· {len(data)} samples")
+    t = [r[0] for r in data]
 
-	def col(name, default_idx):
-		i = head.index(name) if name else default_idx
-		return head[i], [r[i] for r in data]
+    def col(name, default_idx):
+        if name and name not in head:
+            raise SystemExit(
+                f"column {name!r} not found; columns are: {head}"
+            )
+        if name is None and default_idx is None:
+            raise SystemExit("pass the column name")
+        i = head.index(name) if name else default_idx
+        return head[i], [r[i] for r in data]
 
-	n, v = col(a.slm, 1)
-	slm = report(f"SLM out [{n}]", t, v, a.thresh)
-	if a.laser or len(head) > 2:
-		n2, v2 = col(a.laser, 2)
-		las = report(f"laser [{n2}]", t, v2, a.thresh)
-		if slm and las:
-			print("\nlaser-on lag after each SLM edge:")
-			for i, s in enumerate(slm):
-				nxt = next((x for x in las if x >= s), None)
-				print(f"  group {i + 1}: " + (f"{nxt - s:.2f} ms" if nxt is not None else "no laser edge"))
+    n, v = col(a.slm, 1)
+    slm = report(f"SLM out [{n}]", t, v, a.thresh)
+    if a.ttl:
+        nt, vt = col(a.ttl, None)
+        ttl = report(f"TTL [{nt}]", t, vt, a.thresh)
+        print(f"\nTTL → SLM out pairing (window {a.window:g} ms):")
+        used = set()
+        lat = []
+        for i, tt in enumerate(ttl):
+            hit = next(
+                (
+                    j
+                    for j, se in enumerate(slm)
+                    if j not in used and tt <= se <= tt + a.window
+                ),
+                None,
+            )
+            if hit is None:
+                print(
+                    f"  TTL {i + 1:3d} t={tt:10.2f} ms  →  MISS (no SLM out within {a.window:g} ms)"
+                )
+            else:
+                used.add(hit)
+                d = slm[hit] - tt
+                lat.append(d)
+                print(
+                    f"  TTL {i + 1:3d} t={tt:10.2f} ms  →  SLM out +{d:8.2f} ms  (mask loaded +{d + 2:.2f} ms)"
+                )
+        extra = [se for j, se in enumerate(slm) if j not in used]
+        for se in extra:
+            print(f"  SLM out t={se:10.2f} ms with NO TTL before it")
+        ok = len(lat)
+        print(
+            f"\nSUMMARY: {len(ttl)} TTL, {len(slm)} SLM out, {ok} paired, "
+            f"{len(ttl) - ok} missed, {len(extra)} unexplained SLM out"
+        )
+        if lat:
+            ls = sorted(lat)
+            print(
+                f"  TTL→SLM out ms: min {ls[0]:.2f}  median {ls[len(ls) // 2]:.2f}  max {ls[-1]:.2f}"
+            )
+        return
+    if a.laser or len(head) > 2:
+        n2, v2 = col(a.laser, 2)
+        las = report(f"laser [{n2}]", t, v2, a.thresh)
+        if slm and las:
+            print("\nlaser-on lag after each SLM edge:")
+            for i, s in enumerate(slm):
+                nxt = next((x for x in las if x >= s), None)
+                print(
+                    f"  group {i + 1}: "
+                    + (
+                        f"{nxt - s:.2f} ms"
+                        if nxt is not None
+                        else "no laser edge"
+                    )
+                )
 
 
 if __name__ == "__main__":
-	main()
+    main()
