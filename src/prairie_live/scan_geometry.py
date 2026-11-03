@@ -6,27 +6,20 @@ Saving a point list / ``PVSavedMarkPointSeriesElements`` writes **galvo volts**.
 After Mark Points has been run (nested ``<Point>``), the same targets are
 **FOV fractions** 0–1 of the Live image.
 
-Lab check (2026-10): cyan overlay with ``FOV = 0.5 + galvo / (2·amp)`` put
-points **too close together** vs PV's own Mark Points GUI. Matching PV needs:
+	FOV   = 0.5 + (galvo − center) / (k · currentScanAmplitude)
+	galvo = center + (FOV − 0.5) · k · currentScanAmplitude
+	SpiralWidth_FOV = SpiralSize_galvo / |k · amp|
 
-	FOV  = 0.5 + (galvo − currentScanCenter) / currentScanAmplitude
-	galvo = currentScanCenter + (FOV − 0.5) · currentScanAmplitude
+``currentScanAmplitude`` / ``currentScanCenter`` come from ``-gts`` (imaging
+scan). ``k`` comes from ``galvo_calibration``: it is **measured** from PrairieView's
+own point-list ↔ run-output pairs, because the Mark Points (uncaging / SLM)
+targets do not share the imaging scan's volts-per-image scale in every mode.
 
-``currentScanAmplitude`` from ``-gts`` is the **full scan width** in volts
-(left→right). Frame spans center ± amp/2. Negative amp mirrors that axis.
-
-Paired pre/post export (galvo → FOV) has denominator ≈ 4.20356 — the same
-value ``-gts`` reports at zoom 1 — i.e. divide by amp once, not ``2·amp``.
-(An older “half-width” form used ``2·amp`` with amp≈2.10; that is the same
-math only if you store half the ``-gts`` reading. Storing ``-gts`` and still
-multiplying by 2 compresses the constellation toward center.)
-
-Spiral:
-
-	SpiralWidth_FOV = SpiralSize_galvo / |amp|
-
-Example (export pair, amp_gts ≈ 4.20356, center 0):
-	galvo (−0.584, −1.777) → FOV (0.361, 0.077)
+Real pairs on this rig, both zoom 1, ``-gts`` = 4.2035577285:
+	Use SLM likely off (Oct 2026):  k = 1   (width 4.2036 V)
+	Use SLM on (Nov 3 2026):        k = 2   (width 8.4071 V)
+With the wrong k the overlay is scaled about the image centre (k=1 on an SLM
+rig drew rings at exactly 2× PV's positions).
 
 Points already inside 0–1 are left as image fractions.
 """
@@ -34,6 +27,17 @@ Points already inside 0–1 are left as image fractions.
 from __future__ import annotations
 
 from typing import Any
+
+from prairie_live.galvo_calibration import describe as describe_k, galvo_k
+
+
+def width_x(geom: dict[str, float]) -> float:
+	"""Image width in Mark Points galvo volts = k × currentScanAmplitude (X)."""
+	return galvo_k()[0] * float(geom["amp_x"])
+
+
+def width_y(geom: dict[str, float]) -> float:
+	return galvo_k()[1] * float(geom["amp_y"])
 
 # Any: relay client with get_state (avoid importing relay_client here).
 
@@ -98,8 +102,8 @@ def galvo_to_fraction(x: float, y: float, geom: dict[str, float]) -> tuple[float
 	``geom['amp_*']`` = ``currentScanAmplitude`` (**full** scan width).
 	``FOV = 0.5 + (galvo - center) / amp``.
 	"""
-	ax = float(geom["amp_x"])
-	ay = float(geom["amp_y"])
+	ax = width_x(geom)
+	ay = width_y(geom)
 	return (
 		0.5 + (float(x) - float(geom["ctr_x"])) / ax,
 		0.5 + (float(y) - float(geom["ctr_y"])) / ay,
@@ -108,8 +112,8 @@ def galvo_to_fraction(x: float, y: float, geom: dict[str, float]) -> tuple[float
 
 def fraction_to_galvo(fx: float, fy: float, geom: dict[str, float]) -> tuple[float, float]:
 	"""FOV fraction → galvo voltage (inverse of ``galvo_to_fraction``)."""
-	ax = float(geom["amp_x"])
-	ay = float(geom["amp_y"])
+	ax = width_x(geom)
+	ay = width_y(geom)
 	return (
 		float(geom["ctr_x"]) + (float(fx) - 0.5) * ax,
 		float(geom["ctr_y"]) + (float(fy) - 0.5) * ay,
@@ -215,7 +219,7 @@ def _spiral_fov_frac_for_slm(
 	if spiral_size_um not in (None, "") and fov_width_um not in (None, ""):
 		return spiral_size_fov_frac_um(float(spiral_size_um), float(fov_width_um))
 
-	ax = abs(float(geom["amp_x"]))
+	ax = abs(width_x(geom))
 	if ax <= 0:
 		return None
 	for p in points:
@@ -352,7 +356,7 @@ def _clamp_galvo(v: float, ctr: float, amp: float) -> float:
 
 def _spiral_size_galvo(p: dict, geom: dict[str, float]) -> str | None:
 	"""SpiralSize for series XML must be galvo units, never µm."""
-	ax = abs(float(geom["amp_x"]))
+	ax = abs(width_x(geom))
 	raw = p.get("spiral_size_fov")
 	if raw in (None, ""):
 		raw = p.get("spiral_width")
@@ -409,8 +413,8 @@ def points_to_galvo_for_series(
 		if not (0.0 <= fx <= 1.0 and 0.0 <= fy <= 1.0):
 			n_out += 1
 		gx, gy = fraction_to_galvo(fx, fy, geom)
-		gx = _clamp_galvo(gx, geom["ctr_x"], geom["amp_x"])
-		gy = _clamp_galvo(gy, geom["ctr_y"], geom["amp_y"])
+		gx = _clamp_galvo(gx, geom["ctr_x"], width_x(geom))
+		gy = _clamp_galvo(gy, geom["ctr_y"], width_y(geom))
 		row["x_fov"], row["y_fov"] = fx, fy
 		row["x"], row["y"] = gx, gy
 		row["coord_space"] = "galvo"
@@ -450,7 +454,7 @@ def overlay_points(
 			"note": "Mark Points are in galvo units; waiting for PV scan range "
 			f"from the relay{why}",
 		}
-	ax = float(geom["amp_x"])
+	ax = width_x(geom)
 	rows = []
 	for p in points:
 		fx, fy = galvo_to_fraction(float(p["x"]), float(p["y"]), geom)
@@ -460,7 +464,7 @@ def overlay_points(
 	n_out = sum(1 for r in rows if not (0 <= r["fx"] <= 1 and 0 <= r["fy"] <= 1))
 	note = (
 		f"PV scan width X {geom['amp_x']:g}, Y {geom['amp_y']:g} "
-		f"(ctr {geom['ctr_x']:g},{geom['ctr_y']:g})"
+		f"(ctr {geom['ctr_x']:g},{geom['ctr_y']:g}) · {describe_k()}"
 		+ (f" · {n_out} point(s) outside the current scan" if n_out else "")
 	)
 	return {"points": rows, "note": note}

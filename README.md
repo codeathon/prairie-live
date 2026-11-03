@@ -138,6 +138,27 @@ Groups have at least 3 points and cover every point once (8 → 4+4).
 Each group runs at every power. After the last trial, pick candidates
 and **Save XML**.
 
+## Mark Points galvo → image calibration
+
+Point lists (`.gpl`) and saved series store **galvo volts**; the live image and
+`-MarkAllPoints` use **0–1 image fractions**. The conversion is
+
+`image = 0.5 + (galvo − currentScanCenter) / (k × currentScanAmplitude)`
+
+where `k` is **measured** on this rig: `k = 2` with **Use SLM** ticked (Nov 3 2026),
+`k = 1` with it off (Oct 2026 pair). The GUI uses `slm` by default
+(`--galvo-mode galvo` for Use SLM off) and shows the active `k` under the live tile.
+
+Re-measure after any change to objective, SLM or zoom calibration: run a few
+points once in PV, Export the point list, then
+
+```powershell
+python -m prairie_live calibrate --gpl points.gpl --run-xml "E:\<run>\<run>_Cycle00001_MarkPoints.xml" --relay 10.33.107.221:25100 --condition slm --save
+```
+
+It fits width/centre per axis, warns on rotation, and saves `k` to
+`%USERPROFILE%\.prairie_live\calibration.json`, which the GUI and `mp-sync` load at start.
+
 ## Analysis PC — live ROI intensity
 
 In the `view` window, drag a box or click a disk on the FOV to add a gold

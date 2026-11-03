@@ -2478,6 +2478,9 @@ def main(argv: list[str] | None = None) -> None:
 		merge_cli_over_config,
 	)
 
+	from prairie_live.galvo_calibration import activate as _activate_galvo
+
+	print("galvo→image:", _activate_galvo(None), flush=True)
 	# Pass 1: resolve --config without consuming the rest of the flags.
 	pre = argparse.ArgumentParser(add_help=False)
 	pre.add_argument("--config", "-c", default=None)

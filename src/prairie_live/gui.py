@@ -17,7 +17,16 @@ def main(argv: list[str] | None = None) -> None:
 		default=None,
 		help="Ignored — lab defaults + Fat XML; experiment.json is not used",
 	)
+	p.add_argument(
+		"--galvo-mode",
+		choices=("slm", "galvo"),
+		default=None,
+		help="Mark Points calibration: slm = Use SLM ticked (default), galvo = off",
+	)
 	args = p.parse_args(argv)
+	from prairie_live.galvo_calibration import activate
+
+	print("galvo→image:", activate(args.galvo_mode), flush=True)
 	if args.relay:
 		addr = args.relay if ":" in args.relay else f"{args.relay}:25100"
 		os.environ["PRAIRIE_LIVE_RELAY"] = addr

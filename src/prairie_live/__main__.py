@@ -17,6 +17,7 @@ _COMMANDS = (
 	"get-state",
 	"get-motor",
 	"grab-doctor",
+	"calibrate",
 )
 
 
@@ -51,6 +52,12 @@ def main(argv=None) -> None:
 
 		gui_main(rest)
 		return
+	if command == "calibrate":
+		from prairie_live.galvo_calibration import main as cal_main
+
+		cal_main(rest)
+		return
+
 	if command == "grab-doctor":
 		from prairie_live.grab_doctor import main as doctor_main
 
