@@ -78,6 +78,29 @@ def _file(handler: BaseHTTPRequestHandler, path: Path, ctype: str) -> None:
 	handler.wfile.write(data)
 
 
+def _body_bool(body: dict[str, Any], key: str) -> bool | None:
+	if key not in body:
+		return None
+	val = body[key]
+	if isinstance(val, bool):
+		return val
+	if val in (None, ""):
+		return None
+	return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _body_int(body: dict[str, Any], key: str) -> int | None:
+	if key not in body or body[key] in (None, ""):
+		return None
+	return int(body[key])
+
+
+def _body_float(body: dict[str, Any], key: str) -> float | None:
+	if key not in body or body[key] in (None, ""):
+		return None
+	return float(body[key])
+
+
 class Handler(BaseHTTPRequestHandler):
 	def log_message(self, fmt: str, *args) -> None:
 		print(f"webui {self.address_string()} {fmt % args}")
@@ -110,6 +133,13 @@ class Handler(BaseHTTPRequestHandler):
 					"seed": d["seed"],
 					"repetitions": d["repetitions"],
 					"stim_dff_min": d["stim_dff_min"],
+					"visual_enabled": bool(d.get("visual_enabled", False)),
+					"visual_screen": int(d.get("visual_screen", 1)),
+					"visual_refresh_hz": float(d.get("visual_refresh_hz", 120)),
+					"visual_isi_s": float(d.get("visual_isi_s", 2.0)),
+					"visual_lead_ms": float(d.get("visual_lead_ms", 100)),
+					"visual_grating_frames": int(d.get("visual_grating_frames", 119)),
+					"visual_dtr_frames": int(d.get("visual_dtr_frames", 6)),
 					"com_ports": ports,
 					"relay": probe_relay(DEFAULT_RELAY),
 				},
@@ -227,8 +257,24 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		if u.path == "/api/stop":
 			STATE.stop.set()
-			STATE.append("stop requested — finishing current trial")
-			_json(self, {"ok": True})
+			# Allow a new Run immediately; worker exits via should_stop.
+			STATE.running = False
+			addr = str(
+				(STATE.opt or {}).get("via_relay")
+				or getattr(STATE.live, "addr", None)
+				or DEFAULT_RELAY
+			)
+
+			def _pv_stop_cleanup() -> None:
+				try:
+					from prairie_live.pv_cleanup import abort_and_clear_at
+
+					abort_and_clear_at(addr)
+				except Exception:
+					pass
+
+			threading.Thread(target=_pv_stop_cleanup, daemon=True).start()
+			_json(self, {"ok": True, "relay": addr})
 			return
 		if u.path == "/api/save-candidates":
 			self._save(raw)
@@ -237,20 +283,29 @@ class Handler(BaseHTTPRequestHandler):
 
 	def _parse_xml(self, raw: bytes) -> None:
 		try:
+			import base64
+			import time
+
 			body = json.loads(raw.decode("utf-8") or "{}")
 			path = body.get("path")
 			b64 = body.get("content_b64")
 			name = body.get("name") or "upload.xml"
 			if b64:
-				import base64
-
+				# Unique path every Choose File — same filename used to overwrite
+				# the first upload and leave the UI stuck on the old series.
 				STATE.xml_dir.mkdir(parents=True, exist_ok=True)
-				path = str(STATE.xml_dir / Path(name).name)
-				Path(path).write_bytes(base64.b64decode(b64))
+				safe = Path(name).name or "upload.xml"
+				path = str(STATE.xml_dir / f"{int(time.time() * 1000)}_{safe}")
+				raw_xml = base64.b64decode(b64)
+				if not raw_xml.strip():
+					raise ValueError("uploaded XML is empty")
+				Path(path).write_bytes(raw_xml)
 			if not path or not Path(path).is_file():
 				raise ValueError("choose a Fat Mark Points XML")
 			fields = summarize_fat_xml(path)
 			pts = extract_unique_points(load_mark_points_file(path))
+			if not pts:
+				raise ValueError(f"no Mark Points in {Path(path).name}")
 			ng = n_groups_for_pool(len(pts))
 			sizes = group_sizes_for_pool(len(pts), n_groups=ng)
 			STATE.series_path = path
@@ -264,10 +319,15 @@ class Handler(BaseHTTPRequestHandler):
 				{
 					"ok": True,
 					"path": path,
+					"name": Path(name).name,
+					"n_points": len(pts),
 					"fields": fields,
 					"n_groups": ng,
 					"group_sizes": sizes,
-					"plan": f"{len(pts)} points → {len(sizes)} groups ({'+'.join(map(str, sizes))})",
+					"plan": (
+						f"{Path(name).name}: {len(pts)} points → "
+						f"{len(sizes)} groups ({'+'.join(map(str, sizes))})"
+					),
 				},
 			)
 		except Exception as exc:
@@ -279,8 +339,11 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		try:
 			body = json.loads(raw.decode("utf-8"))
+			# Prefer last successful Choose File path — label text is not a path.
 			series = body.get("series") or STATE.series_path
-			if not series or not Path(series).is_file():
+			if series and not Path(str(series)).is_file():
+				series = STATE.series_path
+			if not series or not Path(str(series)).is_file():
 				raise ValueError("choose a Fat Mark Points XML")
 			powers = parse_powers_field(str(body.get("powers") or ""))
 			pts = extract_unique_points(load_mark_points_file(series))
@@ -298,6 +361,13 @@ class Handler(BaseHTTPRequestHandler):
 				stim_mode=body.get("stim_mode") or "slm",
 				trigger=body.get("trigger") or "serial",
 				xml_fields=fields,
+				visual_enabled=_body_bool(body, "visual_enabled"),
+				visual_screen=_body_int(body, "visual_screen"),
+				visual_refresh_hz=_body_float(body, "visual_refresh_hz"),
+				visual_isi_s=_body_float(body, "visual_isi_s"),
+				visual_lead_ms=_body_float(body, "visual_lead_ms"),
+				visual_grating_frames=_body_int(body, "visual_grating_frames"),
+				visual_dtr_frames=_body_int(body, "visual_dtr_frames"),
 			)
 			n_t = planned_trial_count(len(pts), powers, n_groups=int(opt["n_groups"]))
 			STATE.stop.clear()
@@ -310,17 +380,42 @@ class Handler(BaseHTTPRequestHandler):
 			STATE.planned_powers = unique_powers(powers)
 			STATE.n_trials = n_t
 			STATE.boards = {}
+			# Fresh Trial log every Run so a stuck prior display cannot look empty.
+			with STATE.lock:
+				STATE.log = []
 			STATE.live.set_addr(str(opt.get("via_relay") or DEFAULT_RELAY))
+			vis = "on" if opt.get("visual_enabled") else "off"
 			STATE.append(
 				f"start  {len(pts)} pts  groups={opt['n_groups']}  "
 				f"every point at each of {powers}  relay={opt['via_relay']}  "
 				f"COM={opt['serial']}  mode={opt['stim_mode']}  "
-				f"trigger={opt['trigger']}  trials={n_t}"
+				f"trigger={opt['trigger']}  visual={vis}  "
+				f"lead_ms={opt.get('visual_lead_ms')}  trials={n_t}"
 			)
 
+			# Stash LiveFeed amp/center before stim hold (no mid-Run -gts).
+			# Silent — Trial log stays trial data only.
+			geom, _ = STATE.live.scan_geometry()
+			if (
+				isinstance(geom, dict)
+				and geom.get("amp_x") not in (None, "", 0, 0.0)
+				and geom.get("amp_y") not in (None, "", 0, 0.0)
+			):
+				opt["scan_geometry"] = {
+					"amp_x": float(geom["amp_x"]),
+					"amp_y": float(geom["amp_y"]),
+					"ctr_x": float(geom.get("ctr_x") or 0.0),
+					"ctr_y": float(geom.get("ctr_y") or 0.0),
+				}
+
 			def work() -> None:
+				from prairie_live.pv_cleanup import abort_and_clear_at
 				from prairie_live.sync_loop import execute_session
 
+				# LiveFeed must not -LiveScan on during -slm (PV 6.1 race →
+				# DONE before DTR). Sync loop owns Live off/on per group.
+				STATE.live.hold_for_stim(True)
+				addr = str(opt.get("via_relay") or DEFAULT_RELAY)
 				try:
 					trials = execute_session(
 						opt,
@@ -331,6 +426,13 @@ class Handler(BaseHTTPRequestHandler):
 					STATE.q.put(("done", {"trials": trials}))
 				except Exception as exc:
 					STATE.q.put(("error", str(exc)))
+				finally:
+					# Abort leftover -slm so Mark Points UI is not left frozen.
+					try:
+						abort_and_clear_at(addr)
+					except Exception:
+						pass
+					STATE.live.hold_for_stim(False)
 
 			threading.Thread(target=work, daemon=True).start()
 			_json(self, {"ok": True, "n_trials": n_t})

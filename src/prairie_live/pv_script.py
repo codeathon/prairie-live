@@ -60,6 +60,9 @@ class PvScript:
 		self.reconnects = 0
 		self._opened_at = 0.0
 		self._started = False
+		# True while -slm / -mp / -lmp is blocked in send — Abort may drop the
+		# socket. Never set for -gi/-gts or a brief Live toggle.
+		self._blocking_stim = False
 
 	def connect(self) -> None:
 		self._open()
@@ -73,6 +76,29 @@ class PvScript:
 		)
 		self.gi = GiGrabber(self.link)
 
+	def _drop_link_locked(self, why: str) -> None:
+		"""Close the script socket while holding ``lock`` (no reconnect yet).
+
+		Why: a stuck -MarkPoints / E:\\Markpoints dialog never returns DONE.
+		Leaving the socket open holds ``lock`` until timeout, then the *next*
+		-LoadMarkPoints/-MarkPoints still rides a wedged PV session — those
+		\"leftover\" commands keep firing even after the operator restarts PV.
+		Dropping the socket lets Abort land on a fresh login.
+		"""
+		print(f"dropping PV script session ({why})", flush=True)
+		if self.gi is not None:
+			try:
+				self.gi.close()
+			except Exception:
+				pass
+			self.gi = None
+		if self.link is not None:
+			try:
+				self.link.close()
+			except Exception:
+				pass
+			self.link = None
+
 	def _reopen(self, parts: tuple, err: Exception) -> None:
 		"""PV dropped the session: log which command was in flight, log in again."""
 		self.reconnects += 1
@@ -81,9 +107,7 @@ class PvScript:
 			f"({type(err).__name__}: {err}); reconnect #{self.reconnects}",
 			flush=True,
 		)
-		if self.gi is not None:
-			self.gi.close()
-		self.link = self.gi = None
+		self._drop_link_locked("connection lost")
 		wait = 1.0 - (time.monotonic() - self._opened_at)
 		if wait > 0:
 			time.sleep(wait)
@@ -103,9 +127,12 @@ class PvScript:
 				self._open()
 			try:
 				return fn()
+			except TimeoutError:
+				# Must drop under the same lock — otherwise Abort queues behind
+				# the still-open recv and leftover groups keep arming PV.
+				self._drop_link_locked(f"timeout on {' '.join(parts)!r}")
+				raise
 			except (ConnectionError, OSError) as e:
-				if isinstance(e, TimeoutError):
-					raise
 				self._reopen(parts, e)
 				raise RuntimeError(
 					f"PrairieView dropped the connection during {parts[0]} ({e}); "
@@ -120,16 +147,98 @@ class PvScript:
 			self.link.close()
 			self.link = None
 
+	def recover_after_stuck_stim(self) -> None:
+		"""Fresh login + Abort after a Mark Points timeout / dialog hang."""
+		with self.lock:
+			if self.link is None and self._started:
+				try:
+					self._open()
+				except OSError as e:
+					print(f"recover_after_stuck_stim: reconnect failed: {e}", flush=True)
+					return
+		try:
+			self.ensure_idle_for_stim()
+		except Exception as exc:
+			print(f"recover_after_stuck_stim Abort/Live: {exc}", flush=True)
+		try:
+			self.disable_mark_points_metadata()
+		except Exception as exc:
+			print(f"recover_after_stuck_stim metadata: {exc}", flush=True)
+
+	def _drop_socket_unlocked(self, why: str) -> bool:
+		"""Close the script socket without taking ``lock`` (wakes hung recv)."""
+		link = self.link
+		if link is None:
+			return False
+		print(f"force_interrupt PV script ({why})", flush=True)
+		gi = self.gi
+		# Null before close so the hung finally-block does not restore timeout
+		# onto a dead link, and so _call reconnects cleanly.
+		self.link = None
+		self.gi = None
+		if gi is not None:
+			try:
+				gi.close()
+			except Exception:
+				pass
+		try:
+			link.close()
+		except Exception:
+			pass
+		return True
+
+	def force_interrupt(self, why: str = "operator Abort", *, force: bool = False) -> bool:
+		"""Close the script socket *without* taking ``lock``.
+
+		Why: ``send(-slm/-mp)`` holds ``lock`` until DONE/timeout. Stop/Abort
+		from another thread then queues behind that wait (tens of seconds).
+
+		Default: only when ``_blocking_stim`` (armed -slm/-mp). ``force=True``
+		drops whenever the lock is held (Abort after a short wait).
+		"""
+		if not force and not self._blocking_stim:
+			return False
+		if self.lock.acquire(blocking=False):
+			self.lock.release()
+			return False
+		return self._drop_socket_unlocked(why)
+
+	def abort(self) -> dict:
+		# -Silent: Abort mid-Mark-Points otherwise pops E:\\Markpoints
+		# "directory already exists — delete and continue?"
+		# Wait briefly for a normal -gi; if the lock is still held, drop the
+		# socket so Abort cannot queue forever behind a hung -slm.
+		# Short DONE timeout: wedged PV often never replies to -Abort either
+		# (that was the multi-Abort storm with the GUI stuck on "starting…").
+		got = self.lock.acquire(timeout=0.5)
+		if got:
+			self.lock.release()
+		else:
+			self._drop_socket_unlocked("abort: lock busy >0.5s")
+			time.sleep(0.15)
+		try:
+			self.send("-Silent", "-Abort", timeout=3.0)
+		except TimeoutError:
+			# PV ate Abort without DONE — session already dropped in _call.
+			print("abort: -Abort timed out (PV wedged); continuing", flush=True)
+		except Exception as exc:
+			print(f"abort: {exc}", flush=True)
+		return {"ok": True, "cmd": "abort"}
+
 	def send(self, *parts: str, timeout: float = 60.0) -> str:
 		"""One script command; waits for PV's DONE (TimeoutError otherwise)."""
 		def run():
 			link = self.link
+			if link is None:
+				raise RuntimeError("not connected to PrairieView script port")
 			old = link.timeout
 			link.timeout = timeout
 			try:
 				return link.send_command(*parts)
 			finally:
-				link.timeout = old
+				# link may already be dropped on TimeoutError
+				if self.link is link:
+					link.timeout = old
 
 		return self._call(parts, run)
 
@@ -152,13 +261,68 @@ class PvScript:
 		self.send("-TSeries")
 		return {"ok": True, "cmd": "tseries"}
 
-	def abort(self) -> dict:
-		self.send("-Abort")
-		return {"ok": True, "cmd": "abort"}
-
 	def start_live(self) -> dict:
-		self.send("-LiveScan")
+		# PV 6.1: explicit on|off (bare -LiveScan still means on).
+		self.send("-LiveScan", "on")
 		return {"ok": True, "cmd": "live"}
+
+	def stop_live(self) -> dict:
+		"""End LiveScan without Abort — required before -slm/-mp on PV 6.1.
+
+		Newer PrairieView does **not** auto-stop Live when Mark Points / -slm
+		starts. Leaving Live on → -slm returns DONE immediately (no Trig In 1
+		wait) → \"finished before the first DTR\".
+		"""
+		return self.ensure_live_off()
+
+	def ensure_live_off(
+		self, *, attempts: int = 3, settle_s: float = 0.3
+	) -> dict:
+		"""Send ``-LiveScan off`` repeatedly until it sticks, then settle.
+
+		A single off can race grab/-gi or return before PV finishes stopping;
+		arming -slm in that window → DONE before DTR. Retry + settle here.
+		"""
+		attempts = max(int(attempts), 1)
+		last: str | None = None
+		errors: list[str] = []
+		for i in range(attempts):
+			try:
+				last = str(self.send("-LiveScan", "off") or "")
+			except Exception as exc:
+				errors.append(f"{type(exc).__name__}:{exc}")
+				last = None
+			if settle_s > 0:
+				time.sleep(float(settle_s))
+		ok = last is not None or not errors
+		return {
+			"ok": ok,
+			"cmd": "live_off",
+			"attempts": attempts,
+			"pv": last,
+			"errors": errors,
+		}
+
+	def disable_mark_points_metadata(self) -> dict:
+		"""Turn off ad-hoc Mark Points disk saves (persists in PV until changed)."""
+		raw = self.send("-MarkPointsMetadata", "False")
+		return {"ok": True, "cmd": "mark_points_metadata", "enabled": False, "pv": raw}
+
+	def ensure_idle_for_stim(self) -> None:
+		"""Last-resort clear when the next arm fails (do not call every trial).
+
+		Aborting after every -NoWait trial finalizes PV's Mark Points save into
+		E:\\Markpoints\\… and shows a delete-folder dialog. Prefer waiting for
+		the prior stim to finish; only Abort from Stop or a single retry.
+		"""
+		try:
+			self.send("-Silent", "-Abort")
+		except Exception as exc:
+			print(f"ensure_idle_for_stim -Abort: {exc}")
+		try:
+			self.start_live()
+		except Exception as exc:
+			print(f"ensure_idle_for_stim -LiveScan: {exc}")
 
 	def get_state(
 		self, key: str, index: str | None = None, subindex: str | None = None
@@ -166,7 +330,28 @@ class PvScript:
 		if not key:
 			raise ValueError("GetState requires a key")
 		parts = [str(key)] + [str(v) for v in (index, subindex) if v is not None]
-		out = {"ok": True, "cmd": "get_state", "key": key, "value": self.query("-gts", *parts)}
+		# Short timeout: a wedged -gts used to block the whole Run before any
+		# -slm (Trial log stuck on start, no MarkAllPoints on the relay).
+		toks = ("-gts", *parts)
+
+		def run():
+			link = self.link
+			if link is None:
+				raise RuntimeError("not connected to PrairieView script port")
+			old = link.timeout
+			link.timeout = 5.0
+			try:
+				return link.query(*toks)
+			finally:
+				if self.link is link:
+					link.timeout = old
+
+		out = {
+			"ok": True,
+			"cmd": "get_state",
+			"key": key,
+			"value": self._call(toks, run),
+		}
 		if index is not None:
 			out["index"] = index
 		if subindex is not None:
@@ -200,19 +385,160 @@ class PvScript:
 			pass
 		with open(disk, "w", encoding="utf-8") as f:
 			f.write(xml)
-		raw = self.send("-LoadMarkPoints", disk)
+		# -Silent: PV otherwise pops E:\Markpoints "already exists / file
+		# already present" and blocks the script port (stuck on first group).
+		try:
+			self.disable_mark_points_metadata()
+		except Exception:
+			pass
+		self._blocking_stim = True
+		try:
+			try:
+				raw = self.send("-Silent", "-LoadMarkPoints", disk)
+			except TimeoutError as exc:
+				# Dialog / wedged PV — do not queue another -lmp on the same session.
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					"LoadMarkPoints timed out (often E:\\Markpoints "
+					"'File already present'). Session dropped + Abort; "
+					"stop the Run before retrying."
+				) from exc
+			if _pv_file_dialog(raw) or _pv_task_busy(raw):
+				# One Abort + retry for a transient busy; never leave a second
+				# -lmp queued if the dialog is still up (that is the leftover hang).
+				self.ensure_idle_for_stim()
+				try:
+					self.disable_mark_points_metadata()
+				except Exception:
+					pass
+				disk = unique_mp_path(None)  # new path — avoid replace dialog
+				parent = os.path.dirname(disk)
+				if parent:
+					os.makedirs(parent, exist_ok=True)
+				with open(disk, "w", encoding="utf-8") as f:
+					f.write(xml)
+				raw = self.send("-Silent", "-LoadMarkPoints", disk)
+				if _pv_file_dialog(raw) or _pv_task_busy(raw):
+					self.recover_after_stuck_stim()
+					raise RuntimeError(
+						f"LoadMarkPoints still blocked after Abort: {raw[:240]!r}. "
+						"Dismiss any Markpoints dialog, then Stop and re-Run."
+					)
+		finally:
+			self._blocking_stim = False
 		return {"ok": True, "cmd": "load_mark_points", "path": disk, "pv": raw}
 
-	def mark_points(self) -> dict:
-		raw = self.send("-MarkPoints")
-		return {"ok": True, "cmd": "mark_points", "pv": raw}
+	def mark_points(self, *, no_wait: bool = False, timeout: float = 180.0) -> dict:
+		"""Run current Mark Points series.
 
-	def mark_all_points(self, parts: list[str], *, wait_ms: float = 0.0) -> dict:
-		"""parts from build_mark_all_points_parts (starts with -MarkAllPoints)."""
+		Default blocks until DONE. For Trig In 1, the caller must pulse DTR
+		*while* this waits (see ``stim_fire.run_while_pulsing_dtr``). Do not use
+		-NoWait for photostim — DONE returns before PV is armed for the trigger,
+		so later DTR never burns.
+
+		On timeout / file-dialog reply: drop the script session, Abort, and
+		raise — do **not** fire a second -MarkPoints (that left leftover arms
+		running after a PV restart).
+		"""
+		self._blocking_stim = True
+		try:
+			try:
+				if no_wait:
+					raw = self.send("-Silent", "-NoWait", "-MarkPoints", timeout=timeout)
+				else:
+					raw = self.send("-Silent", "-MarkPoints", timeout=timeout)
+			except TimeoutError as exc:
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					"MarkPoints timed out (Trig In 1 miss or E:\\Markpoints dialog). "
+					"Script session dropped + Abort; stop the Run — do not keep "
+					"sending groups after restarting PV."
+				) from exc
+			if _pv_task_busy(raw) or _pv_file_dialog(raw):
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					f"MarkPoints blocked ({raw[:240]!r}). Cleared with Abort; "
+					"stop the Run and dismiss any Markpoints folder dialog."
+				)
+		finally:
+			self._blocking_stim = False
+		return {"ok": True, "cmd": "mark_points", "pv": raw, "no_wait": bool(no_wait)}
+
+	def mark_all_points(
+		self,
+		parts: list[str],
+		*,
+		wait_ms: float = 0.0,
+		no_wait: bool | None = None,
+		timeout: float = 180.0,
+	) -> dict:
+		"""parts from build_mark_all_points_parts (starts with -MarkAllPoints).
+
+		Default ``no_wait=False``: block until DONE. Pulse DTR concurrently when
+		using Trig In 1 (``stim_fire.run_while_pulsing_dtr``).
+		"""
 		if not parts:
 			raise ValueError("mark_all_points requires non-empty parts list")
+		tokens = [str(p) for p in parts]
+		if no_wait is None:
+			no_wait = False
 		if wait_ms and float(wait_ms) > 0:
 			# PV -Wait requires an integer millisecond count (rejects 22.100).
 			self.send("-Wait", str(int(round(float(wait_ms)))))
-		raw = self.send(*[str(p) for p in parts])
-		return {"ok": True, "cmd": "mark_all_points", "parts": list(parts), "pv": raw}
+		send_toks = list(tokens)
+		if no_wait and send_toks[0] not in ("-NoWait", "-nw"):
+			send_toks = ["-NoWait", *send_toks]
+		if send_toks[0] not in ("-Silent", "-s"):
+			send_toks = ["-Silent", *send_toks]
+		self._blocking_stim = True
+		try:
+			try:
+				raw = self.send(*send_toks, timeout=timeout)
+			except TimeoutError as exc:
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					"MarkAllPoints timed out; session dropped + Abort. Stop the Run."
+				) from exc
+			if _pv_task_busy(raw) or _pv_file_dialog(raw):
+				self.recover_after_stuck_stim()
+				raise RuntimeError(
+					f"MarkAllPoints blocked ({raw[:240]!r}); Abort sent — stop the Run."
+				)
+		finally:
+			self._blocking_stim = False
+		return {
+			"ok": True,
+			"cmd": "mark_all_points",
+			"parts": list(parts),
+			"pv": raw,
+			"no_wait": bool(no_wait),
+		}
+
+
+def _script_parts_wait_on_trigger(parts: list[str]) -> bool:
+	"""True when -slm / -mp argv includes a countable trigger source name."""
+	for p in parts:
+		s = str(p).strip().lower()
+		if s in ("none", "", "false", "true"):
+			continue
+		if s.startswith("trig") or s.startswith("pfi"):
+			return True
+	return False
+
+
+def _pv_task_busy(raw: str) -> bool:
+	"""PV replied that Mark Points / another acquisition is still running."""
+	t = str(raw or "").lower()
+	return "already in progress" in t or "another task" in t
+
+
+def _pv_file_dialog(raw: str) -> bool:
+	"""PV is blocked on an E:\\Markpoints replace / already-present dialog."""
+	t = str(raw or "").lower()
+	return (
+		"already present" in t
+		or "already exists" in t
+		or "directory already" in t
+		or "file already" in t
+		or "delete and continue" in t
+	)

@@ -119,6 +119,32 @@ def test_apply_stim_to_meta():
 	assert out["stim_mode"] == "slm"
 
 
+def test_apply_stim_preserves_pv_saved_spiral_timing():
+	"""Lab/GUI defaults must not rewrite PV-saved Duration / SpiralRevs / IPD / reps."""
+	meta = {
+		"pv_saved_format": True,
+		"duration": 36.0,
+		"spiral_revolutions": "8",
+		"inter_point_delay": "14",
+		"repetitions": 3,
+		"uncaging_laser": "Monaco",
+	}
+	out = apply_stim_to_meta(
+		meta,
+		{
+			"duration_ms": 100.0,
+			"spiral_revolutions": 5,
+			"inter_point_delay_ms": 10.0,
+			"repetitions": 1,
+			"laser": "Monaco",
+		},
+	)
+	assert out["duration"] == 36.0
+	assert out["spiral_revolutions"] == "8"
+	assert out["inter_point_delay"] == "14"
+	assert out["repetitions"] == 3
+
+
 def test_merge_slm_pack_cli_overrides_config():
 	class NS:
 		series = None

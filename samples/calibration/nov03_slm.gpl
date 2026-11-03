@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PVGalvoPointList>
+  <PVGalvoPoint X="-2.63244668882207" Y="-2.20624103444135" Name="Point 1" Index="0" ActivityIdentifier="7c6d133f-ff6b-41a5-a706-5bf8285b31b9" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.0501418416918487" SpiralRevolutions="5" Z="572.025000000037" />
+  <PVGalvoPoint X="0.426205654380716" Y="-2.24802590251789" Name="Point 2" Index="1" ActivityIdentifier="7c6d133f-ff6b-41a5-a706-5bf8285b31b9" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.0501418416918487" SpiralRevolutions="5" Z="572.025000000037" />
+  <PVGalvoPoint X="-2.50709208459245" Y="1.03626472829821" Name="Point 3" Index="2" ActivityIdentifier="7c6d133f-ff6b-41a5-a706-5bf8285b31b9" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.0501418416918487" SpiralRevolutions="5" Z="572.025000000037" />
+  <PVGalvoPoint X="0.86076828237674" Y="0.927624071299205" Name="Point 4" Index="3" ActivityIdentifier="7c6d133f-ff6b-41a5-a706-5bf8285b31b9" UncagingLaser="Monaco" UncagingLaserPower="0" Duration="100" IsSpiral="True" SpiralSize="0.0501418416918487" SpiralRevolutions="5" Z="572.025000000037" />
+</PVGalvoPointList>

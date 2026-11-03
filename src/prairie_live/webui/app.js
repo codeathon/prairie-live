@@ -1,17 +1,38 @@
 const $ = (id) => document.getElementById(id);
 const picked = new Set();
 let lastRanked = [];
+/** When ranked results change, seed ● on stimulated rows once. Clear selection must stay empty. */
+let rankedSig = "";
+/** After Clear selection: do not auto-reselect (keeps green row highlight off). */
+let selectionCleared = false;
 
 async function jget(url) {
-  const r = await fetch(url);
+  let r;
+  try {
+    r = await fetch(url);
+  } catch (e) {
+    // Browser lost the GUI process (not the scope relay IP).
+    throw new Error(
+      `GUI unreachable (${url}) — is \`python -m prairie_live gui\` still running? ` +
+        `(relay IP is separate; Failed to fetch here is not a wrong scope address)`
+    );
+  }
   return r.json();
 }
 async function jpost(url, body) {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}),
-  });
+  let r;
+  try {
+    r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+  } catch (e) {
+    throw new Error(
+      `GUI unreachable (${url}) — restart the GUI on this PC ` +
+        `(not a relay IP problem)`
+    );
+  }
   return r.json();
 }
 
@@ -210,27 +231,48 @@ function syncTypedPowers() {
 }
 
 async function onXmlFile(ev) {
-  const f = ev.target.files && ev.target.files[0];
+  const input = ev.target;
+  const f = input.files && input.files[0];
   if (!f) return;
-  const b64 = await new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(",")[1] || "");
-    r.onerror = reject;
-    r.readAsDataURL(f);
-  });
-  const res = await jpost("/api/parse-xml", {
-    name: f.name,
-    content_b64: b64,
-    powers: $("powers").value,
-  });
+  // Leave input.value set so the control shows the filename (not "No file
+  // chosen"). Re-picks clear on click instead (see xml_file click handler).
+  $("xml_path").textContent = `loading ${f.name}…`;
+  $("plan").textContent = "";
+  let b64;
+  try {
+    b64 = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(",")[1] || "");
+      r.onerror = reject;
+      r.readAsDataURL(f);
+    });
+  } catch (e) {
+    $("xml_path").textContent = `read failed: ${e && e.message ? e.message : e}`;
+    return;
+  }
+  let res;
+  try {
+    res = await jpost("/api/parse-xml", {
+      name: f.name,
+      content_b64: b64,
+      powers: $("powers").value,
+    });
+  } catch (e) {
+    $("xml_path").textContent = String(e && e.message ? e.message : e);
+    return;
+  }
   if (!res.ok) {
     $("xml_path").textContent = res.error || "parse failed";
     return;
   }
-  $("xml_path").textContent = res.path;
-  $("plan").textContent = res.plan || "";
+  // Keep the real path in dataset for Run; label confirms which series is active.
+  $("xml_path").dataset.path = res.path || "";
+  $("xml_path").textContent = res.name
+    ? `Loaded: ${res.name} (${res.n_points} pts)`
+    : `Loaded: ${res.path}`;
+  $("plan").textContent = res.plan || `${res.n_points || "?"} points`;
   showXmlFields(res.fields || {});
-  refreshPoints();
+  await refreshPoints();
   if (res.fields && res.fields.repetitions) $("repetitions").value = res.fields.repetitions;
   syncTypedPowers();
 }
@@ -247,12 +289,22 @@ function renderCandidates(ranked) {
   if (!lastRanked.length) {
     box.hidden = true;
     $("side").classList.remove("has-cands");
+    rankedSig = "";
+    selectionCleared = false;
     return;
   }
   box.hidden = false;
   $("side").classList.add("has-cands");
-  if (!picked.size) {
+  // Sorted so poll order cannot look like a new run and re-seed selection/green.
+  const sig = lastRanked.map(rowKey).slice().sort().join("\0");
+  if (sig !== rankedSig) {
+    // New run results only — do not re-select after the user hits Clear selection.
+    rankedSig = sig;
+    selectionCleared = false;
+    picked.clear();
     lastRanked.filter((r) => r.stimulated).forEach((r) => picked.add(rowKey(r)));
+  } else if (selectionCleared) {
+    picked.clear();
   }
   for (const r of lastRanked) {
     const tr = document.createElement("tr");
@@ -261,6 +313,7 @@ function renderCandidates(ranked) {
     if (picked.has(key)) tr.classList.add("picked");
     tr.innerHTML = `<td>${picked.has(key) ? "●" : "○"}</td><td>${r.id}</td><td>${pwr ?? "—"}</td><td>${r.dff == null ? "—" : Number(r.dff).toFixed(3)}</td><td>${r.tercile}</td>`;
     tr.addEventListener("click", () => {
+      selectionCleared = false;
       if (picked.has(key)) picked.delete(key);
       else picked.add(key);
       renderCandidates(lastRanked);
@@ -270,19 +323,45 @@ function renderCandidates(ranked) {
 }
 
 async function tick() {
-  const st = await jget("/api/status");
-  $("log").textContent = (st.log || []).join("\n");
-  $("log").scrollTop = $("log").scrollHeight;
-  $("run").disabled = !!st.running;
-  $("stop").disabled = !st.running;
-  if (st.has_candidates) renderCandidates(st.ranked);
-  if (st.error) $("save_status").textContent = st.error;
-  if (st.live) $("live_cap").textContent = st.live.detail || "";
-  if (st.boards && st.boards.length) {
-    // Before a run the Powers box decides which tiles exist.
-    const typed = new Set(powerListFromBox().map((p) => String(p)));
-    ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready || typed.has(String(b.power))));
+  try {
+    const st = await jget("/api/status");
+    // Simple trial log: server lines only (start / trial rows / done / error).
+    $("log").textContent = (st.log || []).join("\n");
+    $("log").scrollTop = $("log").scrollHeight;
+    $("run").disabled = !!st.running;
+    $("stop").disabled = !st.running;
+    if (st.has_candidates) renderCandidates(st.ranked);
+    if (st.error) $("save_status").textContent = st.error;
+    if (st.live) $("live_cap").textContent = st.live.detail || "";
+    if (st.boards && st.boards.length) {
+      // Before a run the Powers box decides which tiles exist.
+      const typed = new Set(powerListFromBox().map((p) => String(p)));
+      ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready || typed.has(String(b.power))));
+    }
+  } catch (e) {
+    console.warn("status poll failed", e);
+    const msg = String(e && e.message ? e.message : e);
+    if (msg.includes("GUI unreachable")) {
+      $("save_status").textContent = msg;
+    }
   }
+}
+
+function syncVisualOpts() {
+  const on = $("visual_enabled").checked;
+  $("visual_opts").hidden = !on;
+}
+
+function visualRunPayload() {
+  return {
+    visual_enabled: $("visual_enabled").checked,
+    visual_screen: $("visual_screen").value,
+    visual_refresh_hz: $("visual_refresh_hz").value,
+    visual_isi_s: $("visual_isi_s").value,
+    visual_lead_ms: $("visual_lead_ms").value,
+    visual_grating_frames: $("visual_grating_frames").value,
+    visual_dtr_frames: $("visual_dtr_frames").value,
+  };
 }
 
 async function boot() {
@@ -295,18 +374,33 @@ async function boot() {
   fillSelect($("serial"), d.com_ports, "device", (p) => `${p.device} — ${p.description}`, d.serial);
   fillSelect($("stim_mode"), d.stim_modes, null, null, d.stim_mode);
   fillSelect($("trigger"), d.triggers, null, null, d.trigger);
+  $("visual_enabled").checked = !!d.visual_enabled;
+  $("visual_screen").value = d.visual_screen;
+  $("visual_refresh_hz").value = d.visual_refresh_hz;
+  $("visual_isi_s").value = d.visual_isi_s;
+  $("visual_lead_ms").value = d.visual_lead_ms;
+  $("visual_grating_frames").value = d.visual_grating_frames;
+  $("visual_dtr_frames").value = d.visual_dtr_frames;
+  syncVisualOpts();
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
   $("powers").addEventListener("input", syncTypedPowers);
+  // Clear before the dialog opens so picking the same filename still fires change.
+  $("xml_file").addEventListener("click", () => {
+    $("xml_file").value = "";
+  });
   $("xml_file").addEventListener("change", onXmlFile);
+  $("visual_enabled").addEventListener("change", syncVisualOpts);
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;
     applyMarksVisibility();
   });
   applyMarksVisibility();
   $("run").addEventListener("click", async () => {
+    // dataset.path is the upload on disk; label text is display-only.
+    const series = ($("xml_path").dataset && $("xml_path").dataset.path) || "";
     const res = await jpost("/api/run", {
-      series: $("xml_path").textContent,
+      series,
       powers: $("powers").value,
       seed: $("seed").value,
       repetitions: $("repetitions").value,
@@ -315,16 +409,28 @@ async function boot() {
       serial: $("serial").value,
       stim_mode: $("stim_mode").value,
       trigger: $("trigger").value,
+      ...visualRunPayload(),
     });
-    if (!res.ok) $("save_status").textContent = res.error || "run failed";
+    if (!res.ok) {
+      $("save_status").textContent = res.error || "run failed";
+      return;
+    }
+    await tick();
   });
-  $("stop").addEventListener("click", () => jpost("/api/stop", {}));
+  $("stop").addEventListener("click", async () => {
+    $("save_status").textContent = "stopping…";
+    await jpost("/api/stop", {});
+    await tick();
+  });
   $("sel_top").addEventListener("click", () => {
+    selectionCleared = false;
     picked.clear();
     lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(rowKey(r)));
     renderCandidates(lastRanked);
   });
   $("sel_clear").addEventListener("click", () => {
+    // Clear ● + green highlight; list/ranking stays. Poll must not re-seed.
+    selectionCleared = true;
     picked.clear();
     renderCandidates(lastRanked);
   });

@@ -17,7 +17,24 @@ def main(argv: list[str] | None = None) -> None:
 		default=None,
 		help="Ignored — lab defaults + Fat XML; experiment.json is not used",
 	)
+	p.add_argument(
+		"--ttl-line",
+		choices=("dtr", "rts"),
+		default=None,
+		help="serial pin wired to Trig In 1 (default dtr; rts swaps photostim/visual)",
+	)
+	p.add_argument(
+		"--galvo-mode",
+		choices=("slm", "galvo"),
+		default=None,
+		help="Mark Points calibration: slm = Use SLM ticked (default), galvo = off",
+	)
 	args = p.parse_args(argv)
+	if args.ttl_line:
+		os.environ["PRAIRIE_LIVE_TTL_LINE"] = args.ttl_line
+	from prairie_live.galvo_calibration import activate
+
+	print("galvo→image:", activate(args.galvo_mode), flush=True)
 	if args.relay:
 		addr = args.relay if ":" in args.relay else f"{args.relay}:25100"
 		os.environ["PRAIRIE_LIVE_RELAY"] = addr
