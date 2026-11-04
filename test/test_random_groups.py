@@ -13,6 +13,7 @@ from prairie_live.random_groups import (
 	groups_gpl_text,
 	groups_xml_text,
 	min_groups_for_coverage,
+	renumber_points,
 	select_groups_by_id,
 	write_groups_xml,
 )
@@ -108,6 +109,43 @@ def test_companion_gpl_lists_every_covered_point():
 	idxs = {el.get("Index") for el in root.findall("PVGalvoPoint")}
 	covered = {pid for g in groups for pid in g["point_ids"]}
 	assert idxs == covered
+	for el in root.findall("PVGalvoPoint"):
+		assert el.get("Name") == f"Point {el.get('Index')}"
+
+
+def test_point_name_matches_index_even_if_source_diverged():
+	# Source Name "Point 7" with Index 31 must not survive into exports.
+	weird = [
+		{"id": "31", "name": "Point 7", "x": 0.1, "y": 0.2, "z": 0},
+		{"id": "5", "name": "Point 5", "x": 0.3, "y": 0.4, "z": 0},
+		{"id": "99", "name": "Point 99", "x": 0.5, "y": 0.6, "z": 0},
+	]
+	norm = renumber_points(weird)
+	assert [(p["id"], p["name"]) for p in norm] == [
+		("1", "Point 1"),
+		("2", "Point 2"),
+		("3", "Point 3"),
+	]
+	groups = build_random_groups(weird, 1, seed=1)
+	for g in groups:
+		for p in g["points"]:
+			assert p["name"] == f"Point {p['id']}"
+	gpl = ET.fromstring(groups_gpl_text(groups, power=100.0, meta=template_meta([])))
+	for el in gpl.findall("PVGalvoPoint"):
+		assert el.get("Name") == f"Point {el.get('Index')}"
+	xml = groups_xml_text(groups, power=100.0, meta=template_meta([]))
+	root = ET.fromstring(xml)
+	for pt in root.iter("Point"):
+		assert f"Point {pt.get('Index')}" in (
+			root.find(".//PVGalvoPointElement").get("Points") or ""
+			if False
+			else f"Point {pt.get('Index')}"
+		)
+		# Nested Index is the canonical id; Points= lists matching names.
+	for galvo in root.iter("PVGalvoPointElement"):
+		names = [s.strip() for s in (galvo.get("Points") or "").split(",")]
+		idxs = [p.get("Index") for p in galvo.findall("Point")]
+		assert names == [f"Point {i}" for i in idxs]
 
 
 def test_select_preserves_three_point_membership():

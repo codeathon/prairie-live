@@ -45,6 +45,31 @@ def min_groups_for_coverage(n_points: int, group_size: int = GROUP_SIZE) -> int:
 	return (n + gs - 1) // gs
 
 
+def _sort_key_point(p: dict[str, Any]) -> tuple:
+	"""Stable order: numeric id, else name, else insertion."""
+	pid = str(p.get("id") or "")
+	if pid.isdigit():
+		return (0, int(pid), "")
+	return (1, 0, str(p.get("name") or pid))
+
+
+def renumber_points(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Force ``Index == Point N``: id ``N`` and name ``Point N`` for N = 1..len.
+
+	Source files sometimes keep a Name like ``Point 7`` with a different
+	``Index`` (e.g. 31). PV then shows mismatched labels; exports renumber so
+	name and index always agree.
+	"""
+	ordered = sorted((dict(p) for p in points), key=_sort_key_point)
+	out: list[dict[str, Any]] = []
+	for i, p in enumerate(ordered, start=1):
+		row = dict(p)
+		row["id"] = str(i)
+		row["name"] = f"Point {i}"
+		out.append(row)
+	return out
+
+
 def _pack_group(
 	chosen: list[dict[str, Any]],
 ) -> dict[str, Any]:
@@ -80,7 +105,11 @@ def build_random_groups(
 	tail group is short); any extra groups are independent random draws.
 	Final group order is shuffled so the series is not sequential by point id.
 	"""
-	pool = [dict(p) for p in points if p.get("x") is not None and p.get("y") is not None]
+	raw_pool = [
+		dict(p) for p in points if p.get("x") is not None and p.get("y") is not None
+	]
+	# Point 7 ↔ Index 7 in every export (series + companion .gpl).
+	pool = renumber_points(raw_pool)
 	gs = max(int(group_size), 1)
 	n = max(int(n_groups), 0)
 	if len(pool) < gs:

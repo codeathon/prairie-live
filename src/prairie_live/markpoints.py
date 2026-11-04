@@ -450,12 +450,8 @@ def groups_to_xml(groups: list[dict]) -> str:
 		active_pts = [pt for pt in g["points"] if pt.get("is_active", True)]
 		if not active_pts:
 			continue
-		# Name list must match nested <Point> entries — some PV builds resolve
-		# Indices against the open .gpl / name list and ignore nested coords if
-		# Points= is only a group label like "G1".
-		points_str = ", ".join(
-			str(pt.get("name") or f"Point {pt.get('id')}") for pt in active_pts
-		)
+		# Name list must match nested <Point Index>: "Point 7" ↔ Index 7.
+		points_str = ", ".join(f"Point {pt.get('id')}" for pt in active_pts)
 		el = ET.SubElement(root, "PVMarkPointElement")
 		el.set("Repetitions", str(g["repetitions"]))
 		el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
@@ -583,8 +579,10 @@ def galvo_points_to_gpl_xml(
 		el.set("X", str(pt["x"]))
 		el.set("Y", str(pt["y"]))
 		el.set("Z", str(pt.get("z", 0)))
-		el.set("Name", str(pt.get("name", f"Point {i + 1}")))
-		el.set("Index", str(pt.get("id", i)))
+		# Keep Name and Index identical ("Point 7" ↔ Index 7).
+		pid = str(pt.get("id") if pt.get("id") not in (None, "") else i + 1)
+		el.set("Index", pid)
+		el.set("Name", f"Point {pid}")
 		el.set("ActivityType", "MarkPoints")
 		el.set("UncagingLaser", str(pt.get("uncaging_laser") or laser))
 		el.set("UncagingLaserPower", str(power))
