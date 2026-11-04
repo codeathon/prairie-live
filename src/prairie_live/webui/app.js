@@ -471,8 +471,18 @@ async function boot() {
     const res = await jpost("/api/save-candidates", { ids: [...picked], keys: [...picked] });
     $("save_status").textContent = res.ok ? `saved ${res.path}` : res.error || "save failed";
   });
-  $("gen_groups").addEventListener("click", () => {
+  $("gen_groups").addEventListener("click", async () => {
     $("gen_status").textContent = "";
+    // Default # groups to the coverage minimum (ceil(n_points / 3)).
+    try {
+      const pts = await jget("/api/points");
+      const n = (pts.points || []).length;
+      if (n > 0) {
+        const need = Math.ceil(n / 3);
+        const cur = Number($("gen_n").value) || 0;
+        if (cur < need) $("gen_n").value = need;
+      }
+    } catch (_) {}
     $("gen_dlg").showModal();
   });
   $("gen_cancel").addEventListener("click", () => $("gen_dlg").close());
@@ -495,11 +505,15 @@ async function boot() {
     renderSelectedGroups(res.groups || []);
     refreshPoints();
     const saved = await saveXmlClient(res.xml, res.filename || "random_groups.xml");
+    const cover =
+      res.n_covered != null && res.n_points != null
+        ? ` · covered ${res.n_covered}/${res.n_points} points`
+        : "";
     if (saved.cancelled) {
-      $("gen_status").textContent = `built ${res.n_groups} groups (server copy ${res.path})`;
+      $("gen_status").textContent = `built ${res.n_groups} groups${cover} (server copy ${res.path})`;
     } else {
-      $("gen_status").textContent = `saved ${saved.name} · ${res.n_groups} groups · also ${res.path}`;
-      $("grp_status").textContent = `generated ${res.n_groups} groups @ power ${res.power}`;
+      $("gen_status").textContent = `saved ${saved.name} · ${res.n_groups} groups${cover}`;
+      $("grp_status").textContent = `generated ${res.n_groups} groups @ power ${res.power}${cover}`;
     }
     $("gen_dlg").close();
   });

@@ -485,9 +485,11 @@ class Handler(BaseHTTPRequestHandler):
 				STATE.random_groups_reps = repetitions
 				STATE.random_groups_path = path_str
 				STATE.random_groups_meta = meta
+			covered = {pid for g in groups for pid in g["point_ids"]}
+			pool_ids = {str(p["id"]) for p in pts}
 			STATE.append(
 				f"random groups  n={len(groups)}  size=3  power={power:g}  "
-				f"reps={repetitions}  → {path_str}"
+				f"reps={repetitions}  cover={len(covered)}/{len(pool_ids)}  → {path_str}"
 			)
 			_json(
 				self,
@@ -495,6 +497,8 @@ class Handler(BaseHTTPRequestHandler):
 					"ok": True,
 					"path": path_str,
 					"n_groups": len(groups),
+					"n_points": len(pool_ids),
+					"n_covered": len(covered),
 					"power": power,
 					"repetitions": repetitions,
 					"xml": xml_text,

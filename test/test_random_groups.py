@@ -65,6 +65,19 @@ def test_every_point_used_at_least_once():
 	assert {pid for g in big for pid in g["point_ids"]} == {str(i) for i in range(1, 32)}
 
 
+@pytest.mark.parametrize("n", [3, 4, 5, 7, 8, 10, 11, 31, 32, 50, 100])
+@pytest.mark.parametrize("seed", [0, 1, 7, 99])
+def test_coverage_all_pool_sizes(n, seed):
+	pts = _pool(n)
+	for asked in (1, max(1, n // 5), n):
+		groups = build_random_groups(pts, asked, seed=seed + asked)
+		assert len(groups) >= min_groups_for_coverage(n)
+		seen = {pid for g in groups for pid in g["point_ids"]}
+		assert seen == {str(i) for i in range(1, n + 1)}
+		for g in groups:
+			assert len(set(g["point_ids"])) == GROUP_SIZE
+
+
 def test_xml_has_n_groups_of_three(tmp_path):
 	pts = _pool(9)
 	groups = build_random_groups(pts, 5, seed=1)

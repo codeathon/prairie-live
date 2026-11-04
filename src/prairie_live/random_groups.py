@@ -53,6 +53,13 @@ def _pack_group(
 	}
 
 
+def _by_id(pool: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+	out: dict[str, dict[str, Any]] = {}
+	for p in pool:
+		out[str(p["id"])] = p
+	return out
+
+
 def build_random_groups(
 	points: list[dict[str, Any]],
 	n_groups: int,
@@ -65,9 +72,9 @@ def build_random_groups(
 	Within a group points are distinct. Across groups the same point may
 	appear again. Every pool point appears in at least one group: if
 	``n_groups`` is below the coverage minimum, it is raised. Covering
-	groups are built from a shuffled partition (remainder filled from the
-	pool); any extra groups are independent random draws. Final group
-	order is shuffled so the series is not sequential by point id.
+	groups drain an uncovered set (fill with already-covered points when a
+	tail group is short); any extra groups are independent random draws.
+	Final group order is shuffled so the series is not sequential by point id.
 	"""
 	pool = [dict(p) for p in points if p.get("x") is not None and p.get("y") is not None]
 	gs = max(int(group_size), 1)
@@ -78,31 +85,52 @@ def build_random_groups(
 		)
 	if n < 1:
 		raise ValueError("n_groups must be >= 1")
-	need = min_groups_for_coverage(len(pool), gs)
+	by_id = _by_id(pool)
+	all_ids = list(by_id.keys())
+	need = min_groups_for_coverage(len(all_ids), gs)
 	n = max(n, need)
 	rng = random.Random(seed)
-	# Coverage pass: shuffled partition so every point is used ≥ once.
-	shuffled = list(pool)
-	rng.shuffle(shuffled)
+	# Coverage: keep drawing from uncovered ids until none remain.
+	uncovered = list(all_ids)
+	rng.shuffle(uncovered)
 	raw: list[dict[str, Any]] = []
-	i = 0
-	while i < len(shuffled):
-		chunk = shuffled[i : i + gs]
-		i += gs
-		if len(chunk) < gs:
-			have = {str(p["id"]) for p in chunk}
-			fillers = [p for p in pool if str(p["id"]) not in have]
-			rng.shuffle(fillers)
-			chunk = chunk + fillers[: gs - len(chunk)]
-			if len(chunk) < gs:
-				raise ValueError(
-					f"cannot fill a group of {gs} from a pool of {len(pool)}"
-				)
-		raw.append(_pack_group(chunk))
+	covered: set[str] = set()
+	while uncovered:
+		take = uncovered[:gs]
+		uncovered = uncovered[gs:]
+		chosen_ids = list(take)
+		if len(chosen_ids) < gs:
+			# Pad with already-covered (or any other) points so the group is full.
+			pad_from = [i for i in all_ids if i not in chosen_ids]
+			rng.shuffle(pad_from)
+			chosen_ids.extend(pad_from[: gs - len(chosen_ids)])
+		if len(chosen_ids) < gs:
+			raise ValueError(
+				f"cannot fill a group of {gs} from a pool of {len(all_ids)}"
+			)
+		chosen = [dict(by_id[i]) for i in chosen_ids]
+		raw.append(_pack_group(chosen))
+		covered.update(chosen_ids)
+	# Repair pass (should be a no-op): any still-missing id gets its own group.
+	missing = [i for i in all_ids if i not in covered]
+	while missing:
+		take = missing[:gs]
+		missing = missing[gs:]
+		chosen_ids = list(take)
+		pad_from = [i for i in all_ids if i not in chosen_ids]
+		rng.shuffle(pad_from)
+		chosen_ids.extend(pad_from[: gs - len(chosen_ids)])
+		raw.append(_pack_group([dict(by_id[i]) for i in chosen_ids]))
+		covered.update(chosen_ids)
 	# Extra groups beyond coverage (repeats across groups allowed).
 	while len(raw) < n:
 		raw.append(_pack_group(rng.sample(pool, gs)))
 	rng.shuffle(raw)
+	# Hard guarantee before returning.
+	final_ids = {pid for g in raw for pid in g["point_ids"]}
+	if final_ids != set(all_ids):
+		miss = sorted(set(all_ids) - final_ids, key=lambda s: (not s.isdigit(), int(s) if s.isdigit() else s))
+		raise RuntimeError(f"group coverage failed; missing point id(s): {', '.join(miss)}")
 	groups: list[dict[str, Any]] = []
 	for gi, g in enumerate(raw, start=1):
 		rgb = group_rgb(gi)
