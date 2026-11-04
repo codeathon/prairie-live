@@ -363,7 +363,6 @@ async function onXmlFile(ev) {
     return;
   }
   $("xml_path").textContent = res.path;
-  $("plan").textContent = res.plan || "";
   showXmlFields(res.fields || {});
   refreshPoints();
   if (res.fields && res.fields.repetitions) $("repetitions").value = res.fields.repetitions;

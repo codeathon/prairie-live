@@ -323,7 +323,6 @@ class Handler(BaseHTTPRequestHandler):
 					"fields": fields,
 					"n_groups": ng,
 					"group_sizes": sizes,
-					"plan": f"{len(pts)} points → {len(sizes)} groups ({'+'.join(map(str, sizes))})",
 				},
 			)
 		except Exception as exc:

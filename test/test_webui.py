@@ -225,8 +225,8 @@ def test_web_ui_parse_xml_opens_power_plan(tmp_path):
 		assert res["ok"] is True
 		assert res["n_groups"] == 2
 		assert res["group_sizes"] == [4, 4]
-		assert "8 points" in res["plan"]
 		assert res["fields"]["n_points"] == 8
+		assert "plan" not in res
 		assert STATE.planned_powers == [75.0, 140.0, 200.0]
 		st_status, _, st_raw = _get(base + "/api/status")
 		assert st_status == 200
