@@ -106,11 +106,13 @@ def test_companion_gpl_lists_every_covered_point():
 	gpl = groups_gpl_text(groups, power=160.0, meta=template_meta([]))
 	root = ET.fromstring(gpl)
 	assert root.tag.endswith("PVGalvoPointList")
-	idxs = {el.get("Index") for el in root.findall("PVGalvoPoint")}
+	els = root.findall("Point") or root.findall("PVGalvoPoint")
+	assert [el.get("Index") for el in els] == [str(i) for i in range(1, 9)]
+	for i, el in enumerate(els, start=1):
+		assert el.get("Index") == str(i)
+		assert el.get("Name") == f"Point {i}"
 	covered = {pid for g in groups for pid in g["point_ids"]}
-	assert idxs == covered
-	for el in root.findall("PVGalvoPoint"):
-		assert el.get("Name") == f"Point {el.get('Index')}"
+	assert {el.get("Index") for el in els} == covered
 
 
 def test_point_name_matches_index_even_if_source_diverged():
@@ -131,7 +133,9 @@ def test_point_name_matches_index_even_if_source_diverged():
 		for p in g["points"]:
 			assert p["name"] == f"Point {p['id']}"
 	gpl = ET.fromstring(groups_gpl_text(groups, power=100.0, meta=template_meta([])))
-	for el in gpl.findall("PVGalvoPoint"):
+	els = gpl.findall("Point") or gpl.findall("PVGalvoPoint")
+	assert [el.get("Index") for el in els] == [str(i) for i in range(1, len(els) + 1)]
+	for el in els:
 		assert el.get("Name") == f"Point {el.get('Index')}"
 	xml = groups_xml_text(groups, power=100.0, meta=template_meta([]))
 	root = ET.fromstring(xml)

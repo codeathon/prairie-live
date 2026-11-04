@@ -237,7 +237,7 @@ def groups_xml_text(
 
 
 def unique_points_from_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
-	"""Deduped point rows in first-seen order across groups."""
+	"""Deduped points sorted by Index 1..N (file order PV uses on import)."""
 	seen: set[str] = set()
 	out: list[dict[str, Any]] = []
 	for g in groups:
@@ -247,6 +247,9 @@ def unique_points_from_groups(groups: list[dict[str, Any]]) -> list[dict[str, An
 				continue
 			seen.add(pid)
 			out.append(dict(p))
+	# PrairieView reassigns indices by list order when loading a .gpl — keep
+	# Point 1, Point 2, … in ascending Index order in the file.
+	out.sort(key=_sort_key_point)
 	return out
 
 

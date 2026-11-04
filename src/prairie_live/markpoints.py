@@ -572,17 +572,27 @@ def galvo_points_to_gpl_xml(
 	Why: .gpl coords are often outside 0–1 imaging FOV; -MarkAllPoints treats
 	numbers as FOV fractions and misplaces them. -LoadMarkPoints of a .gpl
 	keeps Prairie's native interpretation (same as the UI).
+
+	Points are written in ascending Index order using PV's usual ``<Point>``
+	tag. PrairieView reindexes by file order on import, so Index N must be
+	the Nth element (Point 1, Point 2, …).
 	"""
+	def _key(p: dict) -> tuple:
+		pid = str(p.get("id") or "")
+		return (0, int(pid)) if pid.isdigit() else (1, 0)
+
+	ordered = sorted(points, key=_key)
 	root = ET.Element("PVGalvoPointList")
-	for i, pt in enumerate(points):
-		el = ET.SubElement(root, "PVGalvoPoint")
+	# File position i is the only Index PV keeps on import — write Point i /
+	# Index i in ascending order so Name and Index never diverge.
+	for i, pt in enumerate(ordered, start=1):
+		el = ET.SubElement(root, "Point")
+		pid = str(i)
+		el.set("Index", pid)
+		el.set("Name", f"Point {pid}")
 		el.set("X", str(pt["x"]))
 		el.set("Y", str(pt["y"]))
 		el.set("Z", str(pt.get("z", 0)))
-		# Keep Name and Index identical ("Point 7" ↔ Index 7).
-		pid = str(pt.get("id") if pt.get("id") not in (None, "") else i + 1)
-		el.set("Index", pid)
-		el.set("Name", f"Point {pid}")
 		el.set("ActivityType", "MarkPoints")
 		el.set("UncagingLaser", str(pt.get("uncaging_laser") or laser))
 		el.set("UncagingLaserPower", str(power))
@@ -592,9 +602,12 @@ def galvo_points_to_gpl_xml(
 		fov = pt.get("spiral_size_fov")
 		if fov not in (None, ""):
 			el.set("SpiralSize", str(fov))
+		um = pt.get("spiral_size_um")
+		if um not in (None, ""):
+			el.set("SpiralSizeInMicrons", str(um))
 		revs = pt.get("spiral_revolutions", _DEFAULT_SPIRAL_REVS)
 		el.set("SpiralRevolutions", str(revs))
-	return ET.tostring(root, encoding="unicode", xml_declaration=False)
+	return ET.tostring(root, encoding="unicode", xml_declaration=True)
 
 
 def estimate_series_ms(groups: list[dict]) -> float:

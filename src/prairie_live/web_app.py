@@ -573,15 +573,18 @@ class Handler(BaseHTTPRequestHandler):
 			picked = select_groups_by_id(STATE.random_groups, ids)
 			meta = STATE.random_groups_meta or self._series_meta()
 			power = float(STATE.random_groups_power)
+			# Series = selected groups only; companion .gpl = full renumbered
+			# pool so Indices in the series still resolve (Point N ↔ Index N).
+			catalog = STATE.random_groups or picked
 			xml_text = groups_xml_text(picked, power=power, meta=meta)
-			gpl_text = groups_gpl_text(picked, power=power, meta=meta)
+			gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
 			save_path = body.get("path") or body.get("save_path")
 			if save_path:
 				path = write_groups_xml(
 					picked, power=power, meta=meta, path=Path(str(save_path))
 				)
 				gpl_path = write_groups_gpl(
-					picked, power=power, meta=meta, path=path.with_suffix(".gpl")
+					catalog, power=power, meta=meta, path=path.with_suffix(".gpl")
 				)
 			else:
 				path = write_groups_xml(
@@ -591,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
 					path=STATE.xml_dir / "selected_groups.xml",
 				)
 				gpl_path = write_groups_gpl(
-					picked,
+					catalog,
 					power=power,
 					meta=meta,
 					path=path.with_suffix(".gpl"),
