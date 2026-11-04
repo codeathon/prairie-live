@@ -162,11 +162,7 @@ class Handler(BaseHTTPRequestHandler):
 			self.wfile.write(png)
 			return
 		if u.path == "/api/points":
-			from prairie_live.scan_geometry import (
-				galvo_to_fraction,
-				is_fraction_space,
-				overlay_points,
-			)
+			from prairie_live.scan_geometry import overlay_points
 
 			geom, wh = STATE.live.scan_geometry()
 			out = overlay_points(
@@ -176,27 +172,31 @@ class Handler(BaseHTTPRequestHandler):
 			with STATE.lock:
 				groups = list(STATE.random_groups or [])
 				sel = set(STATE.selected_group_ids or [])
-			# Centroid circles for random groups (FOV fractions for the SVG).
+			# Color Mark Points by random-group membership (no centroid circles —
+			# group averages sit near FOV center and are hard to pick).
+			by_pid: dict[str, list[dict[str, Any]]] = {}
 			g_rows: list[dict[str, Any]] = []
 			for g in groups:
-				fx, fy = float(g["cx"]), float(g["cy"])
-				pts = list(g.get("points") or [])
-				if pts and not is_fraction_space(pts):
-					if not geom:
-						continue
-					fx, fy = galvo_to_fraction(fx, fy, geom)
-				rgb = g.get("rgb") or [0, 255, 255]
-				g_rows.append(
-					{
-						"id": str(g["id"]),
-						"name": str(g.get("name") or f"G{g['id']}"),
-						"fx": round(fx, 5),
-						"fy": round(fy, 5),
-						"rgb": [int(rgb[0]), int(rgb[1]), int(rgb[2])],
-						"point_ids": list(g.get("point_ids") or []),
-						"selected": str(g["id"]) in sel,
-					}
-				)
+				rgb = [int(x) for x in (g.get("rgb") or [0, 255, 255])]
+				gid = str(g["id"])
+				row = {
+					"id": gid,
+					"name": str(g.get("name") or f"G{gid}"),
+					"point_ids": list(g.get("point_ids") or []),
+					"rgb": rgb,
+					"selected": gid in sel,
+				}
+				g_rows.append(row)
+				for pid in row["point_ids"]:
+					by_pid.setdefault(str(pid), []).append(row)
+			for p in out.get("points") or []:
+				membership = by_pid.get(str(p.get("id")), [])
+				p["group_ids"] = [m["id"] for m in membership]
+				if not membership:
+					continue
+				picked = next((m for m in membership if m["selected"]), membership[0])
+				p["rgb"] = list(picked["rgb"])
+				p["group_selected"] = any(m["selected"] for m in membership)
 			out["groups"] = g_rows
 			_json(self, out)
 			return

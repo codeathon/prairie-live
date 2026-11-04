@@ -131,7 +131,12 @@ def overlay_points(
 	if not points:
 		return {"points": [], "note": ""}
 	if is_fraction_space(points):
-		return {"points": [_row(p, float(p["x"]), float(p["y"]), None) for p in points], "note": ""}
+		rows = []
+		for p in points:
+			size = p.get("spiral_size_fov") or p.get("spiral_width")
+			r = abs(float(size)) / 2.0 if size not in (None, "") else None
+			rows.append(_row(p, float(p["x"]), float(p["y"]), r))
+		return {"points": rows, "note": ""}
 	if not geom:
 		why = f" ({error})" if error else ""
 		return {

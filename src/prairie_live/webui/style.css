@@ -90,22 +90,13 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
 }
 .fov-wrap svg { overflow: visible; }
 #live_marks { pointer-events: none; }
-#live_groups { pointer-events: auto; z-index: 1; }
+#live_marks.pickable { pointer-events: auto; }
 .fov-wrap svg.hidden { display: none; }
 .fov-wrap circle.mp-pt { fill: none; stroke: #00ffff; pointer-events: none; }
 .fov-wrap text.mp-pt { fill: #00ffff; paint-order: stroke; stroke: #000; pointer-events: none; }
-.fov-wrap circle.grp {
-  fill: rgba(0, 0, 0, 0.15);
-  cursor: pointer;
-  pointer-events: auto;
-}
-.fov-wrap circle.grp.selected { stroke-width: 0.012; }
-.fov-wrap text.grp {
-  paint-order: stroke;
-  stroke: #000;
-  pointer-events: none;
-  font-weight: 700;
-}
+.fov-wrap circle.mp-pt.grouped { pointer-events: auto; }
+.fov-wrap text.mp-pt.grouped { pointer-events: auto; font-weight: 700; }
+.fov-wrap circle.mp-pt.selected { fill: rgba(255, 255, 255, 0.12); }
 /* Next to "Live scan"; toggles the Mark Points overlay. */
 .fov-toggle {
   flex: 0 0 auto;

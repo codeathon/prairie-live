@@ -288,7 +288,11 @@ def test_random_groups_api_smoke(tmp_path):
 
 		pts = json.loads(pts_raw.decode("utf-8"))
 		assert len(pts["groups"]) == 4
-		assert all("fx" in g and "fy" in g and "rgb" in g for g in pts["groups"])
+		assert all("point_ids" in g and "rgb" in g for g in pts["groups"])
+		assert all("fx" not in g for g in pts["groups"])  # no centroid overlay
+		colored = [p for p in pts["points"] if p.get("group_ids")]
+		assert colored
+		assert all(p.get("rgb") for p in colored)
 
 		ids = [res["groups"][0]["id"], res["groups"][2]["id"]]
 		status, sel = _post(base + "/api/select-groups", {"ids": ids})

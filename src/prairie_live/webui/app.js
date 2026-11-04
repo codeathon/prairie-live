@@ -3,7 +3,6 @@ const picked = new Set();
 let lastRanked = [];
 const selectedGroups = new Set();
 let lastGroups = [];
-let lastGroupOverlay = [];
 
 async function jget(url) {
   const r = await fetch(url);
@@ -137,33 +136,13 @@ function renderSelectedGroups(groups) {
   }
 }
 
-function svgPointFromEvent(svg, ev) {
-  const pt = svg.createSVGPoint();
-  pt.x = ev.clientX;
-  pt.y = ev.clientY;
-  const ctm = svg.getScreenCTM();
-  if (!ctm) return null;
-  return pt.matrixTransform(ctm.inverse());
-}
-
-function hitTestGroup(svg, ev) {
-  const p = svgPointFromEvent(svg, ev);
-  if (!p) return null;
-  const [vw, vh] = (svg.getAttribute("viewBox") || "0 0 1 1").split(/\s+/).slice(2).map(Number);
-  const unit = Math.min(vw || 1, vh || 1);
-  const maxR = unit * 0.05;
-  let best = null;
-  let bestD = maxR;
-  for (const g of lastGroupOverlay) {
-    const cx = g.fx * (vw || 1);
-    const cy = g.fy * (vh || 1);
-    const d = Math.hypot(p.x - cx, p.y - cy);
-    if (d <= bestD) {
-      bestD = d;
-      best = g;
-    }
-  }
-  return best;
+function toggleGroupsForPoint(pointId) {
+  const gids = (lastGroups || [])
+    .filter((g) => (g.point_ids || []).map(String).includes(String(pointId)))
+    .map((g) => String(g.id));
+  if (!gids.length) return;
+  const active = gids.find((id) => selectedGroups.has(id));
+  toggleGroupSelection(active || gids[0]);
 }
 
 async function refreshPoints() {
@@ -174,53 +153,50 @@ async function refreshPoints() {
     return;
   }
   const svg = $("live_marks");
-  const gsvg = $("live_groups");
   const [w, h] = res.frame_wh || [1, 1];
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-  gsvg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   svg.replaceChildren();
-  gsvg.replaceChildren();
   const unit = Math.min(w, h);
+  const hasGroups = (res.groups || []).length > 0;
   for (const p of res.points || []) {
     const cx = p.fx * w;
     const cy = p.fy * h;
+    const inGroup = (p.group_ids || []).length > 0;
     const c = document.createElementNS(SVG_NS, "circle");
-    c.setAttribute("class", "mp-pt");
+    c.setAttribute(
+      "class",
+      "mp-pt" + (p.group_selected ? " selected" : "") + (inGroup ? " grouped" : "")
+    );
     c.setAttribute("cx", cx);
     c.setAttribute("cy", cy);
     c.setAttribute("r", Math.max((p.r || 0) * w, unit * 0.012));
-    c.setAttribute("stroke-width", unit * 0.004);
+    c.setAttribute("stroke-width", unit * (p.group_selected ? 0.01 : 0.004));
+    if (p.rgb) c.setAttribute("stroke", rgbCss(p.rgb));
+    if (inGroup) {
+      c.style.cursor = "pointer";
+      c.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleGroupsForPoint(p.id);
+      });
+    }
     const t = document.createElementNS(SVG_NS, "text");
-    t.setAttribute("class", "mp-pt");
+    t.setAttribute("class", "mp-pt" + (inGroup ? " grouped" : ""));
     t.setAttribute("x", cx + unit * 0.016);
     t.setAttribute("y", cy - unit * 0.012);
     t.setAttribute("font-size", unit * 0.03);
     t.setAttribute("stroke-width", unit * 0.006);
+    if (p.rgb) t.setAttribute("fill", rgbCss(p.rgb));
     t.textContent = p.id;
+    if (inGroup) {
+      t.style.cursor = "pointer";
+      t.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        toggleGroupsForPoint(p.id);
+      });
+    }
     svg.append(c, t);
   }
-  lastGroupOverlay = res.groups || [];
-  for (const g of lastGroupOverlay) {
-    const cx = g.fx * w;
-    const cy = g.fy * h;
-    const c = document.createElementNS(SVG_NS, "circle");
-    c.setAttribute("class", "grp" + (g.selected ? " selected" : ""));
-    c.setAttribute("data-gid", g.id);
-    c.setAttribute("cx", cx);
-    c.setAttribute("cy", cy);
-    c.setAttribute("r", unit * 0.035);
-    c.setAttribute("stroke", rgbCss(g.rgb));
-    c.setAttribute("stroke-width", unit * (g.selected ? 0.012 : 0.006));
-    const t = document.createElementNS(SVG_NS, "text");
-    t.setAttribute("class", "grp");
-    t.setAttribute("x", cx + unit * 0.02);
-    t.setAttribute("y", cy - unit * 0.02);
-    t.setAttribute("font-size", unit * 0.035);
-    t.setAttribute("fill", rgbCss(g.rgb));
-    t.setAttribute("stroke-width", unit * 0.006);
-    t.textContent = g.name || "G" + g.id;
-    gsvg.append(c, t);
-  }
+  svg.classList.toggle("pickable", hasGroups);
   marksNote = res.note || "";
   applyMarksVisibility();
 }
@@ -434,10 +410,6 @@ async function boot() {
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;
     applyMarksVisibility();
-  });
-  $("live_groups").addEventListener("click", (ev) => {
-    const g = hitTestGroup($("live_groups"), ev);
-    if (g) toggleGroupSelection(g.id);
   });
   applyMarksVisibility();
   $("run").addEventListener("click", async () => {

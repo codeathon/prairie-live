@@ -149,7 +149,7 @@ For a manual PrairieView Mark Points pass (no GUI **Run** / DTR):
 3. Session → **Generate random groups** → set `# groups`, power, optional
    seed → save the PV series XML (Chrome file picker when available).
 4. Load that XML in PrairieView and run Mark Points there.
-5. On Live, click colored centroid circles (`G#`) for keepers → **Save
+5. On Live, click colored Mark Points (or table rows) for keepers → **Save
    selected groups XML** (same 3-point membership and power).
 
 ## Analysis PC — live ROI intensity
