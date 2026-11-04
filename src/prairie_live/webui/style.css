@@ -78,9 +78,9 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
 .tile-caps p { margin: 0; font-size: 0.85em; line-height: 1.35; }
 .tile-caps p:empty { visibility: hidden; }
 #marks_note.dimmed { visibility: hidden; }
-/* Overlay shares the image box; meet == object-fit: contain, so marks line up. */
+/* Live PNG uses object-fit:contain; SVG is positioned onto that content box in JS. */
 .fov-wrap { position: relative; flex: 1 1 auto; min-height: 0; }
-.fov-wrap img, .fov-wrap svg {
+.fov-wrap img {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -88,7 +88,12 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   object-fit: contain;
   display: block;
 }
-.fov-wrap svg { overflow: visible; }
+.fov-wrap svg#live_marks {
+  position: absolute;
+  overflow: visible;
+  display: block;
+  /* left/top/width/height set by syncMarksToImage() to match object-fit contain */
+}
 #live_marks { pointer-events: none; }
 #live_marks.pickable { pointer-events: auto; }
 .fov-wrap svg.hidden { display: none; }

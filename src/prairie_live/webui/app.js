@@ -145,6 +145,32 @@ function toggleGroupsForPoint(pointId) {
   toggleGroupSelection(active || gids[0]);
 }
 
+/** Map SVG onto the same rectangle object-fit:contain uses for #live_img. */
+function syncMarksToImage() {
+  const img = $("live_img");
+  const svg = $("live_marks");
+  const wrap = img && img.parentElement;
+  if (!img || !svg || !wrap) return;
+  const nw = img.naturalWidth || 0;
+  const nh = img.naturalHeight || 0;
+  const cw = wrap.clientWidth || 0;
+  const ch = wrap.clientHeight || 0;
+  if (nw < 1 || nh < 1 || cw < 1 || ch < 1) {
+    svg.style.left = "0";
+    svg.style.top = "0";
+    svg.style.width = "100%";
+    svg.style.height = "100%";
+    return;
+  }
+  const scale = Math.min(cw / nw, ch / nh);
+  const dw = nw * scale;
+  const dh = nh * scale;
+  svg.style.left = `${(cw - dw) / 2}px`;
+  svg.style.top = `${(ch - dh) / 2}px`;
+  svg.style.width = `${dw}px`;
+  svg.style.height = `${dh}px`;
+}
+
 async function refreshPoints() {
   let res;
   try {
@@ -153,15 +179,22 @@ async function refreshPoints() {
     return;
   }
   const svg = $("live_marks");
-  const [w, h] = res.frame_wh || [1, 1];
-  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  // Unit square viewBox: fx/fy are already 0–1 of the live frame.
+  // SVG element is sized to the contained image box (not the letterbox bars).
+  svg.setAttribute("viewBox", "0 0 1 1");
+  svg.setAttribute("preserveAspectRatio", "none");
   svg.replaceChildren();
-  const unit = Math.min(w, h);
+  syncMarksToImage();
   const hasGroups = (res.groups || []).length > 0;
   for (const p of res.points || []) {
-    const cx = p.fx * w;
-    const cy = p.fy * h;
+    const cx = Number(p.fx);
+    const cy = Number(p.fy);
+    if (!(cx >= 0 && cx <= 1 && cy >= 0 && cy <= 1)) {
+      // Still draw slightly OOB so galvo edge points stay visible.
+    }
     const inGroup = (p.group_ids || []).length > 0;
+    // Small ring at the point — spiral size in the XML is not image radius.
+    const rad = 0.012;
     const c = document.createElementNS(SVG_NS, "circle");
     c.setAttribute(
       "class",
@@ -169,8 +202,8 @@ async function refreshPoints() {
     );
     c.setAttribute("cx", cx);
     c.setAttribute("cy", cy);
-    c.setAttribute("r", Math.max((p.r || 0) * w, unit * 0.012));
-    c.setAttribute("stroke-width", unit * (p.group_selected ? 0.01 : 0.004));
+    c.setAttribute("r", rad);
+    c.setAttribute("stroke-width", p.group_selected ? 0.006 : 0.003);
     if (p.rgb) c.setAttribute("stroke", rgbCss(p.rgb));
     if (inGroup) {
       c.style.cursor = "pointer";
@@ -181,10 +214,10 @@ async function refreshPoints() {
     }
     const t = document.createElementNS(SVG_NS, "text");
     t.setAttribute("class", "mp-pt" + (inGroup ? " grouped" : ""));
-    t.setAttribute("x", cx + unit * 0.016);
-    t.setAttribute("y", cy - unit * 0.012);
-    t.setAttribute("font-size", unit * 0.03);
-    t.setAttribute("stroke-width", unit * 0.006);
+    t.setAttribute("x", cx + 0.016);
+    t.setAttribute("y", cy - 0.012);
+    t.setAttribute("font-size", "0.028");
+    t.setAttribute("stroke-width", "0.004");
     if (p.rgb) t.setAttribute("fill", rgbCss(p.rgb));
     t.textContent = p.id;
     if (inGroup) {
@@ -234,6 +267,7 @@ async function refreshLive() {
     const blob = await r.blob();
     const img = $("live_img");
     const old = img.src;
+    img.onload = () => syncMarksToImage();
     img.src = URL.createObjectURL(blob);
     if (old && old.startsWith("blob:")) URL.revokeObjectURL(old);
   } catch (_) {}
