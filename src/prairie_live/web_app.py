@@ -435,7 +435,9 @@ class Handler(BaseHTTPRequestHandler):
 	def _random_groups(self, raw: bytes) -> None:
 		from prairie_live.random_groups import (
 			build_random_groups,
+			groups_gpl_text,
 			groups_xml_text,
+			write_groups_gpl,
 			write_groups_xml,
 		)
 
@@ -462,12 +464,21 @@ class Handler(BaseHTTPRequestHandler):
 			meta["repetitions"] = repetitions
 			groups = build_random_groups(pts, n_groups, seed=seed)
 			xml_text = groups_xml_text(groups, power=power, meta=meta)
+			gpl_text = groups_gpl_text(groups, power=power, meta=meta)
 			save_path = body.get("path") or body.get("save_path")
 			path_str: str | None = None
+			gpl_path: str | None = None
 			if save_path:
+				xml_path = Path(str(save_path))
 				path_str = str(
-					write_groups_xml(
-						groups, power=power, meta=meta, path=Path(str(save_path))
+					write_groups_xml(groups, power=power, meta=meta, path=xml_path)
+				)
+				gpl_path = str(
+					write_groups_gpl(
+						groups,
+						power=power,
+						meta=meta,
+						path=xml_path.with_suffix(".gpl"),
 					)
 				)
 			else:
@@ -475,6 +486,14 @@ class Handler(BaseHTTPRequestHandler):
 				dest = STATE.xml_dir / "random_groups.xml"
 				path_str = str(
 					write_groups_xml(groups, power=power, meta=meta, path=dest)
+				)
+				gpl_path = str(
+					write_groups_gpl(
+						groups,
+						power=power,
+						meta=meta,
+						path=dest.with_suffix(".gpl"),
+					)
 				)
 			with STATE.lock:
 				STATE.points = pts
@@ -489,20 +508,24 @@ class Handler(BaseHTTPRequestHandler):
 			pool_ids = {str(p["id"]) for p in pts}
 			STATE.append(
 				f"random groups  n={len(groups)}  size=3  power={power:g}  "
-				f"reps={repetitions}  cover={len(covered)}/{len(pool_ids)}  → {path_str}"
+				f"reps={repetitions}  cover={len(covered)}/{len(pool_ids)}  "
+				f"→ {path_str} + {gpl_path}"
 			)
 			_json(
 				self,
 				{
 					"ok": True,
 					"path": path_str,
+					"gpl_path": gpl_path,
 					"n_groups": len(groups),
 					"n_points": len(pool_ids),
 					"n_covered": len(covered),
 					"power": power,
 					"repetitions": repetitions,
 					"xml": xml_text,
+					"gpl": gpl_text,
 					"filename": Path(path_str).name if path_str else "random_groups.xml",
+					"gpl_filename": Path(gpl_path).name if gpl_path else "random_groups.gpl",
 					"groups": [
 						{
 							"id": g["id"],
@@ -533,8 +556,10 @@ class Handler(BaseHTTPRequestHandler):
 
 	def _selected_groups_xml(self, raw: bytes) -> None:
 		from prairie_live.random_groups import (
+			groups_gpl_text,
 			groups_xml_text,
 			select_groups_by_id,
+			write_groups_gpl,
 			write_groups_xml,
 		)
 
@@ -549,10 +574,14 @@ class Handler(BaseHTTPRequestHandler):
 			meta = STATE.random_groups_meta or self._series_meta()
 			power = float(STATE.random_groups_power)
 			xml_text = groups_xml_text(picked, power=power, meta=meta)
+			gpl_text = groups_gpl_text(picked, power=power, meta=meta)
 			save_path = body.get("path") or body.get("save_path")
 			if save_path:
 				path = write_groups_xml(
 					picked, power=power, meta=meta, path=Path(str(save_path))
+				)
+				gpl_path = write_groups_gpl(
+					picked, power=power, meta=meta, path=path.with_suffix(".gpl")
 				)
 			else:
 				path = write_groups_xml(
@@ -561,15 +590,24 @@ class Handler(BaseHTTPRequestHandler):
 					meta=meta,
 					path=STATE.xml_dir / "selected_groups.xml",
 				)
-			STATE.append(f"selected groups XML ({len(picked)}) → {path}")
+				gpl_path = write_groups_gpl(
+					picked,
+					power=power,
+					meta=meta,
+					path=path.with_suffix(".gpl"),
+				)
+			STATE.append(f"selected groups ({len(picked)}) → {path} + {gpl_path}")
 			_json(
 				self,
 				{
 					"ok": True,
 					"path": str(path),
+					"gpl_path": str(gpl_path),
 					"n_groups": len(picked),
 					"xml": xml_text,
+					"gpl": gpl_text,
 					"filename": path.name,
+					"gpl_filename": gpl_path.name,
 				},
 			)
 		except Exception as exc:

@@ -239,16 +239,20 @@ async function refreshPoints() {
   applyMarksVisibility();
 }
 
-async function saveXmlClient(xml, filename) {
+async function saveTextClient(text, filename, description) {
   const name = filename || "groups.xml";
+  const isGpl = /\.gpl$/i.test(name);
+  const accept = isGpl
+    ? { "application/xml": [".gpl"] }
+    : { "application/xml": [".xml"] };
   if (window.showSaveFilePicker) {
     try {
       const handle = await window.showSaveFilePicker({
         suggestedName: name,
-        types: [{ description: "Mark Points XML", accept: { "application/xml": [".xml"] } }],
+        types: [{ description: description || "Mark Points file", accept }],
       });
       const writable = await handle.createWritable();
-      await writable.write(xml);
+      await writable.write(text);
       await writable.close();
       return { ok: true, via: "picker", name };
     } catch (e) {
@@ -256,13 +260,34 @@ async function saveXmlClient(xml, filename) {
       // fall through to download
     }
   }
-  const blob = new Blob([xml], { type: "application/xml" });
+  const blob = new Blob([text], { type: "application/xml" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
   return { ok: true, via: "download", name };
+}
+
+async function saveSeriesAndGpl(res) {
+  const xmlSaved = await saveTextClient(
+    res.xml,
+    res.filename || "random_groups.xml",
+    "Mark Points series XML"
+  );
+  if (xmlSaved.cancelled) return xmlSaved;
+  if (res.gpl) {
+    const gplSaved = await saveTextClient(
+      res.gpl,
+      res.gpl_filename || "random_groups.gpl",
+      "Galvo Points list (.gpl)"
+    );
+    if (gplSaved.cancelled) {
+      return { ok: true, name: xmlSaved.name, gpl: null, gplSkipped: true };
+    }
+    return { ok: true, name: xmlSaved.name, gpl: gplSaved.name };
+  }
+  return { ok: true, name: xmlSaved.name, gpl: null };
 }
 
 async function refreshLive() {
@@ -504,16 +529,22 @@ async function boot() {
     selectedGroups.clear();
     renderSelectedGroups(res.groups || []);
     refreshPoints();
-    const saved = await saveXmlClient(res.xml, res.filename || "random_groups.xml");
+    const saved = await saveSeriesAndGpl(res);
     const cover =
       res.n_covered != null && res.n_points != null
         ? ` · covered ${res.n_covered}/${res.n_points} points`
         : "";
     if (saved.cancelled) {
-      $("gen_status").textContent = `built ${res.n_groups} groups${cover} (server copy ${res.path})`;
+      $("gen_status").textContent =
+        `built ${res.n_groups} groups${cover} (server ${res.path}` +
+        (res.gpl_path ? ` + ${res.gpl_path}` : "") +
+        `)`;
     } else {
-      $("gen_status").textContent = `saved ${saved.name} · ${res.n_groups} groups${cover}`;
-      $("grp_status").textContent = `generated ${res.n_groups} groups @ power ${res.power}${cover}`;
+      const gplBit = saved.gpl ? ` + ${saved.gpl}` : saved.gplSkipped ? " (gpl skipped)" : "";
+      $("gen_status").textContent =
+        `saved ${saved.name}${gplBit} · ${res.n_groups} groups${cover}`;
+      $("grp_status").textContent =
+        `generated ${res.n_groups} groups @ power ${res.power}${cover} — load .gpl then .xml in PV`;
     }
     $("gen_dlg").close();
   });
@@ -534,10 +565,15 @@ async function boot() {
       $("grp_status").textContent = res.error || "save failed";
       return;
     }
-    const saved = await saveXmlClient(res.xml, res.filename || "selected_groups.xml");
-    $("grp_status").textContent = saved.cancelled
-      ? `server copy ${res.path}`
-      : `saved ${saved.name} (${res.n_groups} groups) · ${res.path}`;
+    const saved = await saveSeriesAndGpl(res);
+    if (saved.cancelled) {
+      $("grp_status").textContent =
+        `server ${res.path}` + (res.gpl_path ? ` + ${res.gpl_path}` : "");
+    } else {
+      const gplBit = saved.gpl ? ` + ${saved.gpl}` : "";
+      $("grp_status").textContent =
+        `saved ${saved.name}${gplBit} (${res.n_groups} groups) — load .gpl then .xml in PV`;
+    }
   });
   fitGrid();
   syncMarksToImage();

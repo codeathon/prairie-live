@@ -11,7 +11,11 @@ import random
 from pathlib import Path
 from typing import Any
 
-from prairie_live.markpoints import build_group_step, groups_to_xml
+from prairie_live.markpoints import (
+	build_group_step,
+	galvo_points_to_gpl_xml,
+	groups_to_xml,
+)
 
 GROUP_SIZE = 3
 
@@ -201,6 +205,58 @@ def groups_xml_text(
 	if not steps:
 		raise ValueError("no groups to write")
 	return groups_to_xml(steps)
+
+
+def unique_points_from_groups(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Deduped point rows in first-seen order across groups."""
+	seen: set[str] = set()
+	out: list[dict[str, Any]] = []
+	for g in groups:
+		for p in g.get("points") or []:
+			pid = str(p.get("id"))
+			if pid in seen:
+				continue
+			seen.add(pid)
+			out.append(dict(p))
+	return out
+
+
+def groups_gpl_text(
+	groups: list[dict[str, Any]],
+	*,
+	power: float,
+	meta: dict[str, Any] | None = None,
+) -> str:
+	"""Companion Galvo Point List so PV can resolve series Indices without a prior .gpl."""
+	meta = meta or {}
+	pts = unique_points_from_groups(groups)
+	if not pts:
+		raise ValueError("no points to write to .gpl")
+	dur = float(meta.get("duration") or pts[0].get("duration") or 100.0)
+	laser = str(meta.get("uncaging_laser") or "Monaco")
+	# Ensure FOV spirals carry SpiralSize for the .gpl writer.
+	for p in pts:
+		if p.get("spiral_size_fov") in (None, "") and p.get("spiral_width") not in (None, ""):
+			p["spiral_size_fov"] = p["spiral_width"]
+		if p.get("spiral_revolutions") in (None, ""):
+			p["spiral_revolutions"] = meta.get("spiral_revolutions", "8")
+	return galvo_points_to_gpl_xml(
+		pts, power=float(power), laser=laser, duration_ms=dur
+	)
+
+
+def write_groups_gpl(
+	groups: list[dict[str, Any]],
+	*,
+	power: float,
+	meta: dict[str, Any] | None = None,
+	path: str | Path,
+) -> Path:
+	"""Write the companion ``.gpl`` next to a series XML."""
+	out = Path(path)
+	out.parent.mkdir(parents=True, exist_ok=True)
+	out.write_text(groups_gpl_text(groups, power=power, meta=meta), encoding="utf-8")
+	return out
 
 
 def select_groups_by_id(

@@ -146,9 +146,10 @@ For a manual PrairieView Mark Points pass (no GUI **Run** / DTR):
 1. On the **scope PC**, start the relay, then `python -m prairie_live gui`
    (default relay `127.0.0.1:25100`).
 2. Upload a FAT points-only Mark Points XML.
-3. Session → **Generate random groups** → set `# groups`, power, optional
-   seed → save the PV series XML (Chrome file picker when available).
-4. Load that XML in PrairieView and run Mark Points there.
+3. Session → **Generate random groups** → set `# groups`, power, repetitions,
+   optional seed → save the series `.xml` and companion Galvo Points `.gpl`.
+4. In PrairieView: load the `.gpl` first, then the series `.xml`, then run
+   Mark Points.
 5. On Live, click colored Mark Points (or table rows) for keepers → **Save
    selected groups XML** (same 3-point membership and power).
 

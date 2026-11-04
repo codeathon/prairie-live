@@ -450,7 +450,12 @@ def groups_to_xml(groups: list[dict]) -> str:
 		active_pts = [pt for pt in g["points"] if pt.get("is_active", True)]
 		if not active_pts:
 			continue
-		points_str = g.get("raw_points") or g.get("name") or "Group"
+		# Name list must match nested <Point> entries — some PV builds resolve
+		# Indices against the open .gpl / name list and ignore nested coords if
+		# Points= is only a group label like "G1".
+		points_str = ", ".join(
+			str(pt.get("name") or f"Point {pt.get('id')}") for pt in active_pts
+		)
 		el = ET.SubElement(root, "PVMarkPointElement")
 		el.set("Repetitions", str(g["repetitions"]))
 		el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))

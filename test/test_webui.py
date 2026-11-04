@@ -280,7 +280,9 @@ def test_random_groups_api_smoke(tmp_path):
 		assert res["repetitions"] == 3
 		assert len(res["groups"]) == 4
 		assert Path(res["path"]).is_file()
+		assert Path(res["gpl_path"]).is_file()
 		assert "<PVMarkPointElement" in res["xml"]
+		assert "PVGalvoPointList" in res["gpl"]
 		assert STATE.random_groups_power == 160.0
 		assert 'Repetitions="3"' in res["xml"]
 

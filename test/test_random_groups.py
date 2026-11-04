@@ -10,6 +10,7 @@ from prairie_live.markpoints import template_meta
 from prairie_live.random_groups import (
 	GROUP_SIZE,
 	build_random_groups,
+	groups_gpl_text,
 	groups_xml_text,
 	min_groups_for_coverage,
 	select_groups_by_id,
@@ -94,6 +95,19 @@ def test_xml_has_n_groups_of_three(tmp_path):
 		galvo = el.find("PVGalvoPointElement")
 		assert galvo is not None
 		assert len(galvo.findall("Point")) == 3
+		# Points= lists real point names (not just "G1") for PV/.gpl lookup.
+		assert "Point" in (galvo.get("Points") or "")
+
+
+def test_companion_gpl_lists_every_covered_point():
+	pts = _pool(8)
+	groups = build_random_groups(pts, 4, seed=2)
+	gpl = groups_gpl_text(groups, power=160.0, meta=template_meta([]))
+	root = ET.fromstring(gpl)
+	assert root.tag.endswith("PVGalvoPointList")
+	idxs = {el.get("Index") for el in root.findall("PVGalvoPoint")}
+	covered = {pid for g in groups for pid in g["point_ids"]}
+	assert idxs == covered
 
 
 def test_select_preserves_three_point_membership():
