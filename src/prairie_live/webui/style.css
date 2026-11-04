@@ -96,8 +96,8 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
 }
 #live_marks { pointer-events: none; }
 #live_marks.pickable { pointer-events: auto; }
-/* ID rule above sets display:block — must beat it when MP toggle hides marks. */
-#live_marks.hidden { display: none; }
+/* Must beat `.fov-wrap svg#live_marks { display:block }` (higher specificity). */
+.fov-wrap svg#live_marks.hidden { display: none; }
 .fov-wrap circle.mp-pt { fill: none; stroke: #00ffff; pointer-events: none; }
 .fov-wrap text.mp-pt { fill: #00ffff; paint-order: stroke; stroke: #000; pointer-events: none; }
 .fov-wrap circle.mp-pt.grouped { pointer-events: auto; }

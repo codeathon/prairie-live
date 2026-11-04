@@ -88,7 +88,10 @@ let marksOn = true;
 let marksNote = "";
 
 function applyMarksVisibility() {
-  $("live_marks").classList.toggle("hidden", !marksOn);
+  const svg = $("live_marks");
+  svg.classList.toggle("hidden", !marksOn);
+  // Inline display so CSS specificity cannot keep marks stuck visible.
+  svg.style.display = marksOn ? "block" : "none";
   // Keep the note's height when hiding marks so the FOV does not jump.
   const note = $("marks_note");
   note.textContent = marksNote;
