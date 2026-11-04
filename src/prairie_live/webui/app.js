@@ -419,7 +419,18 @@ async function tick() {
     renderSelectedGroups(st.random_groups);
   }
   if (st.error) $("save_status").textContent = st.error;
-  if (st.live) $("live_cap").textContent = st.live.detail || "";
+  if (st.live) {
+    const o = st.live.optics || {};
+    if (o.fov_width_um && o.optical_zoom) {
+      $("live_cap").textContent =
+        (st.live.detail || "live") +
+        (!String(st.live.detail || "").includes("FOV")
+          ? ` · FOV ${Number(o.fov_width_um).toFixed(1)} µm · zoom ${o.optical_zoom}`
+          : "");
+    } else {
+      $("live_cap").textContent = st.live.detail || "";
+    }
+  }
   if (st.boards && st.boards.length) {
     // Before a run the Powers box decides which tiles exist.
     const typed = new Set(powerListFromBox().map((p) => String(p)));
@@ -531,7 +542,11 @@ async function boot() {
       : `saved ${saved.name} (${res.n_groups} groups) · ${res.path}`;
   });
   fitGrid();
-  window.addEventListener("resize", fitGrid);
+  syncMarksToImage();
+  window.addEventListener("resize", () => {
+    fitGrid();
+    syncMarksToImage();
+  });
   setInterval(refreshRelay, 4000);
   setInterval(refreshLive, 150);
   setInterval(refreshPoints, 2000);

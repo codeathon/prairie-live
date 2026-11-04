@@ -47,12 +47,21 @@ class LiveFeed:
 
 	def snapshot(self) -> dict:
 		with self._lock:
+			optics = {}
+			if self.geometry:
+				from prairie_live.scan_geometry import optics_from_geometry
+
+				optics = optics_from_geometry(self.geometry)
+			if self.frame_wh:
+				optics["image_width_px"] = int(self.frame_wh[0])
+				optics["image_height_px"] = int(self.frame_wh[1])
 			return {
 				"ok": self.ok,
 				"detail": self.detail,
 				"has_frame": self.png is not None,
 				"live_started": self.live_started,
 				"addr": self.addr,
+				"optics": optics,
 			}
 
 	def scan_geometry(self) -> tuple[dict | None, tuple[int, int] | None]:
@@ -156,7 +165,11 @@ class LiveFeed:
 					self.frame_wh = (int(oriented.shape[1]), int(oriented.shape[0]))
 					self.ok = True
 					if started:
-						self.detail = "live FOV"
+						from prairie_live.scan_geometry import format_optics_line
+
+						self.detail = "live · " + format_optics_line(
+							self.geometry, self.frame_wh
+						)
 				self._stop.wait(0.08)
 		finally:
 			client.disconnect()

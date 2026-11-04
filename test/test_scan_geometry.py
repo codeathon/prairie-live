@@ -24,7 +24,10 @@ GEOM = {
 
 def test_fetch_geometry_parses_pv_replies():
 	g = fetch_scan_geometry(FakeRelay(GEOM))
-	assert g == {"amp_x": 7.6, "amp_y": -7.6, "ctr_x": 0.0, "ctr_y": 0.2}
+	assert g["amp_x"] == 7.6 and g["amp_y"] == -7.6
+	assert g["ctr_x"] == 0.0 and g["ctr_y"] == 0.2
+	assert g["map_amp_x"] == 7.6 and g["map_amp_y"] == -7.6
+	assert g["fov_width_um"] == pytest.approx(757.8)
 
 
 def test_fetch_geometry_says_which_read_failed():
@@ -68,13 +71,45 @@ def test_rig_scan_puts_all_picked_points_in_frame():
 		("currentScanAmplitude", "YAxis"): "4.2035577285",
 		("currentScanCenter", "XAxis"): "0",
 		("currentScanCenter", "YAxis"): "0",
+		("opticalZoom", None): "1",
 	}
 	pts = extract_unique_points(load_mark_points_file("samples/MarkPoints_rig_saved.xml"))
 	out = overlay_points(pts, fetch_scan_geometry(FakeRelay(rig)))
 	assert all(0 <= p["fx"] <= 1 and 0 <= p["fy"] <= 1 for p in out["points"])
-	assert out["note"] == "PV scan X 0 ± 4.20356, Y 0 ± 4.20356"
+	assert "zoom 1" in out["note"]
+	assert "4.2" in out["note"]
 	p1 = out["points"][0]
 	assert round(p1["fx"] * 512) == 58 and round(p1["fy"] * 512) == 33
+
+
+def test_zoom15_scales_stale_zoom1_amplitude():
+	"""If Live is Zoom 1.5 but PV still reports ±4.2 V, map with ±2.8 V."""
+	from prairie_live.scan_geometry import effective_scan_amplitude, galvo_to_fraction
+
+	assert effective_scan_amplitude(4.2035577285, optical_zoom=1.5) == pytest.approx(
+		4.2035577285 / 1.5
+	)
+	# Already-scaled amp at zoom 1.5 must not be divided again.
+	assert effective_scan_amplitude(4.2035577285 / 1.5, optical_zoom=1.5) == pytest.approx(
+		4.2035577285 / 1.5
+	)
+	rig = {
+		("currentScanAmplitude", "XAxis"): "4.2035577285",
+		("currentScanAmplitude", "YAxis"): "4.2035577285",
+		("currentScanCenter", "XAxis"): "0",
+		("currentScanCenter", "YAxis"): "0",
+		("opticalZoom", None): "1.5",
+		("micronsPerPixel", None): "1.48",
+		("pixelsPerLine", None): "512",
+		("linesPerFrame", None): "512",
+	}
+	g = fetch_scan_geometry(FakeRelay(rig))
+	assert g["map_amp_x"] == pytest.approx(4.2035577285 / 1.5)
+	assert g["fov_width_um"] == pytest.approx(1.48 * 512)
+	fx, _ = galvo_to_fraction(-3.25489489483074, 0.0, g)
+	# With zoom-1 amp this was ~0.113; scaled amp spreads farther from center.
+	assert fx == pytest.approx(0.5 + -3.25489489483074 / (2 * g["map_amp_x"]), abs=1e-4)
+	assert fx < 0.05
 
 
 def test_points_outside_scan_are_counted():
