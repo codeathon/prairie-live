@@ -108,14 +108,15 @@ def test_companion_gpl_lists_every_covered_point():
 	assert root.tag.endswith("PVGalvoPointList")
 	els = root.findall("PVGalvoPoint")
 	assert els, "PV Import requires <PVGalvoPoint> children (not <Point>)"
-	assert [el.get("Index") for el in els] == [str(i) for i in range(1, 9)]
+	# PV .gpl Index is 0-based: Point 1 ↔ Index 0, Point 2 ↔ Index 1, …
+	assert [el.get("Index") for el in els] == [str(i) for i in range(0, 8)]
 	for i, el in enumerate(els, start=1):
-		assert el.get("Index") == str(i)
+		assert el.get("Index") == str(i - 1)
 		assert el.get("Name") == f"Point {i}"
 		assert el.get("ActivityType") is None
 		assert el.get("SpiralSizeInMicrons") is None
 	covered = {pid for g in groups for pid in g["point_ids"]}
-	assert {el.get("Index") for el in els} == covered
+	assert {str(int(el.get("Index")) + 1) for el in els} == covered
 
 
 def test_point_name_matches_index_even_if_source_diverged():
@@ -138,9 +139,10 @@ def test_point_name_matches_index_even_if_source_diverged():
 	gpl = ET.fromstring(groups_gpl_text(groups, power=100.0, meta=template_meta([])))
 	els = gpl.findall("PVGalvoPoint")
 	assert els and not gpl.findall("Point")
-	assert [el.get("Index") for el in els] == [str(i) for i in range(1, len(els) + 1)]
-	for el in els:
-		assert el.get("Name") == f"Point {el.get('Index')}"
+	assert [el.get("Index") for el in els] == [str(i) for i in range(len(els))]
+	for i, el in enumerate(els, start=1):
+		assert el.get("Name") == f"Point {i}"
+		assert el.get("Index") == str(i - 1)
 	xml = groups_xml_text(groups, power=100.0, meta=template_meta([]))
 	root = ET.fromstring(xml)
 	for pt in root.iter("Point"):

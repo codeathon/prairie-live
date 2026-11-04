@@ -100,10 +100,18 @@ def parse_galvo_point_list(xml_string: str) -> list[dict]:
 			continue
 		if "X" not in el.attrib or "Y" not in el.attrib:
 			continue
+		# Prefer "Point N" → id N (PV .gpl Index is 0-based; series Indices are not).
+		name_attr = str(el.attrib.get("Name") or "").strip()
+		name_num = None
+		if name_attr.lower().startswith("point "):
+			tail = name_attr.split(None, 1)[-1]
+			if tail.isdigit():
+				name_num = tail
+		raw_index = str(el.attrib.get("Index") or "").strip()
 		idx = str(
-			el.attrib.get("Index")
+			name_num
 			or el.attrib.get("Id")
-			or el.attrib.get("Name")
+			or (raw_index if raw_index.isdigit() else None)
 			or (len(pts) + 1)
 		)
 		if idx in seen:
@@ -111,7 +119,7 @@ def parse_galvo_point_list(xml_string: str) -> list[dict]:
 		seen.add(idx)
 		row = {
 			"id": idx,
-			"name": el.attrib.get("Name", f"Point {idx}"),
+			"name": name_attr or f"Point {idx}",
 			"is_active": True,
 			"x": float(el.attrib["X"]),
 			"y": float(el.attrib["Y"]),
@@ -577,8 +585,11 @@ def galvo_points_to_gpl_xml(
 	``clsGalvoPointList.Import`` deserializes that type; a wrong tag yields a
 	null point and ``AddPoint`` throws "Object reference not set…".
 
-	Rows are sorted by Index so file order is Point 1, Point 2, … with matching
-	``Name`` / ``Index`` attributes.
+	PV-saved .gpl files are **0-based** on ``Index`` (``Name="Point 1"`` ↔
+	``Index="0"``). Writing 1-based Index makes the UI show Point 1 as Index 2.
+	Series ``Indices`` stay 1-based point numbers (``Indices="1"`` → Point 1).
+
+	Rows are sorted so file order is Point 1, Point 2, …
 	"""
 	def _key(p: dict) -> tuple:
 		pid = str(p.get("id") or "")
@@ -592,7 +603,7 @@ def galvo_points_to_gpl_xml(
 		el.set("X", str(pt["x"]))
 		el.set("Y", str(pt["y"]))
 		el.set("Name", f"Point {i}")
-		el.set("Index", str(i))
+		el.set("Index", str(i - 1))  # 0-based, same as PV export
 		el.set("UncagingLaser", str(pt.get("uncaging_laser") or laser))
 		el.set("UncagingLaserPower", str(power))
 		dur = pt.get("duration_ms")
