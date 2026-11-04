@@ -60,9 +60,11 @@
       <label title="Count a point as changed when |ΔF/F| is above this (burns often go negative).">|ΔF/F| min <input id="stim_dff_min" type="number" step="0.01" /></label>
     </div>
     <div class="row">
-      <button id="run" type="button">Run</button>
-      <button id="stop" type="button" disabled>Stop</button>
       <button id="gen_groups" type="button" title="Build random groups of 3 for a manual PV Mark Points run">Generate random groups</button>
+    </div>
+    <div class="row">
+      <button id="run" type="button" disabled title="Disabled on this branch — use Generate random groups + manual PV Mark Points">Run</button>
+      <button id="stop" type="button" disabled title="Disabled on this branch — use Generate random groups + manual PV Mark Points">Stop</button>
     </div>
   </section>
 

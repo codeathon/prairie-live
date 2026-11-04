@@ -1,4 +1,6 @@
 const $ = (id) => document.getElementById(id);
+// This branch: offline random groups + manual PV run (no GUI Run/DTR).
+const RUN_STOP_DISABLED = true;
 const picked = new Set();
 let lastRanked = [];
 const selectedGroups = new Set();
@@ -407,8 +409,13 @@ async function tick() {
   const st = await jget("/api/status");
   $("log").textContent = (st.log || []).join("\n");
   $("log").scrollTop = $("log").scrollHeight;
-  $("run").disabled = !!st.running;
-  $("stop").disabled = !st.running;
+  if (RUN_STOP_DISABLED) {
+    $("run").disabled = true;
+    $("stop").disabled = true;
+  } else {
+    $("run").disabled = !!st.running;
+    $("stop").disabled = !st.running;
+  }
   if (st.has_candidates) renderCandidates(st.ranked);
   if (st.random_groups && st.random_groups.length) {
     if (!lastGroups.length && (st.selected_group_ids || []).length) {
