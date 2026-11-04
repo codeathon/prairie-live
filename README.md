@@ -121,21 +121,36 @@ python -m prairie_live view --mock --series samples/MarkPoints_8fov.xml
 ## Analysis PC — mapping web UI
 
 Opens `http://127.0.0.1:8765/`. No `experiment.json`. On start it
-connects to `10.33.107.221:25100`, sends `-LiveScan` if PrairieView is
-up, and shows a live FOV tile. Upload a Fat XML to open one tile per
-power in a grid (filled as trials arrive). COM list from hardware
-(default COM3). Stim mode default `slm`. XML fills duration, spiral,
-inter-point delay, and estimated FOV µm.
+connects to the default relay (`127.0.0.1:25100` on this branch — override
+with `--relay` / `PRAIRIE_LIVE_RELAY` for an analysis-PC setup), sends
+`-LiveScan` if PrairieView is up, and shows a live FOV tile. Upload a Fat
+XML to open one tile per power in a grid (filled as trials arrive). COM
+list from hardware (default COM3). Stim mode default `slm`. XML fills
+duration, spiral, inter-point delay, and estimated FOV µm.
 
 ```powershell
 cd C:\Users\schollab\code\prairie-live
 $env:PYTHONPATH = "$PWD\src"
-python -m prairie_live gui --relay 10.33.107.221:25100
+python -m prairie_live gui
+# or: python -m prairie_live gui --relay 10.33.107.221:25100
 ```
 
 Groups have at least 3 points and cover every point once (8 → 4+4).
 Each group runs at every power. After the last trial, pick candidates
 and **Save XML**.
+
+### Scope PC — offline random 3-point groups
+
+For a manual PrairieView Mark Points pass (no GUI **Run** / DTR):
+
+1. On the **scope PC**, start the relay, then `python -m prairie_live gui`
+   (default relay `127.0.0.1:25100`).
+2. Upload a FAT points-only Mark Points XML.
+3. Session → **Generate random groups** → set `# groups`, power, optional
+   seed → save the PV series XML (Chrome file picker when available).
+4. Load that XML in PrairieView and run Mark Points there.
+5. On Live, click colored centroid circles (`G#`) for keepers → **Save
+   selected groups XML** (same 3-point membership and power).
 
 ## Analysis PC — live ROI intensity
 

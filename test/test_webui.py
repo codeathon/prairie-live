@@ -5,6 +5,8 @@ from __future__ import annotations
 import socket
 import threading
 
+import pytest
+
 from prairie_live.com_ports import list_com_ports
 from prairie_live.gui_session import apply_gui_overrides
 from prairie_live.lab_defaults import (
@@ -23,7 +25,7 @@ from prairie_live.xml_summary import summarize_fat_xml
 
 def test_lab_defaults_no_experiment_json():
 	d = lab_defaults()
-	assert d["via_relay"] == "10.33.107.221:25100"
+	assert d["via_relay"] == "127.0.0.1:25100"
 	assert d["serial"] == "COM3"
 	assert d["stim_mode"] == "slm"
 	assert d["trigger_selection"] == DEFAULT_TRIGGER_SELECTION == "Trig In 1"
@@ -251,3 +253,53 @@ def test_gui_trigger_none_overrides_serial():
 	)
 	assert opt["trigger"] == "none"
 	assert opt["stim_mode"] == "series"
+
+
+def test_random_groups_api_smoke(tmp_path):
+	"""Generate + select + export via Session APIs (tiny FAT fixture)."""
+	import xml.etree.ElementTree as ET
+	from pathlib import Path
+
+	from prairie_live.web_app import STATE
+
+	STATE.xml_dir = tmp_path
+	STATE.random_groups = []
+	STATE.selected_group_ids = []
+	STATE.random_groups_power = None
+	STATE.series_path = None
+	httpd, base = _http_server()
+	try:
+		series = str(Path("samples/MarkPoints_8fov.xml").resolve())
+		status, res = _post(
+			base + "/api/random-groups",
+			{"series": series, "n_groups": 4, "power": 160, "seed": 11},
+		)
+		assert status == 200
+		assert res["ok"] is True
+		assert res["n_groups"] == 4
+		assert len(res["groups"]) == 4
+		assert Path(res["path"]).is_file()
+		assert "<PVMarkPointElement" in res["xml"]
+		assert STATE.random_groups_power == 160.0
+
+		pts_status, _, pts_raw = _get(base + "/api/points")
+		assert pts_status == 200
+		import json
+
+		pts = json.loads(pts_raw.decode("utf-8"))
+		assert len(pts["groups"]) == 4
+		assert all("fx" in g and "fy" in g and "rgb" in g for g in pts["groups"])
+
+		ids = [res["groups"][0]["id"], res["groups"][2]["id"]]
+		status, sel = _post(base + "/api/select-groups", {"ids": ids})
+		assert status == 200 and sel["ok"] is True
+		status, out = _post(base + "/api/selected-groups-xml", {"ids": ids})
+		assert status == 200 and out["ok"] is True
+		assert out["n_groups"] == 2
+		root = ET.fromstring(out["xml"])
+		assert len(root.findall("PVMarkPointElement")) == 2
+		for el in root.findall("PVMarkPointElement"):
+			assert float(el.get("UncagingLaserPower")) == pytest.approx(0.4)
+			assert len(el.find("PVGalvoPointElement").findall("Point")) == 3
+	finally:
+		httpd.shutdown()

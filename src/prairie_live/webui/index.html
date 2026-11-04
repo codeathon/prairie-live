@@ -21,6 +21,7 @@
         <div class="fov-wrap">
           <img id="live_img" alt="live FOV" />
           <svg id="live_marks" preserveAspectRatio="xMidYMid meet" viewBox="0 0 1 1"></svg>
+          <svg id="live_groups" preserveAspectRatio="xMidYMid meet" viewBox="0 0 1 1"></svg>
         </div>
         <div class="tile-caps">
           <p id="live_cap" class="muted">connecting to relay…</p>
@@ -63,8 +64,24 @@
     <div class="row">
       <button id="run" type="button">Run</button>
       <button id="stop" type="button" disabled>Stop</button>
+      <button id="gen_groups" type="button" title="Build random groups of 3 for a manual PV Mark Points run">Generate random groups</button>
     </div>
   </section>
+
+  <dialog id="gen_dlg">
+    <form method="dialog" id="gen_form">
+      <h2>Generate random groups</h2>
+      <p class="muted">Exactly 3 points per group (unique within a group; points may repeat across groups). Load the saved XML in PrairieView and run Mark Points there.</p>
+      <label># groups <input id="gen_n" type="number" min="1" value="10" required /></label>
+      <label>Power (UI Display) <input id="gen_power" type="number" min="0" step="1" value="160" required /></label>
+      <label>Seed (optional) <input id="gen_seed" type="number" placeholder="random" /></label>
+      <div class="row">
+        <button id="gen_cancel" type="button" value="cancel">Cancel</button>
+        <button id="gen_ok" type="submit" value="ok">Save XML…</button>
+      </div>
+      <p id="gen_status" class="muted"></p>
+    </form>
+  </dialog>
 
   <section class="card xml-card">
     <h2>From Fat XML</h2>
@@ -75,6 +92,24 @@
   <section class="card log-card">
     <h2>Trial log</h2>
     <pre id="log"></pre>
+  </section>
+
+  <section class="card" id="group_box" hidden>
+    <h2>Selected groups</h2>
+    <p class="muted">Click a colored centroid on Live (or a row) to toggle. After a manual PV run, save the keepers as a new series of 3-point groups.</p>
+    <div class="table-wrap">
+    <table id="group_table">
+      <thead>
+        <tr><th></th><th>group</th><th>points</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <div class="row">
+      <button id="grp_clear" type="button">Clear</button>
+      <button id="grp_save" type="button">Save selected groups XML</button>
+    </div>
+    <p id="grp_status" class="muted"></p>
   </section>
 
   <section class="card" id="cand_box" hidden>

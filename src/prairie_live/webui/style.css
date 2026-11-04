@@ -88,10 +88,24 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   object-fit: contain;
   display: block;
 }
-.fov-wrap svg { pointer-events: none; overflow: visible; }
+.fov-wrap svg { overflow: visible; }
+#live_marks { pointer-events: none; }
+#live_groups { pointer-events: auto; z-index: 1; }
 .fov-wrap svg.hidden { display: none; }
-.fov-wrap circle { fill: none; stroke: #00ffff; }
-.fov-wrap text { fill: #00ffff; paint-order: stroke; stroke: #000; }
+.fov-wrap circle.mp-pt { fill: none; stroke: #00ffff; pointer-events: none; }
+.fov-wrap text.mp-pt { fill: #00ffff; paint-order: stroke; stroke: #000; pointer-events: none; }
+.fov-wrap circle.grp {
+  fill: rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.fov-wrap circle.grp.selected { stroke-width: 0.012; }
+.fov-wrap text.grp {
+  paint-order: stroke;
+  stroke: #000;
+  pointer-events: none;
+  font-weight: 700;
+}
 /* Next to "Live scan"; toggles the Mark Points overlay. */
 .fov-toggle {
   flex: 0 0 auto;
@@ -135,7 +149,28 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
 /* At least 5 readable lines even on a short window. */
 .log-card pre { flex: 1 1 auto; min-height: 7.5em; margin: 0; }
 #cand_box:not([hidden]) { grid-column: 2; grid-row: 3; display: flex; flex-direction: column; }
+#group_box:not([hidden]) {
+  grid-column: 2;
+  grid-row: 3;
+  display: flex;
+  flex-direction: column;
+}
+.side.has-groups .log-card { grid-column: 1; }
+.side.has-groups.has-cands #group_box:not([hidden]) { grid-row: 3; }
 .table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
+
+dialog {
+  border: 1px solid #3a4150;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--card);
+  color: var(--ink);
+  max-width: 420px;
+}
+dialog::backdrop { background: rgba(0, 0, 0, 0.55); }
+dialog h2 { margin: 0 0 8px; }
+dialog .row { margin-top: 10px; }
+#gen_cancel { background: #3a4150; color: var(--ink); }
 
 label { display: block; margin: 3px 0; }
 input, select {

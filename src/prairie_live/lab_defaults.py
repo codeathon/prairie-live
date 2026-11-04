@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
-# Scope DHCP address changes; `gui --relay` / PRAIRIE_LIVE_RELAY override it.
-DEFAULT_RELAY = os.environ.get("PRAIRIE_LIVE_RELAY") or "10.33.107.221:25100"
+# Scope-first default (this branch): GUI + relay on the scope PC.
+# Override with `gui --relay` / PRAIRIE_LIVE_RELAY for an analysis-PC setup.
+DEFAULT_RELAY = os.environ.get("PRAIRIE_LIVE_RELAY") or "127.0.0.1:25100"
 DEFAULT_SERIAL = "COM3"
 DEFAULT_STIM_MODE = "slm"
 # Bruker System Trigger BNC label (DTR → Trig In 1). Older configs used "PFI1".

@@ -49,6 +49,12 @@ class AppState:
 		self.planned_powers: list[float] = []
 		self.n_trials: int | None = None
 		self.live = LiveFeed(DEFAULT_RELAY)
+		# Offline random groups (manual PV run on scope PC).
+		self.random_groups: list[dict] = []
+		self.selected_group_ids: list[str] = []
+		self.random_groups_power: float | None = None
+		self.random_groups_path: str | None = None
+		self.random_groups_meta: dict[str, Any] = {}
 
 	def append(self, line: str) -> None:
 		with self.lock:
@@ -156,13 +162,42 @@ class Handler(BaseHTTPRequestHandler):
 			self.wfile.write(png)
 			return
 		if u.path == "/api/points":
-			from prairie_live.scan_geometry import overlay_points
+			from prairie_live.scan_geometry import (
+				galvo_to_fraction,
+				is_fraction_space,
+				overlay_points,
+			)
 
 			geom, wh = STATE.live.scan_geometry()
 			out = overlay_points(
 				list(STATE.points or []), geom, STATE.live.scan_geometry_error()
 			)
 			out["frame_wh"] = list(wh) if wh else None
+			with STATE.lock:
+				groups = list(STATE.random_groups or [])
+				sel = set(STATE.selected_group_ids or [])
+			# Centroid circles for random groups (FOV fractions for the SVG).
+			g_rows: list[dict[str, Any]] = []
+			for g in groups:
+				fx, fy = float(g["cx"]), float(g["cy"])
+				pts = list(g.get("points") or [])
+				if pts and not is_fraction_space(pts):
+					if not geom:
+						continue
+					fx, fy = galvo_to_fraction(fx, fy, geom)
+				rgb = g.get("rgb") or [0, 255, 255]
+				g_rows.append(
+					{
+						"id": str(g["id"]),
+						"name": str(g.get("name") or f"G{g['id']}"),
+						"fx": round(fx, 5),
+						"fy": round(fy, 5),
+						"rgb": [int(rgb[0]), int(rgb[1]), int(rgb[2])],
+						"point_ids": list(g.get("point_ids") or []),
+						"selected": str(g["id"]) in sel,
+					}
+				)
+			out["groups"] = g_rows
 			_json(self, out)
 			return
 		if u.path == "/api/status":
@@ -187,6 +222,18 @@ class Handler(BaseHTTPRequestHandler):
 						"has_candidates": bool(STATE.ranked),
 						"live": STATE.live.snapshot(),
 						"boards": boards,
+						"random_groups": [
+							{
+								"id": g["id"],
+								"name": g.get("name"),
+								"point_ids": g.get("point_ids"),
+								"rgb": g.get("rgb"),
+							}
+							for g in STATE.random_groups
+						],
+						"selected_group_ids": list(STATE.selected_group_ids),
+						"random_groups_power": STATE.random_groups_power,
+						"random_groups_path": STATE.random_groups_path,
 						"ranked": [
 							{
 								"id": r["id"],
@@ -232,6 +279,15 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		if u.path == "/api/save-candidates":
 			self._save(raw)
+			return
+		if u.path == "/api/random-groups":
+			self._random_groups(raw)
+			return
+		if u.path == "/api/select-groups":
+			self._select_groups(raw)
+			return
+		if u.path == "/api/selected-groups-xml":
+			self._selected_groups_xml(raw)
 			return
 		self.send_error(404)
 
@@ -365,6 +421,143 @@ class Handler(BaseHTTPRequestHandler):
 			)
 			STATE.append(f"next-round XML → {path}")
 			_json(self, {"ok": True, "path": str(path)})
+		except Exception as exc:
+			_json(self, {"ok": False, "error": str(exc)}, 400)
+
+	def _series_meta(self) -> dict[str, Any]:
+		from prairie_live.markpoints import template_meta
+
+		series = STATE.series_path
+		if series and Path(series).is_file():
+			return template_meta(load_mark_points_file(series))
+		return dict(STATE.random_groups_meta or template_meta([]))
+
+	def _random_groups(self, raw: bytes) -> None:
+		from prairie_live.random_groups import (
+			build_random_groups,
+			groups_xml_text,
+			write_groups_xml,
+		)
+
+		try:
+			body = json.loads(raw.decode("utf-8") or "{}")
+			series = body.get("series") or STATE.series_path
+			if not series or not Path(series).is_file():
+				raise ValueError("choose a Fat Mark Points XML first")
+			n_groups = int(body.get("n_groups") or 0)
+			power = float(body.get("power") if body.get("power") not in (None, "") else 160)
+			seed_raw = body.get("seed")
+			seed = int(seed_raw) if seed_raw not in (None, "") else None
+			from prairie_live.markpoints import template_meta
+
+			steps = load_mark_points_file(series)
+			pts = extract_unique_points(steps)
+			meta = template_meta(steps)
+			groups = build_random_groups(pts, n_groups, seed=seed)
+			xml_text = groups_xml_text(groups, power=power, meta=meta)
+			save_path = body.get("path") or body.get("save_path")
+			path_str: str | None = None
+			if save_path:
+				path_str = str(
+					write_groups_xml(
+						groups, power=power, meta=meta, path=Path(str(save_path))
+					)
+				)
+			else:
+				# Always keep a server-side copy for reload / selected export.
+				dest = STATE.xml_dir / "random_groups.xml"
+				path_str = str(
+					write_groups_xml(groups, power=power, meta=meta, path=dest)
+				)
+			with STATE.lock:
+				STATE.points = pts
+				STATE.series_path = series
+				STATE.random_groups = groups
+				STATE.selected_group_ids = []
+				STATE.random_groups_power = power
+				STATE.random_groups_path = path_str
+				STATE.random_groups_meta = meta
+			STATE.append(
+				f"random groups  n={len(groups)}  size=3  power={power:g}  → {path_str}"
+			)
+			_json(
+				self,
+				{
+					"ok": True,
+					"path": path_str,
+					"n_groups": len(groups),
+					"power": power,
+					"xml": xml_text,
+					"filename": Path(path_str).name if path_str else "random_groups.xml",
+					"groups": [
+						{
+							"id": g["id"],
+							"name": g["name"],
+							"point_ids": g["point_ids"],
+							"rgb": g["rgb"],
+						}
+						for g in groups
+					],
+				},
+			)
+		except Exception as exc:
+			_json(self, {"ok": False, "error": str(exc)}, 400)
+
+	def _select_groups(self, raw: bytes) -> None:
+		try:
+			body = json.loads(raw.decode("utf-8") or "{}")
+			ids = [str(i) for i in (body.get("ids") or [])]
+			known = {str(g["id"]) for g in STATE.random_groups}
+			bad = [i for i in ids if i not in known]
+			if bad and STATE.random_groups:
+				raise ValueError(f"unknown group id(s): {', '.join(bad)}")
+			with STATE.lock:
+				STATE.selected_group_ids = ids
+			_json(self, {"ok": True, "ids": ids})
+		except Exception as exc:
+			_json(self, {"ok": False, "error": str(exc)}, 400)
+
+	def _selected_groups_xml(self, raw: bytes) -> None:
+		from prairie_live.random_groups import (
+			groups_xml_text,
+			select_groups_by_id,
+			write_groups_xml,
+		)
+
+		try:
+			body = json.loads(raw.decode("utf-8") or "{}")
+			ids = body.get("ids") or list(STATE.selected_group_ids)
+			if not ids:
+				raise ValueError("no groups selected")
+			if STATE.random_groups_power is None:
+				raise ValueError("generate random groups first")
+			picked = select_groups_by_id(STATE.random_groups, ids)
+			meta = STATE.random_groups_meta or self._series_meta()
+			power = float(STATE.random_groups_power)
+			xml_text = groups_xml_text(picked, power=power, meta=meta)
+			save_path = body.get("path") or body.get("save_path")
+			if save_path:
+				path = write_groups_xml(
+					picked, power=power, meta=meta, path=Path(str(save_path))
+				)
+			else:
+				path = write_groups_xml(
+					picked,
+					power=power,
+					meta=meta,
+					path=STATE.xml_dir / "selected_groups.xml",
+				)
+			STATE.append(f"selected groups XML ({len(picked)}) → {path}")
+			_json(
+				self,
+				{
+					"ok": True,
+					"path": str(path),
+					"n_groups": len(picked),
+					"xml": xml_text,
+					"filename": path.name,
+				},
+			)
 		except Exception as exc:
 			_json(self, {"ok": False, "error": str(exc)}, 400)
 

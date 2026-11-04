@@ -1,6 +1,9 @@
 const $ = (id) => document.getElementById(id);
 const picked = new Set();
 let lastRanked = [];
+const selectedGroups = new Set();
+let lastGroups = [];
+let lastGroupOverlay = [];
 
 async function jget(url) {
   const r = await fetch(url);
@@ -94,6 +97,75 @@ function applyMarksVisibility() {
   btn.title = marksOn ? "Hide Mark Points overlay" : "Show Mark Points overlay";
 }
 
+function rgbCss(rgb) {
+  const [r, g, b] = rgb || [0, 255, 255];
+  return `rgb(${r},${g},${b})`;
+}
+
+function toggleGroupSelection(id) {
+  const gid = String(id);
+  if (selectedGroups.has(gid)) selectedGroups.delete(gid);
+  else selectedGroups.add(gid);
+  renderSelectedGroups(lastGroups);
+  // Persist to server so /api/points highlights stay in sync.
+  jpost("/api/select-groups", { ids: [...selectedGroups] }).then(() => refreshPoints());
+}
+
+function renderSelectedGroups(groups) {
+  lastGroups = groups || [];
+  const box = $("group_box");
+  const tb = $("group_table").querySelector("tbody");
+  tb.innerHTML = "";
+  if (!lastGroups.length) {
+    box.hidden = true;
+    $("side").classList.remove("has-groups");
+    return;
+  }
+  box.hidden = false;
+  $("side").classList.add("has-groups");
+  for (const g of lastGroups) {
+    const tr = document.createElement("tr");
+    const id = String(g.id);
+    if (selectedGroups.has(id)) tr.classList.add("picked");
+    const swatch = `style="color:${rgbCss(g.rgb)}"`;
+    tr.innerHTML =
+      `<td>${selectedGroups.has(id) ? "●" : "○"}</td>` +
+      `<td ${swatch}>${g.name || "G" + id}</td>` +
+      `<td>${(g.point_ids || []).join(", ")}</td>`;
+    tr.addEventListener("click", () => toggleGroupSelection(id));
+    tb.appendChild(tr);
+  }
+}
+
+function svgPointFromEvent(svg, ev) {
+  const pt = svg.createSVGPoint();
+  pt.x = ev.clientX;
+  pt.y = ev.clientY;
+  const ctm = svg.getScreenCTM();
+  if (!ctm) return null;
+  return pt.matrixTransform(ctm.inverse());
+}
+
+function hitTestGroup(svg, ev) {
+  const p = svgPointFromEvent(svg, ev);
+  if (!p) return null;
+  const [vw, vh] = (svg.getAttribute("viewBox") || "0 0 1 1").split(/\s+/).slice(2).map(Number);
+  const unit = Math.min(vw || 1, vh || 1);
+  const maxR = unit * 0.05;
+  let best = null;
+  let bestD = maxR;
+  for (const g of lastGroupOverlay) {
+    const cx = g.fx * (vw || 1);
+    const cy = g.fy * (vh || 1);
+    const d = Math.hypot(p.x - cx, p.y - cy);
+    if (d <= bestD) {
+      bestD = d;
+      best = g;
+    }
+  }
+  return best;
+}
+
 async function refreshPoints() {
   let res;
   try {
@@ -102,19 +174,24 @@ async function refreshPoints() {
     return;
   }
   const svg = $("live_marks");
+  const gsvg = $("live_groups");
   const [w, h] = res.frame_wh || [1, 1];
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  gsvg.setAttribute("viewBox", `0 0 ${w} ${h}`);
   svg.replaceChildren();
+  gsvg.replaceChildren();
   const unit = Math.min(w, h);
   for (const p of res.points || []) {
     const cx = p.fx * w;
     const cy = p.fy * h;
     const c = document.createElementNS(SVG_NS, "circle");
+    c.setAttribute("class", "mp-pt");
     c.setAttribute("cx", cx);
     c.setAttribute("cy", cy);
     c.setAttribute("r", Math.max((p.r || 0) * w, unit * 0.012));
     c.setAttribute("stroke-width", unit * 0.004);
     const t = document.createElementNS(SVG_NS, "text");
+    t.setAttribute("class", "mp-pt");
     t.setAttribute("x", cx + unit * 0.016);
     t.setAttribute("y", cy - unit * 0.012);
     t.setAttribute("font-size", unit * 0.03);
@@ -122,8 +199,56 @@ async function refreshPoints() {
     t.textContent = p.id;
     svg.append(c, t);
   }
+  lastGroupOverlay = res.groups || [];
+  for (const g of lastGroupOverlay) {
+    const cx = g.fx * w;
+    const cy = g.fy * h;
+    const c = document.createElementNS(SVG_NS, "circle");
+    c.setAttribute("class", "grp" + (g.selected ? " selected" : ""));
+    c.setAttribute("data-gid", g.id);
+    c.setAttribute("cx", cx);
+    c.setAttribute("cy", cy);
+    c.setAttribute("r", unit * 0.035);
+    c.setAttribute("stroke", rgbCss(g.rgb));
+    c.setAttribute("stroke-width", unit * (g.selected ? 0.012 : 0.006));
+    const t = document.createElementNS(SVG_NS, "text");
+    t.setAttribute("class", "grp");
+    t.setAttribute("x", cx + unit * 0.02);
+    t.setAttribute("y", cy - unit * 0.02);
+    t.setAttribute("font-size", unit * 0.035);
+    t.setAttribute("fill", rgbCss(g.rgb));
+    t.setAttribute("stroke-width", unit * 0.006);
+    t.textContent = g.name || "G" + g.id;
+    gsvg.append(c, t);
+  }
   marksNote = res.note || "";
   applyMarksVisibility();
+}
+
+async function saveXmlClient(xml, filename) {
+  const name = filename || "groups.xml";
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: "Mark Points XML", accept: { "application/xml": [".xml"] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(xml);
+      await writable.close();
+      return { ok: true, via: "picker", name };
+    } catch (e) {
+      if (e && e.name === "AbortError") return { ok: false, cancelled: true };
+      // fall through to download
+    }
+  }
+  const blob = new Blob([xml], { type: "application/xml" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  return { ok: true, via: "download", name };
 }
 
 async function refreshLive() {
@@ -276,6 +401,13 @@ async function tick() {
   $("run").disabled = !!st.running;
   $("stop").disabled = !st.running;
   if (st.has_candidates) renderCandidates(st.ranked);
+  if (st.random_groups && st.random_groups.length) {
+    if (!lastGroups.length && (st.selected_group_ids || []).length) {
+      selectedGroups.clear();
+      (st.selected_group_ids || []).forEach((id) => selectedGroups.add(String(id)));
+    }
+    renderSelectedGroups(st.random_groups);
+  }
   if (st.error) $("save_status").textContent = st.error;
   if (st.live) $("live_cap").textContent = st.live.detail || "";
   if (st.boards && st.boards.length) {
@@ -302,6 +434,10 @@ async function boot() {
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;
     applyMarksVisibility();
+  });
+  $("live_groups").addEventListener("click", (ev) => {
+    const g = hitTestGroup($("live_groups"), ev);
+    if (g) toggleGroupSelection(g.id);
   });
   applyMarksVisibility();
   $("run").addEventListener("click", async () => {
@@ -331,6 +467,62 @@ async function boot() {
   $("save_xml").addEventListener("click", async () => {
     const res = await jpost("/api/save-candidates", { ids: [...picked], keys: [...picked] });
     $("save_status").textContent = res.ok ? `saved ${res.path}` : res.error || "save failed";
+  });
+  $("gen_groups").addEventListener("click", () => {
+    const pwr = powerListFromBox()[0];
+    if (pwr != null) $("gen_power").value = pwr;
+    $("gen_seed").value = $("seed").value || "";
+    $("gen_status").textContent = "";
+    $("gen_dlg").showModal();
+  });
+  $("gen_cancel").addEventListener("click", () => $("gen_dlg").close());
+  $("gen_form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    $("gen_status").textContent = "building…";
+    const body = {
+      series: $("xml_path").textContent,
+      n_groups: $("gen_n").value,
+      power: $("gen_power").value,
+      seed: $("gen_seed").value,
+    };
+    const res = await jpost("/api/random-groups", body);
+    if (!res.ok) {
+      $("gen_status").textContent = res.error || "generate failed";
+      return;
+    }
+    selectedGroups.clear();
+    renderSelectedGroups(res.groups || []);
+    refreshPoints();
+    const saved = await saveXmlClient(res.xml, res.filename || "random_groups.xml");
+    if (saved.cancelled) {
+      $("gen_status").textContent = `built ${res.n_groups} groups (server copy ${res.path})`;
+    } else {
+      $("gen_status").textContent = `saved ${saved.name} · ${res.n_groups} groups · also ${res.path}`;
+      $("grp_status").textContent = `generated ${res.n_groups} groups @ power ${res.power}`;
+    }
+    $("gen_dlg").close();
+  });
+  $("grp_clear").addEventListener("click", () => {
+    selectedGroups.clear();
+    jpost("/api/select-groups", { ids: [] }).then(() => {
+      renderSelectedGroups(lastGroups);
+      refreshPoints();
+    });
+  });
+  $("grp_save").addEventListener("click", async () => {
+    if (!selectedGroups.size) {
+      $("grp_status").textContent = "select at least one group";
+      return;
+    }
+    const res = await jpost("/api/selected-groups-xml", { ids: [...selectedGroups] });
+    if (!res.ok) {
+      $("grp_status").textContent = res.error || "save failed";
+      return;
+    }
+    const saved = await saveXmlClient(res.xml, res.filename || "selected_groups.xml");
+    $("grp_status").textContent = saved.cancelled
+      ? `server copy ${res.path}`
+      : `saved ${saved.name} (${res.n_groups} groups) · ${res.path}`;
   });
   fitGrid();
   window.addEventListener("resize", fitGrid);
