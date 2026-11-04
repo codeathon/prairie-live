@@ -327,25 +327,6 @@ function ensurePowerTiles(boards) {
   }
 }
 
-function powerListFromBox() {
-  return ($("powers").value || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => Number(s))
-    .filter((n) => !Number.isNaN(n));
-}
-
-function syncTypedPowers() {
-  const want = powerListFromBox().map((p) => String(p));
-  const keep = new Set(want);
-  for (const el of $("fov_grid").querySelectorAll("[data-power]")) {
-    if (!keep.has(el.dataset.power) && !el.querySelector("img").getAttribute("src")) el.remove();
-  }
-  ensurePowerTiles(want.map((p) => ({ power: p, title: `power ${p}`, ready: false })));
-  fitGrid();
-}
-
 async function onXmlFile(ev) {
   const f = ev.target.files && ev.target.files[0];
   if (!f) return;
@@ -358,7 +339,6 @@ async function onXmlFile(ev) {
   const res = await jpost("/api/parse-xml", {
     name: f.name,
     content_b64: b64,
-    powers: $("powers").value,
   });
   if (!res.ok) {
     $("xml_path").textContent = res.error || "parse failed";
@@ -367,8 +347,7 @@ async function onXmlFile(ev) {
   $("xml_path").textContent = res.path;
   showXmlFields(res.fields || {});
   refreshPoints();
-  if (res.fields && res.fields.repetitions) $("repetitions").value = res.fields.repetitions;
-  syncTypedPowers();
+  if (res.fields && res.fields.repetitions) $("gen_reps").value = res.fields.repetitions;
 }
 
 function rowKey(r) {
@@ -438,25 +417,20 @@ async function tick() {
     }
   }
   if (st.boards && st.boards.length) {
-    // Before a run the Powers box decides which tiles exist.
-    const typed = new Set(powerListFromBox().map((p) => String(p)));
-    ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready || typed.has(String(b.power))));
+    ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready));
   }
 }
 
 async function boot() {
   const d = await jget("/api/defaults");
   $("via_relay").value = d.via_relay;
-  $("powers").value = d.powers;
-  $("seed").value = d.seed;
-  $("repetitions").value = d.repetitions;
-  $("stim_dff_min").value = d.stim_dff_min;
+  if (!$("gen_power").value) $("gen_power").value = "160";
+  if (!$("gen_reps").value) $("gen_reps").value = d.repetitions || 1;
   fillSelect($("serial"), d.com_ports, "device", (p) => `${p.device} — ${p.description}`, d.serial);
   fillSelect($("stim_mode"), d.stim_modes, null, null, d.stim_mode);
   fillSelect($("trigger"), d.triggers, null, null, d.trigger);
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
-  $("powers").addEventListener("input", syncTypedPowers);
   $("xml_file").addEventListener("change", onXmlFile);
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;
@@ -464,12 +438,12 @@ async function boot() {
   });
   applyMarksVisibility();
   $("run").addEventListener("click", async () => {
+    if (RUN_STOP_DISABLED) return;
     const res = await jpost("/api/run", {
       series: $("xml_path").textContent,
-      powers: $("powers").value,
-      seed: $("seed").value,
-      repetitions: $("repetitions").value,
-      stim_dff_min: $("stim_dff_min").value,
+      powers: $("gen_power").value,
+      seed: $("gen_seed").value,
+      repetitions: $("gen_reps").value,
       via_relay: $("via_relay").value,
       serial: $("serial").value,
       stim_mode: $("stim_mode").value,
@@ -477,7 +451,10 @@ async function boot() {
     });
     if (!res.ok) $("save_status").textContent = res.error || "run failed";
   });
-  $("stop").addEventListener("click", () => jpost("/api/stop", {}));
+  $("stop").addEventListener("click", () => {
+    if (RUN_STOP_DISABLED) return;
+    jpost("/api/stop", {});
+  });
   $("sel_top").addEventListener("click", () => {
     picked.clear();
     lastRanked.filter((r) => r.tercile === "top").forEach((r) => picked.add(rowKey(r)));
@@ -492,9 +469,6 @@ async function boot() {
     $("save_status").textContent = res.ok ? `saved ${res.path}` : res.error || "save failed";
   });
   $("gen_groups").addEventListener("click", () => {
-    const pwr = powerListFromBox()[0];
-    if (pwr != null) $("gen_power").value = pwr;
-    $("gen_seed").value = $("seed").value || "";
     $("gen_status").textContent = "";
     $("gen_dlg").showModal();
   });
@@ -506,6 +480,7 @@ async function boot() {
       series: $("xml_path").textContent,
       n_groups: $("gen_n").value,
       power: $("gen_power").value,
+      repetitions: $("gen_reps").value,
       seed: $("gen_seed").value,
     };
     const res = await jpost("/api/random-groups", body);

@@ -272,15 +272,17 @@ def test_random_groups_api_smoke(tmp_path):
 		series = str(Path("samples/MarkPoints_8fov.xml").resolve())
 		status, res = _post(
 			base + "/api/random-groups",
-			{"series": series, "n_groups": 4, "power": 160, "seed": 11},
+			{"series": series, "n_groups": 4, "power": 160, "repetitions": 3, "seed": 11},
 		)
 		assert status == 200
 		assert res["ok"] is True
 		assert res["n_groups"] == 4
+		assert res["repetitions"] == 3
 		assert len(res["groups"]) == 4
 		assert Path(res["path"]).is_file()
 		assert "<PVMarkPointElement" in res["xml"]
 		assert STATE.random_groups_power == 160.0
+		assert 'Repetitions="3"' in res["xml"]
 
 		pts_status, _, pts_raw = _get(base + "/api/points")
 		assert pts_status == 200

@@ -51,14 +51,6 @@
       <input id="xml_file" type="file" accept=".xml,.gpl" />
     </label>
     <p id="xml_path" class="muted"></p>
-    <label>Powers
-      <input id="powers" type="text" placeholder="e.g. 160 or 75,140,200" />
-    </label>
-    <div class="row">
-      <label>Seed <input id="seed" type="number" /></label>
-      <label>Repetitions <input id="repetitions" type="number" /></label>
-      <label title="Count a point as changed when |ΔF/F| is above this (burns often go negative).">|ΔF/F| min <input id="stim_dff_min" type="number" step="0.01" /></label>
-    </div>
     <div class="row">
       <button id="gen_groups" type="button" title="Build random groups of 3 for a manual PV Mark Points run">Generate random groups</button>
     </div>
@@ -74,6 +66,7 @@
       <p class="muted">Exactly 3 points per group (unique within a group; points may repeat across groups). Load the saved XML in PrairieView and run Mark Points there.</p>
       <label># groups <input id="gen_n" type="number" min="1" value="10" required /></label>
       <label>Power (UI Display) <input id="gen_power" type="number" min="0" step="1" value="160" required /></label>
+      <label>Repetitions <input id="gen_reps" type="number" min="1" step="1" value="1" required /></label>
       <label>Seed (optional) <input id="gen_seed" type="number" placeholder="random" /></label>
       <div class="row">
         <button id="gen_cancel" type="button" value="cancel">Cancel</button>

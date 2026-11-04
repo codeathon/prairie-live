@@ -53,6 +53,7 @@ class AppState:
 		self.random_groups: list[dict] = []
 		self.selected_group_ids: list[str] = []
 		self.random_groups_power: float | None = None
+		self.random_groups_reps: int | None = None
 		self.random_groups_path: str | None = None
 		self.random_groups_meta: dict[str, Any] = {}
 
@@ -445,6 +446,12 @@ class Handler(BaseHTTPRequestHandler):
 				raise ValueError("choose a Fat Mark Points XML first")
 			n_groups = int(body.get("n_groups") or 0)
 			power = float(body.get("power") if body.get("power") not in (None, "") else 160)
+			reps_raw = body.get("repetitions")
+			repetitions = (
+				int(reps_raw) if reps_raw not in (None, "") else 1
+			)
+			if repetitions < 1:
+				raise ValueError("repetitions must be >= 1")
 			seed_raw = body.get("seed")
 			seed = int(seed_raw) if seed_raw not in (None, "") else None
 			from prairie_live.markpoints import template_meta
@@ -452,6 +459,7 @@ class Handler(BaseHTTPRequestHandler):
 			steps = load_mark_points_file(series)
 			pts = extract_unique_points(steps)
 			meta = template_meta(steps)
+			meta["repetitions"] = repetitions
 			groups = build_random_groups(pts, n_groups, seed=seed)
 			xml_text = groups_xml_text(groups, power=power, meta=meta)
 			save_path = body.get("path") or body.get("save_path")
@@ -474,10 +482,12 @@ class Handler(BaseHTTPRequestHandler):
 				STATE.random_groups = groups
 				STATE.selected_group_ids = []
 				STATE.random_groups_power = power
+				STATE.random_groups_reps = repetitions
 				STATE.random_groups_path = path_str
 				STATE.random_groups_meta = meta
 			STATE.append(
-				f"random groups  n={len(groups)}  size=3  power={power:g}  → {path_str}"
+				f"random groups  n={len(groups)}  size=3  power={power:g}  "
+				f"reps={repetitions}  → {path_str}"
 			)
 			_json(
 				self,
@@ -486,6 +496,7 @@ class Handler(BaseHTTPRequestHandler):
 					"path": path_str,
 					"n_groups": len(groups),
 					"power": power,
+					"repetitions": repetitions,
 					"xml": xml_text,
 					"filename": Path(path_str).name if path_str else "random_groups.xml",
 					"groups": [
