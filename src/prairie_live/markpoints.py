@@ -573,9 +573,12 @@ def galvo_points_to_gpl_xml(
 	numbers as FOV fractions and misplaces them. -LoadMarkPoints of a .gpl
 	keeps Prairie's native interpretation (same as the UI).
 
-	Points are written in ascending Index order using PV's usual ``<Point>``
-	tag. PrairieView reindexes by file order on import, so Index N must be
-	the Nth element (Point 1, Point 2, …).
+	Must use ``<PVGalvoPoint>`` children (not series ``<Point>``) — PrairieView's
+	``clsGalvoPointList.Import`` deserializes that type; a wrong tag yields a
+	null point and ``AddPoint`` throws "Object reference not set…".
+
+	Rows are sorted by Index so file order is Point 1, Point 2, … with matching
+	``Name`` / ``Index`` attributes.
 	"""
 	def _key(p: dict) -> tuple:
 		pid = str(p.get("id") or "")
@@ -583,17 +586,13 @@ def galvo_points_to_gpl_xml(
 
 	ordered = sorted(points, key=_key)
 	root = ET.Element("PVGalvoPointList")
-	# File position i is the only Index PV keeps on import — write Point i /
-	# Index i in ascending order so Name and Index never diverge.
+	# Attribute order matches PV-saved .gpl (rig fixture).
 	for i, pt in enumerate(ordered, start=1):
-		el = ET.SubElement(root, "Point")
-		pid = str(i)
-		el.set("Index", pid)
-		el.set("Name", f"Point {pid}")
+		el = ET.SubElement(root, "PVGalvoPoint")
 		el.set("X", str(pt["x"]))
 		el.set("Y", str(pt["y"]))
-		el.set("Z", str(pt.get("z", 0)))
-		el.set("ActivityType", "MarkPoints")
+		el.set("Name", f"Point {i}")
+		el.set("Index", str(i))
 		el.set("UncagingLaser", str(pt.get("uncaging_laser") or laser))
 		el.set("UncagingLaserPower", str(power))
 		dur = pt.get("duration_ms")
@@ -602,12 +601,11 @@ def galvo_points_to_gpl_xml(
 		fov = pt.get("spiral_size_fov")
 		if fov not in (None, ""):
 			el.set("SpiralSize", str(fov))
-		um = pt.get("spiral_size_um")
-		if um not in (None, ""):
-			el.set("SpiralSizeInMicrons", str(um))
 		revs = pt.get("spiral_revolutions", _DEFAULT_SPIRAL_REVS)
 		el.set("SpiralRevolutions", str(revs))
-	return ET.tostring(root, encoding="unicode", xml_declaration=True)
+		el.set("Z", str(pt.get("z", 0)))
+	# No XML declaration: matches PV-exported .gpl and avoids serializer quirks.
+	return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 
 def estimate_series_ms(groups: list[dict]) -> float:

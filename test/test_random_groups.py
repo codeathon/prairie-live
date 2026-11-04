@@ -106,11 +106,14 @@ def test_companion_gpl_lists_every_covered_point():
 	gpl = groups_gpl_text(groups, power=160.0, meta=template_meta([]))
 	root = ET.fromstring(gpl)
 	assert root.tag.endswith("PVGalvoPointList")
-	els = root.findall("Point") or root.findall("PVGalvoPoint")
+	els = root.findall("PVGalvoPoint")
+	assert els, "PV Import requires <PVGalvoPoint> children (not <Point>)"
 	assert [el.get("Index") for el in els] == [str(i) for i in range(1, 9)]
 	for i, el in enumerate(els, start=1):
 		assert el.get("Index") == str(i)
 		assert el.get("Name") == f"Point {i}"
+		assert el.get("ActivityType") is None
+		assert el.get("SpiralSizeInMicrons") is None
 	covered = {pid for g in groups for pid in g["point_ids"]}
 	assert {el.get("Index") for el in els} == covered
 
@@ -133,7 +136,8 @@ def test_point_name_matches_index_even_if_source_diverged():
 		for p in g["points"]:
 			assert p["name"] == f"Point {p['id']}"
 	gpl = ET.fromstring(groups_gpl_text(groups, power=100.0, meta=template_meta([])))
-	els = gpl.findall("Point") or gpl.findall("PVGalvoPoint")
+	els = gpl.findall("PVGalvoPoint")
+	assert els and not gpl.findall("Point")
 	assert [el.get("Index") for el in els] == [str(i) for i in range(1, len(els) + 1)]
 	for el in els:
 		assert el.get("Name") == f"Point {el.get('Index')}"
