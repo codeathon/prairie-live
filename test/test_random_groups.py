@@ -11,6 +11,7 @@ from prairie_live.random_groups import (
 	GROUP_SIZE,
 	build_random_groups,
 	groups_xml_text,
+	min_groups_for_coverage,
 	select_groups_by_id,
 	write_groups_xml,
 )
@@ -48,6 +49,20 @@ def test_not_sequential_packing():
 def test_rejects_too_few_points():
 	with pytest.raises(ValueError, match="at least 3"):
 		build_random_groups(_pool(2), 1)
+
+
+def test_every_point_used_at_least_once():
+	pts = _pool(31)
+	# Too few groups to cover → bumped to ceil(31/3)=11.
+	assert min_groups_for_coverage(31) == 11
+	groups = build_random_groups(pts, 5, seed=9)
+	assert len(groups) == 11
+	seen = {pid for g in groups for pid in g["point_ids"]}
+	assert seen == {str(i) for i in range(1, 32)}
+	# Plenty of groups still covers everyone.
+	big = build_random_groups(pts, 20, seed=2)
+	assert len(big) == 20
+	assert {pid for g in big for pid in g["point_ids"]} == {str(i) for i in range(1, 32)}
 
 
 def test_xml_has_n_groups_of_three(tmp_path):

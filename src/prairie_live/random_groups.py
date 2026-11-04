@@ -32,6 +32,27 @@ def group_centroid(points: list[dict[str, Any]]) -> tuple[float, float]:
 	return sum(xs) / len(xs), sum(ys) / len(ys)
 
 
+def min_groups_for_coverage(n_points: int, group_size: int = GROUP_SIZE) -> int:
+	"""Fewest groups of ``group_size`` that can include every point at least once."""
+	gs = max(int(group_size), 1)
+	n = max(int(n_points), 0)
+	if n < 1:
+		return 0
+	return (n + gs - 1) // gs
+
+
+def _pack_group(
+	chosen: list[dict[str, Any]],
+) -> dict[str, Any]:
+	cx, cy = group_centroid(chosen)
+	return {
+		"point_ids": [str(p["id"]) for p in chosen],
+		"points": [dict(p) for p in chosen],
+		"cx": cx,
+		"cy": cy,
+	}
+
+
 def build_random_groups(
 	points: list[dict[str, Any]],
 	n_groups: int,
@@ -42,8 +63,11 @@ def build_random_groups(
 	"""Sample ``n_groups`` of ``group_size`` unique points each.
 
 	Within a group points are distinct. Across groups the same point may
-	appear again (independent draws from the full pool). Group order is
-	shuffled so the series is not sequential by point id.
+	appear again. Every pool point appears in at least one group: if
+	``n_groups`` is below the coverage minimum, it is raised. Covering
+	groups are built from a shuffled partition (remainder filled from the
+	pool); any extra groups are independent random draws. Final group
+	order is shuffled so the series is not sequential by point id.
 	"""
 	pool = [dict(p) for p in points if p.get("x") is not None and p.get("y") is not None]
 	gs = max(int(group_size), 1)
@@ -54,27 +78,38 @@ def build_random_groups(
 		)
 	if n < 1:
 		raise ValueError("n_groups must be >= 1")
+	need = min_groups_for_coverage(len(pool), gs)
+	n = max(n, need)
 	rng = random.Random(seed)
+	# Coverage pass: shuffled partition so every point is used ≥ once.
+	shuffled = list(pool)
+	rng.shuffle(shuffled)
 	raw: list[dict[str, Any]] = []
-	for _ in range(n):
-		chosen = rng.sample(pool, gs)
-		cx, cy = group_centroid(chosen)
-		raw.append(
-			{
-				"point_ids": [str(p["id"]) for p in chosen],
-				"points": [dict(p) for p in chosen],
-				"cx": cx,
-				"cy": cy,
-			}
-		)
+	i = 0
+	while i < len(shuffled):
+		chunk = shuffled[i : i + gs]
+		i += gs
+		if len(chunk) < gs:
+			have = {str(p["id"]) for p in chunk}
+			fillers = [p for p in pool if str(p["id"]) not in have]
+			rng.shuffle(fillers)
+			chunk = chunk + fillers[: gs - len(chunk)]
+			if len(chunk) < gs:
+				raise ValueError(
+					f"cannot fill a group of {gs} from a pool of {len(pool)}"
+				)
+		raw.append(_pack_group(chunk))
+	# Extra groups beyond coverage (repeats across groups allowed).
+	while len(raw) < n:
+		raw.append(_pack_group(rng.sample(pool, gs)))
 	rng.shuffle(raw)
 	groups: list[dict[str, Any]] = []
-	for i, g in enumerate(raw, start=1):
-		rgb = group_rgb(i)
+	for gi, g in enumerate(raw, start=1):
+		rgb = group_rgb(gi)
 		groups.append(
 			{
-				"id": str(i),
-				"name": f"G{i}",
+				"id": str(gi),
+				"name": f"G{gi}",
 				"point_ids": g["point_ids"],
 				"points": g["points"],
 				"cx": g["cx"],

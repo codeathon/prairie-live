@@ -63,7 +63,7 @@
   <dialog id="gen_dlg">
     <form method="dialog" id="gen_form">
       <h2>Generate random groups</h2>
-      <p class="muted">Exactly 3 points per group (unique within a group; points may repeat across groups). Load the saved XML in PrairieView and run Mark Points there.</p>
+      <p class="muted">Exactly 3 points per group (unique within a group; every point appears in at least one group; points may repeat across groups). # groups is raised if needed for full coverage. Load the saved XML in PrairieView and run Mark Points there.</p>
       <label># groups <input id="gen_n" type="number" min="1" value="10" required /></label>
       <label>Power (UI Display) <input id="gen_power" type="number" min="0" step="1" value="160" required /></label>
       <label>Repetitions <input id="gen_reps" type="number" min="1" step="1" value="1" required /></label>
