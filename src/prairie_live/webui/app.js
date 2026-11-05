@@ -5,6 +5,8 @@ const picked = new Set();
 let lastRanked = [];
 const selectedGroups = new Set();
 let lastGroups = [];
+let lastSequence = [];
+let groupBoxMode = "catalog"; // "catalog" | "sequence"
 
 async function jget(url) {
   const r = await fetch(url);
@@ -132,8 +134,23 @@ function toggleGroupSelection(id) {
   jpost("/api/select-groups", { ids: [...selectedGroups] }).then(() => refreshPoints());
 }
 
+function setGroupBoxChrome(mode) {
+  groupBoxMode = mode;
+  const seq = mode === "sequence";
+  $("group_box_title").textContent = seq ? "Group sequence" : "Selected groups";
+  $("group_box_help").textContent = seq
+    ? "Order written to the series XML (random draws with replacement). Load this series in PrairieView with your galvo point list."
+    : "Click a colored Mark Point on Live (or a row) to toggle its group. After a manual PV run, save the keepers as a new series of 3-point groups.";
+  $("group_table_head").innerHTML = seq
+    ? "<tr><th>#</th><th>group</th><th>points</th></tr>"
+    : "<tr><th></th><th>group</th><th>points</th></tr>";
+  $("group_box_actions").hidden = seq;
+}
+
 function renderSelectedGroups(groups) {
   lastGroups = groups || [];
+  lastSequence = [];
+  setGroupBoxChrome("catalog");
   const box = $("group_box");
   const tb = $("group_table").querySelector("tbody");
   tb.innerHTML = "";
@@ -154,6 +171,31 @@ function renderSelectedGroups(groups) {
       `<td ${swatch}>${g.name || "G" + id}</td>` +
       `<td>${(g.point_ids || []).join(", ")}</td>`;
     tr.addEventListener("click", () => toggleGroupSelection(id));
+    tb.appendChild(tr);
+  }
+}
+
+function renderGroupSequence(sequence, catalog) {
+  lastSequence = sequence || [];
+  lastGroups = catalog || lastGroups || [];
+  setGroupBoxChrome("sequence");
+  const box = $("group_box");
+  const tb = $("group_table").querySelector("tbody");
+  tb.innerHTML = "";
+  if (!lastSequence.length) {
+    box.hidden = true;
+    $("side").classList.remove("has-groups");
+    return;
+  }
+  box.hidden = false;
+  $("side").classList.add("has-groups");
+  for (const g of lastSequence) {
+    const tr = document.createElement("tr");
+    const swatch = `style="color:${rgbCss(g.rgb)}"`;
+    tr.innerHTML =
+      `<td>${g.ord ?? ""}</td>` +
+      `<td ${swatch}>${g.name || "G" + g.id}</td>` +
+      `<td>${(g.point_ids || []).join(", ")}</td>`;
     tb.appendChild(tr);
   }
 }
@@ -446,7 +488,9 @@ async function tick() {
     $("stop").disabled = !st.running;
   }
   if (st.has_candidates) renderCandidates(st.ranked);
-  if (st.random_groups && st.random_groups.length) {
+  if (st.group_sequence && st.group_sequence.length) {
+    renderGroupSequence(st.group_sequence, st.random_groups || []);
+  } else if (st.random_groups && st.random_groups.length) {
     if (!lastGroups.length && (st.selected_group_ids || []).length) {
       selectedGroups.clear();
       (st.selected_group_ids || []).forEach((id) => selectedGroups.add(String(id)));
@@ -640,7 +684,7 @@ async function boot() {
       return;
     }
     selectedGroups.clear();
-    renderSelectedGroups(res.groups || []);
+    renderGroupSequence(res.sequence || [], res.groups || []);
     refreshPoints();
     const saved = await saveSeriesAndGpl(res);
     const n = res.n_sequences || res.n_groups;
@@ -659,8 +703,8 @@ async function boot() {
             : "";
       $("seq_status").textContent = `saved ${saved.name}${gplBit} · sequence n=${n}`;
       $("grp_status").textContent = res.slim
-        ? `group sequence n=${n} (catalog ${res.n_catalog}) — load series in PV (galvo list already required)`
-        : `group sequence n=${n} (catalog ${res.n_catalog}) — load .gpl then .xml in PV`;
+        ? `sequence n=${n} shown below (catalog ${res.n_catalog}) — load series in PV (galvo list already required)`
+        : `sequence n=${n} shown below (catalog ${res.n_catalog}) — load .gpl then .xml in PV`;
     }
     $("seq_dlg").close();
   });

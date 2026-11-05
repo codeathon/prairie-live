@@ -56,6 +56,8 @@ class AppState:
 		self.random_groups_reps: int | None = None
 		self.random_groups_path: str | None = None
 		self.random_groups_meta: dict[str, Any] = {}
+		# Ordered draws from group-catalog Generate (length N); empty for pool mode.
+		self.group_sequence: list[dict] = []
 
 	def append(self, line: str) -> None:
 		with self.lock:
@@ -232,6 +234,16 @@ class Handler(BaseHTTPRequestHandler):
 							}
 							for g in STATE.random_groups
 						],
+						"group_sequence": [
+							{
+								"ord": g.get("ord"),
+								"id": g["id"],
+								"name": g.get("name"),
+								"point_ids": g.get("point_ids"),
+								"rgb": g.get("rgb"),
+							}
+							for g in STATE.group_sequence
+						],
 						"selected_group_ids": list(STATE.selected_group_ids),
 						"random_groups_power": STATE.random_groups_power,
 						"random_groups_path": STATE.random_groups_path,
@@ -355,10 +367,13 @@ class Handler(BaseHTTPRequestHandler):
 				with STATE.lock:
 					STATE.random_groups = catalog
 					STATE.selected_group_ids = []
+					STATE.group_sequence = []
 			else:
 				pts = extract_unique_points(steps)
 				ng = n_groups_for_pool(len(pts))
 				sizes = group_sizes_for_pool(len(pts), n_groups=ng)
+				with STATE.lock:
+					STATE.group_sequence = []
 			STATE.series_path = path
 			STATE.xml_fields = fields
 			STATE.points = pts
@@ -609,6 +624,7 @@ class Handler(BaseHTTPRequestHandler):
 				STATE.series_path = series
 				STATE.random_groups = groups
 				STATE.selected_group_ids = []
+				STATE.group_sequence = []
 				STATE.random_groups_power = power
 				STATE.random_groups_reps = repetitions
 				STATE.random_groups_path = path_str
@@ -708,11 +724,22 @@ class Handler(BaseHTTPRequestHandler):
 		except ValueError:
 			pts = []
 		n_points = len(pts) or len({pid for g in catalog for pid in g["point_ids"]})
-		# Overlay shows catalog groups (unique), not the N-long sequence rows.
+		seq_rows = [
+			{
+				"ord": i,
+				"id": str(g["id"]),
+				"name": str(g.get("name") or f"G{g['id']}"),
+				"point_ids": list(g.get("point_ids") or []),
+				"rgb": list(g.get("rgb") or []),
+			}
+			for i, g in enumerate(sequence, start=1)
+		]
+		# Overlay uses catalog colors; bottom box shows the ordered sequence.
 		with STATE.lock:
 			STATE.points = pts
 			STATE.series_path = series
 			STATE.random_groups = catalog
+			STATE.group_sequence = seq_rows
 			STATE.selected_group_ids = []
 			STATE.random_groups_power = power
 			STATE.random_groups_reps = int(meta.get("repetitions") or 1)
@@ -749,6 +776,7 @@ class Handler(BaseHTTPRequestHandler):
 					}
 					for g in catalog
 				],
+				"sequence": seq_rows,
 				"sequence_ids": [str(g["id"]) for g in sequence],
 			},
 		)

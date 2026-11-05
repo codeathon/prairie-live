@@ -107,17 +107,17 @@
   </section>
 
   <section class="card" id="group_box" hidden>
-    <h2>Selected groups</h2>
-    <p class="muted">Click a colored Mark Point on Live (or a row) to toggle its group. After a manual PV run, save the keepers as a new series of 3-point groups.</p>
+    <h2 id="group_box_title">Selected groups</h2>
+    <p id="group_box_help" class="muted">Click a colored Mark Point on Live (or a row) to toggle its group. After a manual PV run, save the keepers as a new series of 3-point groups.</p>
     <div class="table-wrap">
     <table id="group_table">
-      <thead>
+      <thead id="group_table_head">
         <tr><th></th><th>group</th><th>points</th></tr>
       </thead>
       <tbody></tbody>
     </table>
     </div>
-    <div class="row">
+    <div class="row" id="group_box_actions">
       <button id="grp_clear" type="button">Clear</button>
       <button id="grp_save" type="button">Save selected groups XML</button>
     </div>

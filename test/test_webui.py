@@ -395,5 +395,9 @@ def test_random_groups_api_smoke(tmp_path):
 		slim_root = ET.fromstring(slim_seq["xml"])
 		assert slim_root.tag.endswith("PVSavedMarkPointSeriesElements")
 		assert len(slim_root.findall("PVMarkPointElement")) == 8
+		assert len(slim_seq["sequence"]) == 8
+		assert slim_seq["sequence"][0]["ord"] == 1
+		assert slim_seq["sequence"][0]["name"].startswith("Group")
+		assert STATE.group_sequence and len(STATE.group_sequence) == 8
 	finally:
 		httpd.shutdown()
