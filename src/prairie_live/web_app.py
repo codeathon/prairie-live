@@ -190,14 +190,9 @@ class Handler(BaseHTTPRequestHandler):
 				g_rows.append(row)
 				for pid in row["point_ids"]:
 					by_pid.setdefault(str(pid), []).append(row)
-			radius = int((STATE.opt or {}).get("disk_radius") or 3)
-			dff_map = STATE.live.roi_dff_pct(out.get("points") or [], radius=radius)
 			for p in out.get("points") or []:
 				membership = by_pid.get(str(p.get("id")), [])
 				p["group_ids"] = [m["id"] for m in membership]
-				pid = str(p.get("id"))
-				if pid in dff_map:
-					p["dff_pct"] = dff_map[pid]
 				if not membership:
 					continue
 				picked = next((m for m in membership if m["selected"]), membership[0])

@@ -116,13 +116,6 @@ function applyDffToggle() {
       : "Collect a baseline first";
 }
 
-function fmtDffPct(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return "";
-  const s = n >= 0 ? `+${n.toFixed(0)}` : n.toFixed(0);
-  return `${s}%`;
-}
-
 function rgbCss(rgb) {
   const [r, g, b] = rgb || [0, 255, 255];
   return `rgb(${r},${g},${b})`;
@@ -246,8 +239,7 @@ async function refreshPoints() {
     t.setAttribute("font-size", "0.028");
     t.setAttribute("stroke-width", "0.004");
     if (p.rgb) t.setAttribute("fill", rgbCss(p.rgb));
-    const dffBit = p.dff_pct != null ? ` ${fmtDffPct(p.dff_pct)}` : "";
-    t.textContent = `${p.id}${dffBit}`;
+    t.textContent = p.id;
     if (inGroup) {
       t.style.cursor = "pointer";
       t.addEventListener("click", (ev) => {
