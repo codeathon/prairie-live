@@ -809,6 +809,28 @@ def _indices_from_points(points: list[dict]) -> str:
 	return ",".join(ids)
 
 
+def parse_indices_attr(indices: str | None) -> list[str]:
+	"""Expand ``Indices`` like ``1-3``, ``7-9``, or ``1,3,4`` to id strings."""
+	raw = str(indices or "").strip()
+	if not raw:
+		return []
+	out: list[str] = []
+	for part in raw.split(","):
+		tok = part.strip()
+		if not tok:
+			continue
+		if "-" in tok:
+			a, _, b = tok.partition("-")
+			a, b = a.strip(), b.strip()
+			if a.isdigit() and b.isdigit():
+				lo, hi = int(a), int(b)
+				step = 1 if hi >= lo else -1
+				out.extend(str(i) for i in range(lo, hi + step, step))
+				continue
+		out.append(tok)
+	return out
+
+
 def _strip_xml_decl(text: str) -> str:
 	# PV often writes XML 1.1; stdlib ET only accepts 1.0.
 	if text.lstrip().startswith("<?xml"):

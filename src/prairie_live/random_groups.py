@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import colorsys
 import random
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
+from prairie_live.lab_defaults import NO_TRIGGER_IDENTIFIER
 from prairie_live.markpoints import (
 	build_group_step,
 	galvo_points_to_gpl_xml,
 	groups_to_xml,
+	parse_indices_attr,
+	xml_power,
 )
 
 GROUP_SIZE = 3
@@ -346,38 +350,62 @@ def _step_coord_points(step: dict[str, Any]) -> list[dict[str, Any]]:
 	return out
 
 
+def _step_member_ids(step: dict[str, Any]) -> list[str]:
+	"""Point ids for a step: prefer ``Indices`` (incl. ``1-3``), else coord points."""
+	ids = parse_indices_attr(step.get("indices"))
+	if len(ids) >= 2:
+		return ids
+	return [str(p["id"]) for p in _step_coord_points(step)]
+
+
 def classify_series(steps: list[dict[str, Any]]) -> str:
-	"""``group_catalog`` if ≥2 multi-point steps; else ``points_pool``."""
-	multi = [s for s in steps if len(_step_coord_points(s)) >= 2]
+	"""``group_catalog`` if ≥2 multi-point steps (coords or Indices); else pool."""
+	multi = [s for s in steps if len(_step_member_ids(s)) >= 2]
 	if len(multi) >= 2:
 		return "group_catalog"
 	return "points_pool"
 
 
 def catalog_groups_from_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
-	"""Stable group catalog from a series that already encodes multi-point steps."""
+	"""Stable group catalog from multi-point steps (fat nested Points or slim Indices)."""
 	out: list[dict[str, Any]] = []
 	gi = 0
 	for step in steps:
-		pts = _step_coord_points(step)
-		if len(pts) < 2:
+		ids = _step_member_ids(step)
+		if len(ids) < 2:
 			continue
 		gi += 1
-		cx, cy = group_centroid(pts)
-		gid = str(step.get("id") or gi)
-		name = str(step.get("name") or f"G{gid}")
-		# Prefer G# label when Points= listed Point names.
-		if name.lower().startswith("point ") or "," in name:
-			name = f"G{gi}"
+		coords = _step_coord_points(step)
+		by_id = {str(p["id"]): p for p in coords}
+		slim = len(coords) < 2
+		pts: list[dict[str, Any]] = []
+		for pid in ids:
+			if pid in by_id:
+				pts.append(dict(by_id[pid]))
+			else:
+				pts.append({"id": pid, "name": f"Point {pid}"})
+		if slim:
+			cx, cy = 0.5, 0.5
+		else:
+			cx, cy = group_centroid(pts)
+		raw_name = str(step.get("raw_points") or step.get("name") or "").strip()
+		if raw_name.lower().startswith("group"):
+			name = raw_name
+		elif raw_name.lower().startswith("point ") or "," in raw_name:
+			name = f"Group {gi}"
+		else:
+			name = raw_name or f"Group {gi}"
 		out.append(
 			{
 				"id": str(gi),
-				"name": name if name.startswith("G") else f"G{gi}",
-				"point_ids": [str(p["id"]) for p in pts],
+				"name": name,
+				"point_ids": list(ids),
 				"points": pts,
 				"cx": cx,
 				"cy": cy,
 				"rgb": list(group_rgb(gi)),
+				"slim": slim,
+				"indices": str(step.get("indices") or ",".join(ids)),
 				"source_step": dict(step),
 			}
 		)
@@ -437,6 +465,10 @@ def sequence_to_pv_steps(
 		pts = list(g.get("points") or [])
 		if len(pts) < 2:
 			raise ValueError(f"group {g.get('id')} needs at least 2 points")
+		if any(p.get("x") is None or p.get("y") is None for p in pts):
+			raise ValueError(
+				f"group {g.get('id')} has no coordinates — use slim sequence writer"
+			)
 		src = dict(g.get("source_step") or {})
 		step_meta = dict(base)
 		for k in _STEP_META_KEYS:
@@ -455,14 +487,73 @@ def sequence_to_pv_steps(
 	return steps
 
 
+def slim_sequence_xml_text(
+	sequence: list[dict[str, Any]],
+	*,
+	meta: dict[str, Any] | None = None,
+) -> str:
+	"""Rewrite a Indices/Group-name series (no nested coords) in random order."""
+	meta = meta or {}
+	root = ET.Element("PVSavedMarkPointSeriesElements")
+	root.set("Iterations", str(meta.get("iterations", "1")))
+	root.set("IterationDelay", str(meta.get("iteration_delay", "0.00")))
+	root.set("CalcFunctMap", str(meta.get("calc_funct_map", "False")))
+	for g in sequence:
+		src = dict(g.get("source_step") or {})
+		el = ET.SubElement(root, "PVMarkPointElement")
+		reps = src.get("repetitions", meta.get("repetitions", 1))
+		el.set("Repetitions", str(reps))
+		laser = str(src.get("uncaging_laser") or meta.get("uncaging_laser") or "Monaco")
+		el.set("UncagingLaser", laser)
+		pwr = src.get("laser_pwr")
+		if pwr is None:
+			pwr = meta.get("power", 160)
+		# PVSaved stores UncagingLaserPower as a 0–1 fraction of UI full scale.
+		el.set("UncagingLaserPower", str(xml_power(float(pwr), meta)))
+		trig = str(src.get("trigger_selection", "None"))
+		freq = str(src.get("trigger_frequency", "None"))
+		el.set("TriggerFrequency", freq)
+		if trig not in ("None", "none", ""):
+			el.set("TriggerSelection", trig)
+		tid = str(src.get("trigger_identifier") or NO_TRIGGER_IDENTIFIER)
+		el.set("TriggerIdentifier", tid)
+		el.set("TriggerCount", str(src.get("trigger_count", "1")))
+		el.set(
+			"AsyncSyncFrequency", str(src.get("async_sync_frequency", "None"))
+		)
+		el.set(
+			"VoltageOutputCategoryName",
+			str(src.get("voltage_output_category", "None")),
+		)
+		el.set(
+			"VoltageRecCategoryName", str(src.get("voltage_rec_category", "None"))
+		)
+		galvo = ET.SubElement(el, "PVGalvoPointElement")
+		galvo.set("InitialDelay", str(src.get("initial_delay", "0.00")))
+		galvo.set("InterPointDelay", str(src.get("inter_point_delay", "10")))
+		galvo.set("Duration", str(src.get("duration", meta.get("duration", 36))))
+		galvo.set(
+			"SpiralRevolutions", str(src.get("spiral_revolutions", "8"))
+		)
+		galvo.set("Points", str(g.get("name") or src.get("raw_points") or "Group"))
+		galvo.set("Indices", str(g.get("indices") or src.get("indices") or ""))
+	return ET.tostring(root, encoding="unicode", xml_declaration=False)
+
+
+def sequence_is_slim(sequence: list[dict[str, Any]]) -> bool:
+	return bool(sequence) and all(bool(g.get("slim")) for g in sequence)
+
+
 def sequence_xml_text(
 	sequence: list[dict[str, Any]],
 	*,
 	meta: dict[str, Any],
 ) -> str:
-	steps = sequence_to_pv_steps(sequence, meta=meta)
-	if not steps:
+	if not sequence:
 		raise ValueError("no groups to write")
+	if sequence_is_slim(sequence):
+		return slim_sequence_xml_text(sequence, meta=meta)
+	steps = sequence_to_pv_steps(sequence, meta=meta)
 	return groups_to_xml(steps)
 
 

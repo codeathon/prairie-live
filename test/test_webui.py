@@ -331,5 +331,24 @@ def test_random_groups_api_smoke(tmp_path):
 		seq_root = ET.fromstring(seq["xml"])
 		assert len(seq_root.findall("PVMarkPointElement")) == 12
 		assert Path(seq["gpl_path"]).is_file()
+
+		# Slim Indices/Group series (no coords) → sequence XML, no companion .gpl.
+		slim = str(Path("samples/MarkPoints_slim_groups.xml").resolve())
+		status, sk = _post(base + "/api/series-kind", {"series": slim})
+		assert status == 200 and sk["ok"] is True
+		assert sk["kind"] == "group_catalog"
+		assert sk["slim"] is True
+		assert sk["n_groups"] == 4
+		status, slim_seq = _post(
+			base + "/api/random-groups",
+			{"series": slim, "mode": "sequence", "n_sequences": 8, "seed": 2},
+		)
+		assert status == 200 and slim_seq["ok"] is True
+		assert slim_seq["slim"] is True
+		assert slim_seq["gpl"] is None
+		assert slim_seq["gpl_path"] is None
+		slim_root = ET.fromstring(slim_seq["xml"])
+		assert slim_root.tag.endswith("PVSavedMarkPointSeriesElements")
+		assert len(slim_root.findall("PVMarkPointElement")) == 8
 	finally:
 		httpd.shutdown()

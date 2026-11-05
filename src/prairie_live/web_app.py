@@ -465,10 +465,12 @@ class Handler(BaseHTTPRequestHandler):
 			kind = classify_series(steps)
 			n_groups = 0
 			n_points = 0
+			slim = False
 			if kind == "group_catalog":
 				cat = catalog_groups_from_steps(steps)
 				n_groups = len(cat)
 				n_points = len({pid for g in cat for pid in g["point_ids"]})
+				slim = all(bool(g.get("slim")) for g in cat)
 			else:
 				pts = extract_unique_points(steps)
 				n_points = len(pts)
@@ -479,6 +481,7 @@ class Handler(BaseHTTPRequestHandler):
 					"kind": kind,
 					"n_groups": n_groups,
 					"n_points": n_points,
+					"slim": slim,
 					"series": str(series),
 				},
 			)
@@ -616,6 +619,8 @@ class Handler(BaseHTTPRequestHandler):
 			_json(self, {"ok": False, "error": str(exc)}, 400)
 
 	def _random_group_sequence(self, body: dict, **kw: Any) -> None:
+		from prairie_live.random_groups import sequence_is_slim
+
 		series = kw["series"]
 		steps = kw["steps"]
 		seed = kw["seed"]
@@ -637,26 +642,40 @@ class Handler(BaseHTTPRequestHandler):
 		sequence = build_group_sequence(catalog, n_seq, seed=seed)
 		power = catalog_power(catalog)
 		xml_text = sequence_xml_text(sequence, meta=meta)
-		# Companion .gpl lists the full catalog pool (not only drawn repeats).
-		gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
+		slim = sequence_is_slim(sequence)
+		# Slim Indices/Group series has no coords — companion .gpl cannot be built;
+		# user keeps the existing Galvo Point List loaded in PrairieView.
+		gpl_text: str | None = None
+		gpl_path: str | None = None
 		save_path = body.get("path") or body.get("save_path")
 		if save_path:
 			xml_path = Path(str(save_path))
 			path_str = str(write_sequence_xml(sequence, meta=meta, path=xml_path))
-			gpl_path = str(
-				write_groups_gpl(
-					catalog, power=power, meta=meta, path=xml_path.with_suffix(".gpl")
+			if not slim:
+				gpl_path = str(
+					write_groups_gpl(
+						catalog,
+						power=power,
+						meta=meta,
+						path=xml_path.with_suffix(".gpl"),
+					)
 				)
-			)
+				gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
 		else:
 			dest = STATE.xml_dir / "group_sequence.xml"
 			path_str = str(write_sequence_xml(sequence, meta=meta, path=dest))
-			gpl_path = str(
-				write_groups_gpl(
-					catalog, power=power, meta=meta, path=dest.with_suffix(".gpl")
+			if not slim:
+				gpl_path = str(
+					write_groups_gpl(
+						catalog, power=power, meta=meta, path=dest.with_suffix(".gpl")
+					)
 				)
-			)
-		pts = extract_unique_points(steps)
+				gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
+		try:
+			pts = extract_unique_points(steps)
+		except ValueError:
+			pts = []
+		n_points = len(pts) or len({pid for g in catalog for pid in g["point_ids"]})
 		# Overlay shows catalog groups (unique), not the N-long sequence rows.
 		with STATE.lock:
 			STATE.points = pts
@@ -667,26 +686,28 @@ class Handler(BaseHTTPRequestHandler):
 			STATE.random_groups_reps = int(meta.get("repetitions") or 1)
 			STATE.random_groups_path = path_str
 			STATE.random_groups_meta = meta
+		gpl_bit = f" + {gpl_path}" if gpl_path else " (no .gpl; keep PV galvo list)"
 		STATE.append(
 			f"group sequence  n={n_seq}  catalog={len(catalog)}  "
-			f"power={power:g}  → {path_str} + {gpl_path}"
+			f"power={power:g}  → {path_str}{gpl_bit}"
 		)
 		_json(
 			self,
 			{
 				"ok": True,
 				"mode": "sequence",
+				"slim": slim,
 				"path": path_str,
 				"gpl_path": gpl_path,
 				"n_groups": n_seq,
 				"n_sequences": n_seq,
 				"n_catalog": len(catalog),
-				"n_points": len(pts),
+				"n_points": n_points,
 				"power": power,
 				"xml": xml_text,
 				"gpl": gpl_text,
 				"filename": Path(path_str).name,
-				"gpl_filename": Path(gpl_path).name,
+				"gpl_filename": Path(gpl_path).name if gpl_path else None,
 				"groups": [
 					{
 						"id": g["id"],

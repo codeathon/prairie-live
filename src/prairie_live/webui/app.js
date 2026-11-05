@@ -551,8 +551,11 @@ async function boot() {
       }
       kind = info.kind || "points_pool";
       if (kind === "group_catalog") {
+        const slimBit = info.slim
+          ? " · Indices/Group series (keep your .gpl loaded in PV)"
+          : "";
         $("seq_catalog").textContent =
-          `catalog: ${info.n_groups} groups · ${info.n_points} points`;
+          `catalog: ${info.n_groups} groups · ${info.n_points} points${slimBit}`;
         $("seq_dlg").showModal();
         return;
       }
@@ -640,10 +643,17 @@ async function boot() {
         (res.gpl_path ? ` + ${res.gpl_path}` : "") +
         `)`;
     } else {
-      const gplBit = saved.gpl ? ` + ${saved.gpl}` : saved.gplSkipped ? " (gpl skipped)" : "";
+      const gplBit = saved.gpl
+        ? ` + ${saved.gpl}`
+        : res.slim
+          ? " (no .gpl; keep PV galvo list)"
+          : saved.gplSkipped
+            ? " (gpl skipped)"
+            : "";
       $("seq_status").textContent = `saved ${saved.name}${gplBit} · sequence n=${n}`;
-      $("grp_status").textContent =
-        `group sequence n=${n} (catalog ${res.n_catalog}) — load .gpl then .xml in PV`;
+      $("grp_status").textContent = res.slim
+        ? `group sequence n=${n} (catalog ${res.n_catalog}) — load series in PV (galvo list already required)`
+        : `group sequence n=${n} (catalog ${res.n_catalog}) — load .gpl then .xml in PV`;
     }
     $("seq_dlg").close();
   });

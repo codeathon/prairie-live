@@ -207,3 +207,43 @@ def test_classify_and_group_sequence_with_replacement(tmp_path):
 		assert len(el.find("PVGalvoPointElement").findall("Point")) == 3
 	# Round-trip parse still looks like a group catalog.
 	assert classify_series(parse_mark_points(xml)) == "group_catalog"
+
+
+def test_slim_group_indices_catalog_and_sequence():
+	from prairie_live.markpoints import load_mark_points_file, parse_indices_attr
+	from prairie_live.random_groups import (
+		build_group_sequence,
+		catalog_groups_from_steps,
+		classify_series,
+		sequence_is_slim,
+		sequence_xml_text,
+	)
+
+	assert parse_indices_attr("1-3") == ["1", "2", "3"]
+	assert parse_indices_attr("7-9") == ["7", "8", "9"]
+	assert parse_indices_attr("10-12") == ["10", "11", "12"]
+
+	slim = Path(__file__).resolve().parents[1] / "samples" / "MarkPoints_slim_groups.xml"
+	steps = load_mark_points_file(slim)
+	assert classify_series(steps) == "group_catalog"
+	catalog = catalog_groups_from_steps(steps)
+	assert len(catalog) == 4
+	assert all(g["slim"] for g in catalog)
+	assert catalog[0]["point_ids"] == ["1", "2", "3"]
+	assert catalog[0]["name"] == "Group 4"
+	assert catalog[1]["indices"] == "7-9"
+	seq = build_group_sequence(catalog, 10, seed=1)
+	assert sequence_is_slim(seq)
+	xml = sequence_xml_text(seq, meta=template_meta(steps))
+	root = ET.fromstring(xml)
+	assert root.tag.endswith("PVSavedMarkPointSeriesElements")
+	els = root.findall("PVMarkPointElement")
+	assert len(els) == 10
+	# Membership strings preserved (no nested Point children).
+	for el in els:
+		galvo = el.find("PVGalvoPointElement")
+		assert galvo is not None
+		assert galvo.get("Indices") in {"1-3", "7-9", "4-6", "10-12"}
+		assert galvo.get("Points", "").startswith("Group")
+		assert float(el.get("UncagingLaserPower")) == pytest.approx(0.25)
+		assert el.findall("Point") == []
