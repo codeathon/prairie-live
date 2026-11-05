@@ -210,6 +210,8 @@ def test_web_ui_parse_xml_opens_power_plan(tmp_path):
 	from prairie_live.web_app import STATE
 
 	STATE.xml_dir = tmp_path
+	STATE.points = []
+	STATE.random_groups = []
 	httpd, base = _http_server()
 	try:
 		raw = Path("samples/MarkPoints_8fov.xml").read_bytes()
@@ -233,6 +235,49 @@ def test_web_ui_parse_xml_opens_power_plan(tmp_path):
 		st = json.loads(st_raw.decode("utf-8"))
 		assert [b["power"] for b in st["boards"]] == [75.0, 140.0, 200.0]
 		assert all(b["ready"] is False for b in st["boards"])
+	finally:
+		httpd.shutdown()
+
+
+def test_parse_xml_slim_groups_after_fat_keeps_points(tmp_path):
+	"""Fat pool first, then slim Group/Indices series — upload must not error."""
+	import base64
+	from pathlib import Path
+
+	from prairie_live.web_app import STATE
+
+	STATE.xml_dir = tmp_path
+	STATE.points = []
+	STATE.random_groups = []
+	httpd, base = _http_server()
+	try:
+		fat = Path("samples/MarkPoints_8fov.xml").read_bytes()
+		status, fat_res = _post(
+			base + "/api/parse-xml",
+			{
+				"name": "MarkPoints_8fov.xml",
+				"content_b64": base64.b64encode(fat).decode("ascii"),
+			},
+		)
+		assert status == 200 and fat_res["ok"]
+		assert len(STATE.points) == 8
+
+		slim = Path("samples/MarkPoints_slim_groups.xml").read_bytes()
+		status, slim_res = _post(
+			base + "/api/parse-xml",
+			{
+				"name": "MarkPoints_slim_groups.xml",
+				"content_b64": base64.b64encode(slim).decode("ascii"),
+			},
+		)
+		assert status == 200, slim_res
+		assert slim_res["ok"] is True
+		assert slim_res["kind"] == "group_catalog"
+		assert slim_res["n_groups"] == 4
+		assert slim_res["group_sizes"] == [3, 3, 3, 3]
+		# Prior fat coords kept for Live overlay.
+		assert len(STATE.points) == 8
+		assert "keeping" in (slim_res["fields"].get("fov_note") or "")
 	finally:
 		httpd.shutdown()
 

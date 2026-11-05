@@ -44,6 +44,8 @@ function showXmlFields(fields) {
   dl.innerHTML = "";
   const rows = [
     ["points", fields.n_points],
+    ["groups", fields.n_groups],
+    ["series kind", fields.series_kind],
     ["duration (ms)", fmt(fields.duration_ms)],
     ["inter-point delay (ms)", fmt(fields.inter_point_delay_ms)],
     ["initial delay (ms)", fmt(fields.initial_delay_ms)],
@@ -391,6 +393,11 @@ async function onXmlFile(ev) {
   showXmlFields(res.fields || {});
   refreshPoints();
   if (res.fields && res.fields.repetitions) $("gen_reps").value = res.fields.repetitions;
+  if (res.kind === "group_catalog") {
+    $("fov_note").textContent =
+      (res.fields && res.fields.fov_note) ||
+      "Group catalog loaded — Generate builds a random sequence";
+  }
 }
 
 function rowKey(r) {

@@ -323,11 +323,42 @@ class Handler(BaseHTTPRequestHandler):
 				path = str(STATE.xml_dir / Path(name).name)
 				Path(path).write_bytes(base64.b64decode(b64))
 			if not path or not Path(path).is_file():
-				raise ValueError("choose a Fat Mark Points XML")
+				raise ValueError("choose a Mark Points XML")
+			from prairie_live.random_groups import (
+				catalog_groups_from_steps,
+				classify_series,
+			)
+
+			steps = load_mark_points_file(path)
+			kind = classify_series(steps)
 			fields = summarize_fat_xml(path)
-			pts = extract_unique_points(load_mark_points_file(path))
-			ng = n_groups_for_pool(len(pts))
-			sizes = group_sizes_for_pool(len(pts), n_groups=ng)
+			if kind == "group_catalog":
+				catalog = catalog_groups_from_steps(steps)
+				try:
+					pts = extract_unique_points(steps)
+				except ValueError:
+					pts = []
+				# Slim Group/Indices XML has no coords — keep the previously
+				# loaded fat Mark Points pool for Live overlay / optional .gpl.
+				if not pts:
+					with STATE.lock:
+						prior = list(STATE.points or [])
+					if prior:
+						pts = prior
+						fields = dict(fields)
+						fields["fov_note"] = (
+							f"{fields.get('fov_note') or 'Group catalog'} "
+							f"(keeping {len(pts)} points from earlier fat XML)"
+						)
+				ng = len(catalog)
+				sizes: list[int] = [len(g["point_ids"]) for g in catalog]
+				with STATE.lock:
+					STATE.random_groups = catalog
+					STATE.selected_group_ids = []
+			else:
+				pts = extract_unique_points(steps)
+				ng = n_groups_for_pool(len(pts))
+				sizes = group_sizes_for_pool(len(pts), n_groups=ng)
 			STATE.series_path = path
 			STATE.xml_fields = fields
 			STATE.points = pts
@@ -340,6 +371,7 @@ class Handler(BaseHTTPRequestHandler):
 					"ok": True,
 					"path": path,
 					"fields": fields,
+					"kind": kind,
 					"n_groups": ng,
 					"group_sizes": sizes,
 				},
