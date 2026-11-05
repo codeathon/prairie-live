@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 import pytest
 
 from prairie_live.markpoints import template_meta
+from pathlib import Path
+
 from prairie_live.random_groups import (
 	GROUP_SIZE,
 	build_random_groups,
@@ -166,3 +168,42 @@ def test_select_preserves_three_point_membership():
 	assert all(len(g["point_ids"]) == 3 for g in picked)
 	xml = groups_xml_text(picked, power=100.0, meta=template_meta([]))
 	assert xml.count("<PVMarkPointElement") == 2
+
+
+def test_classify_and_group_sequence_with_replacement(tmp_path):
+	from prairie_live.markpoints import load_mark_points_file, parse_mark_points
+	from prairie_live.random_groups import (
+		build_group_sequence,
+		catalog_groups_from_steps,
+		classify_series,
+		sequence_xml_text,
+		write_groups_xml,
+	)
+
+	pts = _pool(12)
+	groups = build_random_groups(pts, 4, seed=5)
+	assert len(groups) == 4
+	path = write_groups_xml(
+		groups, power=160.0, meta=template_meta([]), path=tmp_path / "catalog.xml"
+	)
+	steps = load_mark_points_file(path)
+	assert classify_series(steps) == "group_catalog"
+	# Points-only fat FOV sample is a pool, not a catalog.
+	fov = Path(__file__).resolve().parents[1] / "samples" / "MarkPoints_8fov.xml"
+	assert classify_series(load_mark_points_file(fov)) == "points_pool"
+
+	catalog = catalog_groups_from_steps(steps)
+	assert len(catalog) == 4
+	seq = build_group_sequence(catalog, 20, seed=99)
+	assert len(seq) == 20
+	ids = [g["id"] for g in seq]
+	assert len(set(ids)) >= 2
+	# With replacement: length > catalog ⇒ at least one repeat when all drawn.
+	assert len(ids) > len(catalog)
+	xml = sequence_xml_text(seq, meta=template_meta(steps))
+	root = ET.fromstring(xml)
+	assert len(root.findall("PVMarkPointElement")) == 20
+	for el in root.findall("PVMarkPointElement"):
+		assert len(el.find("PVGalvoPointElement").findall("Point")) == 3
+	# Round-trip parse still looks like a group catalog.
+	assert classify_series(parse_mark_points(xml)) == "group_catalog"

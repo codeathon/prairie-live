@@ -103,7 +103,12 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
 .fov-wrap circle.mp-pt.grouped { pointer-events: auto; }
 .fov-wrap text.mp-pt.grouped { pointer-events: auto; font-weight: 700; }
 .fov-wrap circle.mp-pt.selected { fill: rgba(255, 255, 255, 0.12); }
-/* Next to "Live scan"; toggles the Mark Points overlay. */
+/* Next to "Live scan"; toggles baseline / ΔF/F / Mark Points. */
+.fov-toggles {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
 .fov-toggle {
   flex: 0 0 auto;
   margin: 0;

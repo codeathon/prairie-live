@@ -1,20 +1,32 @@
-"""Background live FOV from the scope relay (starts -LiveScan when up)."""
+"""Background live FOV from the scope relay (starts -LiveScan when up).
+
+Supports raw grayscale or %ΔF/F against a 60-frame baseline (auto + button).
+"""
 
 from __future__ import annotations
 
 import threading
 import time
+from typing import Any
 
 import numpy as np
 
 from prairie_live.lab_defaults import DEFAULT_RELAY
 from prairie_live.relay_status import parse_relay_addr, probe_relay
-from prairie_live.trial_images import png_bytes_rgb, to_u8
+from prairie_live.trial_images import (
+	FrameBuffer,
+	dff_rgb,
+	disk_mean,
+	png_bytes_rgb,
+	to_u8,
+)
 from prairie_live.viewer import orient_fov
+
+BASELINE_N = 60
 
 
 class LiveFeed:
-	def __init__(self, addr: str = DEFAULT_RELAY) -> None:
+	def __init__(self, addr: str = DEFAULT_RELAY, *, baseline_n: int = BASELINE_N) -> None:
 		self.addr = addr
 		self.png: bytes | None = None
 		self.ok = False
@@ -26,6 +38,12 @@ class LiveFeed:
 		self._stop = threading.Event()
 		self._lock = threading.Lock()
 		self._thread: threading.Thread | None = None
+		self._baseline_n = max(int(baseline_n), 1)
+		self._buf = FrameBuffer(self._baseline_n)
+		self._collecting = True
+		self._baseline: np.ndarray | None = None
+		self._current: np.ndarray | None = None
+		self._mode = "raw"  # "raw" | "dff"
 
 	def start(self) -> None:
 		if self._thread and self._thread.is_alive():
@@ -44,25 +62,29 @@ class LiveFeed:
 				self.ok = False
 				self.live_started = False
 				self.detail = "reconnecting…"
+				self._reset_baseline_locked(collect=True)
+
+	def request_baseline(self) -> dict[str, Any]:
+		"""Clear F0 and re-collect the next ``baseline_n`` frames."""
+		with self._lock:
+			self._reset_baseline_locked(collect=True)
+			return self._snapshot_locked()
+
+	def set_mode(self, mode: str) -> dict[str, Any]:
+		m = str(mode or "").strip().lower()
+		if m not in ("raw", "dff"):
+			raise ValueError("mode must be 'raw' or 'dff'")
+		with self._lock:
+			if m == "dff" and self._baseline is None:
+				raise ValueError("baseline not ready")
+			self._mode = m
+			if self._current is not None:
+				self.png = self._encode_locked(self._current)
+			return self._snapshot_locked()
 
 	def snapshot(self) -> dict:
 		with self._lock:
-			optics = {}
-			if self.geometry:
-				from prairie_live.scan_geometry import optics_from_geometry
-
-				optics = optics_from_geometry(self.geometry)
-			if self.frame_wh:
-				optics["image_width_px"] = int(self.frame_wh[0])
-				optics["image_height_px"] = int(self.frame_wh[1])
-			return {
-				"ok": self.ok,
-				"detail": self.detail,
-				"has_frame": self.png is not None,
-				"live_started": self.live_started,
-				"addr": self.addr,
-				"optics": optics,
-			}
+			return self._snapshot_locked()
 
 	def scan_geometry(self) -> tuple[dict | None, tuple[int, int] | None]:
 		with self._lock:
@@ -104,6 +126,100 @@ class LiveFeed:
 		with self._lock:
 			return self.png
 
+	def ingest_frame(self, frame: np.ndarray) -> None:
+		"""Orient + encode one frame (used by the live thread and unit tests)."""
+		img = np.asarray(frame)
+		if img.ndim > 2:
+			img = img[..., 0]
+		oriented = orient_fov(img.astype(np.float64))
+		with self._lock:
+			self._current = oriented
+			self.frame_wh = (int(oriented.shape[1]), int(oriented.shape[0]))
+			if self._collecting:
+				self._buf.push(oriented)
+				if len(self._buf) >= self._baseline_n:
+					self._baseline = self._buf.mean()
+					self._collecting = False
+					self._mode = "dff"
+			self.png = self._encode_locked(oriented)
+			self.ok = True
+
+	def roi_dff_pct(
+		self,
+		points: list[dict[str, Any]],
+		*,
+		radius: int = 3,
+	) -> dict[str, float]:
+		"""Per-point disk %ΔF/F vs baseline; keys are point ids."""
+		with self._lock:
+			cur = None if self._current is None else self._current.copy()
+			base = None if self._baseline is None else self._baseline.copy()
+		if cur is None or base is None:
+			return {}
+		out: dict[str, float] = {}
+		for i, pt in enumerate(points):
+			x = pt.get("fx", pt.get("x"))
+			y = pt.get("fy", pt.get("y"))
+			if x is None or y is None:
+				continue
+			try:
+				xf, yf = float(x), float(y)
+			except (TypeError, ValueError):
+				continue
+			b = disk_mean(base, xf, yf, int(radius))
+			a = disk_mean(cur, xf, yf, int(radius))
+			if b is None or a is None or abs(b) < 1e-9:
+				continue
+			out[str(pt.get("id", i))] = float((a - b) / b * 100.0)
+		return out
+
+	def _reset_baseline_locked(self, *, collect: bool) -> None:
+		self._buf = FrameBuffer(self._baseline_n)
+		self._baseline = None
+		self._collecting = bool(collect)
+		self._mode = "raw"
+
+	def _encode_locked(self, oriented: np.ndarray) -> bytes:
+		if self._mode == "dff" and self._baseline is not None:
+			if self._baseline.shape != oriented.shape:
+				u8 = to_u8(oriented)
+				return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
+			rgb = dff_rgb(self._baseline, oriented)
+			return png_bytes_rgb(rgb)
+		u8 = to_u8(oriented)
+		return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
+
+	def _snapshot_locked(self) -> dict:
+		optics = {}
+		if self.geometry:
+			from prairie_live.scan_geometry import optics_from_geometry
+
+			optics = optics_from_geometry(self.geometry)
+		if self.frame_wh:
+			optics["image_width_px"] = int(self.frame_wh[0])
+			optics["image_height_px"] = int(self.frame_wh[1])
+		n_buf = len(self._buf)
+		detail = self.detail
+		if self._collecting and self.ok:
+			detail = f"baseline {n_buf}/{self._baseline_n}…"
+		elif self._mode == "dff" and self._baseline is not None and self.ok:
+			from prairie_live.scan_geometry import format_optics_line
+
+			detail = "ΔF/F · " + format_optics_line(self.geometry, self.frame_wh)
+		return {
+			"ok": self.ok,
+			"detail": detail,
+			"has_frame": self.png is not None,
+			"live_started": self.live_started,
+			"addr": self.addr,
+			"optics": optics,
+			"mode": self._mode,
+			"baseline_ready": self._baseline is not None,
+			"baseline_frames": n_buf if self._collecting else self._baseline_n,
+			"baseline_n": self._baseline_n,
+			"collecting_baseline": self._collecting,
+		}
+
 	def _loop(self) -> None:
 		while not self._stop.is_set():
 			with self._lock:
@@ -141,6 +257,8 @@ class LiveFeed:
 				with self._lock:
 					self.live_started = True
 					self.detail = "LiveScan on"
+					# Fresh connection → collect a new baseline once.
+					self._reset_baseline_locked(collect=True)
 			# Zoom/pan change the scan range, so the Mark Points overlay re-reads it.
 			next_geom: float | None = 0.0
 			while not self._stop.is_set():
@@ -154,17 +272,9 @@ class LiveFeed:
 				if frame is None:
 					self._stop.wait(0.08)
 					continue
-				img = np.asarray(frame)
-				if img.ndim > 2:
-					img = img[..., 0]
-				oriented = orient_fov(img.astype(np.float64))
-				u8 = to_u8(oriented)
-				png = png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
+				self.ingest_frame(frame)
 				with self._lock:
-					self.png = png
-					self.frame_wh = (int(oriented.shape[1]), int(oriented.shape[0]))
-					self.ok = True
-					if started:
+					if started and not self._collecting and self._mode == "raw":
 						from prairie_live.scan_geometry import format_optics_line
 
 						self.detail = "live · " + format_optics_line(

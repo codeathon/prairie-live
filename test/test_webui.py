@@ -309,5 +309,27 @@ def test_random_groups_api_smoke(tmp_path):
 		for el in root.findall("PVMarkPointElement"):
 			assert float(el.get("UncagingLaserPower")) == pytest.approx(0.4)
 			assert len(el.find("PVGalvoPointElement").findall("Point")) == 3
+
+		# Group-catalog path: classify prior export, then random sequence of length N.
+		status, kind = _post(base + "/api/series-kind", {"series": res["path"]})
+		assert status == 200 and kind["ok"] is True
+		assert kind["kind"] == "group_catalog"
+		assert kind["n_groups"] == 4
+		status, seq = _post(
+			base + "/api/random-groups",
+			{
+				"series": res["path"],
+				"mode": "sequence",
+				"n_sequences": 12,
+				"seed": 3,
+			},
+		)
+		assert status == 200 and seq["ok"] is True
+		assert seq["mode"] == "sequence"
+		assert seq["n_sequences"] == 12
+		assert len(seq["sequence_ids"]) == 12
+		seq_root = ET.fromstring(seq["xml"])
+		assert len(seq_root.findall("PVMarkPointElement")) == 12
+		assert Path(seq["gpl_path"]).is_file()
 	finally:
 		httpd.shutdown()

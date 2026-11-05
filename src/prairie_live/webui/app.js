@@ -86,6 +86,8 @@ async function refreshRelay() {
 const SVG_NS = "http://www.w3.org/2000/svg";
 let marksOn = true;
 let marksNote = "";
+let liveMode = "raw";
+let baselineReady = false;
 
 function applyMarksVisibility() {
   const svg = $("live_marks");
@@ -99,6 +101,26 @@ function applyMarksVisibility() {
   const btn = $("marks_toggle");
   btn.setAttribute("aria-pressed", marksOn ? "true" : "false");
   btn.title = marksOn ? "Hide Mark Points overlay" : "Show Mark Points overlay";
+}
+
+function applyDffToggle() {
+  const btn = $("dff_toggle");
+  const dff = liveMode === "dff";
+  btn.textContent = dff ? "ΔF/F" : "Raw";
+  btn.setAttribute("aria-pressed", dff ? "true" : "false");
+  btn.disabled = !baselineReady && !dff;
+  btn.title = dff
+    ? "Showing %ΔF/F — click for raw FOV"
+    : baselineReady
+      ? "Showing raw FOV — click for %ΔF/F"
+      : "Collect a baseline first";
+}
+
+function fmtDffPct(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  const s = n >= 0 ? `+${n.toFixed(0)}` : n.toFixed(0);
+  return `${s}%`;
 }
 
 function rgbCss(rgb) {
@@ -224,7 +246,8 @@ async function refreshPoints() {
     t.setAttribute("font-size", "0.028");
     t.setAttribute("stroke-width", "0.004");
     if (p.rgb) t.setAttribute("fill", rgbCss(p.rgb));
-    t.textContent = p.id;
+    const dffBit = p.dff_pct != null ? ` ${fmtDffPct(p.dff_pct)}` : "";
+    t.textContent = `${p.id}${dffBit}`;
     if (inGroup) {
       t.style.cursor = "pointer";
       t.addEventListener("click", (ev) => {
@@ -433,6 +456,9 @@ async function tick() {
   }
   if (st.error) $("save_status").textContent = st.error;
   if (st.live) {
+    liveMode = st.live.mode || "raw";
+    baselineReady = !!st.live.baseline_ready;
+    applyDffToggle();
     const o = st.live.optics || {};
     if (o.fov_width_um && o.optical_zoom) {
       $("live_cap").textContent =
@@ -460,6 +486,29 @@ async function boot() {
   setLight(d.relay || {});
   $("via_relay").addEventListener("change", refreshRelay);
   $("xml_file").addEventListener("change", onXmlFile);
+  $("baseline_btn").addEventListener("click", async () => {
+    const res = await jpost("/api/live-baseline", {});
+    if (!res.ok) {
+      $("live_cap").textContent = res.error || "baseline failed";
+      return;
+    }
+    liveMode = res.mode || "raw";
+    baselineReady = !!res.baseline_ready;
+    applyDffToggle();
+    $("live_cap").textContent = res.detail || "collecting baseline…";
+  });
+  $("dff_toggle").addEventListener("click", async () => {
+    if (!baselineReady && liveMode !== "dff") return;
+    const next = liveMode === "dff" ? "raw" : "dff";
+    const res = await jpost("/api/live-mode", { mode: next });
+    if (!res.ok) {
+      $("live_cap").textContent = res.error || "mode switch failed";
+      return;
+    }
+    liveMode = res.mode || next;
+    baselineReady = !!res.baseline_ready;
+    applyDffToggle();
+  });
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;
     applyMarksVisibility();
@@ -498,24 +547,50 @@ async function boot() {
   });
   $("gen_groups").addEventListener("click", async () => {
     $("gen_status").textContent = "";
-    // Default # groups to the coverage minimum (ceil(n_points / 3)).
+    $("seq_status").textContent = "";
+    const series = $("xml_path").textContent;
+    let kind = "points_pool";
     try {
-      const pts = await jget("/api/points");
-      const n = (pts.points || []).length;
+      const info = await jpost("/api/series-kind", { series });
+      if (!info.ok) {
+        $("gen_status").textContent = info.error || "cannot classify series";
+        $("gen_dlg").showModal();
+        return;
+      }
+      kind = info.kind || "points_pool";
+      if (kind === "group_catalog") {
+        $("seq_catalog").textContent =
+          `catalog: ${info.n_groups} groups · ${info.n_points} points`;
+        $("seq_dlg").showModal();
+        return;
+      }
+      const n = Number(info.n_points) || 0;
       if (n > 0) {
         const need = Math.ceil(n / 3);
         const cur = Number($("gen_n").value) || 0;
         if (cur < need) $("gen_n").value = need;
       }
-    } catch (_) {}
+    } catch (_) {
+      try {
+        const pts = await jget("/api/points");
+        const n = (pts.points || []).length;
+        if (n > 0) {
+          const need = Math.ceil(n / 3);
+          const cur = Number($("gen_n").value) || 0;
+          if (cur < need) $("gen_n").value = need;
+        }
+      } catch (_) {}
+    }
     $("gen_dlg").showModal();
   });
   $("gen_cancel").addEventListener("click", () => $("gen_dlg").close());
+  $("seq_cancel").addEventListener("click", () => $("seq_dlg").close());
   $("gen_form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
     $("gen_status").textContent = "building…";
     const body = {
       series: $("xml_path").textContent,
+      mode: "points_pool",
       n_groups: $("gen_n").value,
       power: $("gen_power").value,
       repetitions: $("gen_reps").value,
@@ -547,6 +622,38 @@ async function boot() {
         `generated ${res.n_groups} groups @ power ${res.power}${cover} — load .gpl then .xml in PV`;
     }
     $("gen_dlg").close();
+  });
+  $("seq_form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    $("seq_status").textContent = "building…";
+    const body = {
+      series: $("xml_path").textContent,
+      mode: "sequence",
+      n_sequences: $("seq_n").value,
+      seed: $("seq_seed").value,
+    };
+    const res = await jpost("/api/random-groups", body);
+    if (!res.ok) {
+      $("seq_status").textContent = res.error || "sequence failed";
+      return;
+    }
+    selectedGroups.clear();
+    renderSelectedGroups(res.groups || []);
+    refreshPoints();
+    const saved = await saveSeriesAndGpl(res);
+    const n = res.n_sequences || res.n_groups;
+    if (saved.cancelled) {
+      $("seq_status").textContent =
+        `built sequence n=${n} (server ${res.path}` +
+        (res.gpl_path ? ` + ${res.gpl_path}` : "") +
+        `)`;
+    } else {
+      const gplBit = saved.gpl ? ` + ${saved.gpl}` : saved.gplSkipped ? " (gpl skipped)" : "";
+      $("seq_status").textContent = `saved ${saved.name}${gplBit} · sequence n=${n}`;
+      $("grp_status").textContent =
+        `group sequence n=${n} (catalog ${res.n_catalog}) — load .gpl then .xml in PV`;
+    }
+    $("seq_dlg").close();
   });
   $("grp_clear").addEventListener("click", () => {
     selectedGroups.clear();

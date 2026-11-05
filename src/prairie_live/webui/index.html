@@ -16,7 +16,11 @@
       <div class="tile" id="tile_live">
         <div class="tile-head">
           <h3>Live scan</h3>
-          <button type="button" id="marks_toggle" class="fov-toggle" aria-pressed="true" title="Hide Mark Points overlay">MP</button>
+          <div class="fov-toggles">
+            <button type="button" id="baseline_btn" class="fov-toggle" title="Recompute 60-frame ΔF/F baseline">Baseline</button>
+            <button type="button" id="dff_toggle" class="fov-toggle" aria-pressed="false" title="Show raw FOV (ΔF/F needs baseline)">Raw</button>
+            <button type="button" id="marks_toggle" class="fov-toggle" aria-pressed="true" title="Hide Mark Points overlay">MP</button>
+          </div>
         </div>
         <div class="fov-wrap">
           <img id="live_img" alt="live FOV" />
@@ -73,6 +77,21 @@
         <button id="gen_ok" type="submit" value="ok">Save XML…</button>
       </div>
       <p id="gen_status" class="muted"></p>
+    </form>
+  </dialog>
+
+  <dialog id="seq_dlg">
+    <form method="dialog" id="seq_form">
+      <h2>Random group sequence</h2>
+      <p class="muted">Input XML already has multi-point groups. Build a length-<strong>N</strong> Mark Points series by sampling those groups at random (with replacement). Saves series <code>.xml</code> + companion <code>.gpl</code> — load <code>.gpl</code> first in PrairieView.</p>
+      <p id="seq_catalog" class="muted"></p>
+      <label>Sequence length N <input id="seq_n" type="number" min="1" value="20" required /></label>
+      <label>Seed (optional) <input id="seq_seed" type="number" placeholder="random" /></label>
+      <div class="row">
+        <button id="seq_cancel" type="button" value="cancel">Cancel</button>
+        <button id="seq_ok" type="submit" value="ok">Save XML…</button>
+      </div>
+      <p id="seq_status" class="muted"></p>
     </form>
   </dialog>
 

@@ -325,3 +325,163 @@ def overlay_group_centroids(
 			}
 		)
 	return rows
+
+
+def _step_coord_points(step: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Non-placeholder points with X/Y from a parsed Mark Points step."""
+	pts = list(step.get("points") or [])
+	gname = str(step.get("raw_points") or step.get("name") or "")
+	out: list[dict[str, Any]] = []
+	for pt in pts:
+		if pt.get("x") is None or pt.get("y") is None:
+			continue
+		if (
+			pt.get("name") == gname
+			and float(pt.get("x", 0)) == 0.0
+			and float(pt.get("y", 0)) == 0.0
+			and len(pts) == 1
+		):
+			continue
+		out.append(dict(pt))
+	return out
+
+
+def classify_series(steps: list[dict[str, Any]]) -> str:
+	"""``group_catalog`` if ≥2 multi-point steps; else ``points_pool``."""
+	multi = [s for s in steps if len(_step_coord_points(s)) >= 2]
+	if len(multi) >= 2:
+		return "group_catalog"
+	return "points_pool"
+
+
+def catalog_groups_from_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+	"""Stable group catalog from a series that already encodes multi-point steps."""
+	out: list[dict[str, Any]] = []
+	gi = 0
+	for step in steps:
+		pts = _step_coord_points(step)
+		if len(pts) < 2:
+			continue
+		gi += 1
+		cx, cy = group_centroid(pts)
+		gid = str(step.get("id") or gi)
+		name = str(step.get("name") or f"G{gid}")
+		# Prefer G# label when Points= listed Point names.
+		if name.lower().startswith("point ") or "," in name:
+			name = f"G{gi}"
+		out.append(
+			{
+				"id": str(gi),
+				"name": name if name.startswith("G") else f"G{gi}",
+				"point_ids": [str(p["id"]) for p in pts],
+				"points": pts,
+				"cx": cx,
+				"cy": cy,
+				"rgb": list(group_rgb(gi)),
+				"source_step": dict(step),
+			}
+		)
+	if len(out) < 2:
+		raise ValueError("need at least 2 multi-point groups in the series")
+	return out
+
+
+def build_group_sequence(
+	catalog: list[dict[str, Any]],
+	n: int,
+	*,
+	seed: int | None = None,
+) -> list[dict[str, Any]]:
+	"""Random-with-replacement sequence of catalog groups, length ``n``."""
+	if len(catalog) < 1:
+		raise ValueError("empty group catalog")
+	n = int(n)
+	if n < 1:
+		raise ValueError("n_sequences must be >= 1")
+	rng = random.Random(seed)
+	return [dict(g) for g in rng.choices(catalog, k=n)]
+
+
+_STEP_META_KEYS = (
+	"duration",
+	"repetitions",
+	"initial_delay",
+	"inter_point_delay",
+	"spiral_revolutions",
+	"uncaging_laser",
+	"trigger_selection",
+	"trigger_identifier",
+	"trigger_frequency",
+	"trigger_count",
+	"async_sync_frequency",
+	"voltage_output_category",
+	"voltage_rec_category",
+	"parameter_set",
+	"use_3d",
+	"all_points_at_once",
+	"calc_funct_map",
+	"iteration_delay",
+)
+
+
+def sequence_to_pv_steps(
+	sequence: list[dict[str, Any]],
+	*,
+	meta: dict[str, Any],
+) -> list[dict[str, Any]]:
+	"""Rebuild fat steps from a sequence, preserving each source group's fields."""
+	base = dict(meta)
+	base["pv_saved_format"] = False
+	steps: list[dict[str, Any]] = []
+	for g in sequence:
+		pts = list(g.get("points") or [])
+		if len(pts) < 2:
+			raise ValueError(f"group {g.get('id')} needs at least 2 points")
+		src = dict(g.get("source_step") or {})
+		step_meta = dict(base)
+		for k in _STEP_META_KEYS:
+			if src.get(k) is not None:
+				step_meta[k] = src[k]
+		pwr = src.get("laser_pwr")
+		if pwr is None:
+			pwr = base.get("power", 160)
+		step = build_group_step(
+			pts,
+			name=str(g.get("name") or f"G{g.get('id')}"),
+			power=float(pwr),
+			meta=step_meta,
+		)
+		steps.append(step)
+	return steps
+
+
+def sequence_xml_text(
+	sequence: list[dict[str, Any]],
+	*,
+	meta: dict[str, Any],
+) -> str:
+	steps = sequence_to_pv_steps(sequence, meta=meta)
+	if not steps:
+		raise ValueError("no groups to write")
+	return groups_to_xml(steps)
+
+
+def write_sequence_xml(
+	sequence: list[dict[str, Any]],
+	*,
+	meta: dict[str, Any],
+	path: str | Path,
+) -> Path:
+	out = Path(path)
+	out.parent.mkdir(parents=True, exist_ok=True)
+	out.write_text(sequence_xml_text(sequence, meta=meta), encoding="utf-8")
+	return out
+
+
+def catalog_power(catalog: list[dict[str, Any]], default: float = 160.0) -> float:
+	"""UI power from the first catalog group's source step."""
+	for g in catalog:
+		src = g.get("source_step") or {}
+		if src.get("laser_pwr") is not None:
+			return float(src["laser_pwr"])
+	return float(default)
