@@ -111,7 +111,7 @@ def test_roi_dff_pct_positive_at_center():
 	assert out["1"] > 0
 
 
-def test_raw_clim_is_fixed_0_to_65536():
+def test_raw_clim_is_fixed_0_to_65535():
 	"""Dim ADU must stay dim vs auto percentile stretch."""
 	feed = LiveFeed(baseline_n=200)  # stay in raw
 	img = np.zeros((32, 32), dtype=np.float64)
@@ -121,8 +121,8 @@ def test_raw_clim_is_fixed_0_to_65536():
 	assert snap["clim_lo"] == DISPLAY_CLIM_LO
 	assert snap["clim_hi"] == DISPLAY_CLIM_HI
 	assert DISPLAY_CLIM_LO == 0.0
-	assert DISPLAY_CLIM_HI == 65_536.0
-	# Fixed clim: 50/65536 → ~0 gray; auto percentile would blast the square white.
+	assert DISPLAY_CLIM_HI == 65_535.0
+	# Fixed clim: 50/65535 → ~0 gray; auto percentile would blast the square white.
 	fixed = to_u8_clim(img, DISPLAY_CLIM_LO, DISPLAY_CLIM_HI)
 	auto = to_u8(img)
 	assert int(fixed[16, 16]) < 5

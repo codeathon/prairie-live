@@ -25,10 +25,9 @@ from prairie_live.viewer import orient_fov
 BASELINE_N = 60
 # Spatial mean-bin for the GUI PNG only (full-res kept for geometry / ROI).
 DISPLAY_BIN = 4
-# Fixed Raw display clim (ADU) — match PV Z-scale; avoids percentile noise pump.
-# 16-bit style white-point (user LUT ≈ 0–65536).
+# Fixed Raw display clim (ADU) — match PV LUT X-axis (0–65535); avoids percentile noise pump.
 DISPLAY_CLIM_LO = 0.0
-DISPLAY_CLIM_HI = 65_536.0
+DISPLAY_CLIM_HI = 65_535.0
 
 
 def bin_mean(img: np.ndarray, factor: int = DISPLAY_BIN) -> np.ndarray:
