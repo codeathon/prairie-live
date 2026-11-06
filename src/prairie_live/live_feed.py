@@ -26,8 +26,9 @@ BASELINE_N = 60
 # Spatial mean-bin for the GUI PNG only (full-res kept for geometry / ROI).
 DISPLAY_BIN = 4
 # Fixed Raw display clim (ADU) — match PV Z-scale; avoids percentile noise pump.
+# 16-bit style white-point (user LUT ≈ 0–65536).
 DISPLAY_CLIM_LO = 0.0
-DISPLAY_CLIM_HI = 100_000.0
+DISPLAY_CLIM_HI = 65_536.0
 
 
 def bin_mean(img: np.ndarray, factor: int = DISPLAY_BIN) -> np.ndarray:
