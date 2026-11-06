@@ -168,48 +168,21 @@ def test_live_feed_keeps_geometry_after_dropped_session():
 	from prairie_live.live_feed import LiveFeed
 
 	class Dropped:
-		def __init__(self):
-			self.live_calls = 0
-
 		def get_state(self, key, index=None):
-			return {
-				"ok": False,
-				"error": "PrairieView dropped the connection during -gts (reset)",
-			}
-
-		def start_live(self):
-			self.live_calls += 1
-			return {"ok": True, "cmd": "live"}
+			return {"ok": False, "error": "PrairieView dropped the connection during -gts (reset)"}
 
 	feed = LiveFeed("127.0.0.1:25100")
 	assert feed._poll_geometry(FakeRelay(GEOM)) == 2.0
 	geom_ok, _ = feed.scan_geometry()
 	assert geom_ok is not None
-	# A later PV bounce must not wipe amplitude/center (that hid galvo MP overlays),
-	# and must re-issue LiveScan so the FOV does not stay blank.
-	dropped = Dropped()
-	wait = feed._poll_geometry(dropped)
+	# A later drop must not wipe amplitude/center (that hid galvo MP overlays).
+	wait = feed._poll_geometry(Dropped())
 	assert wait == 30.0
-	assert dropped.live_calls == 1
 	assert "paused" in feed.scan_geometry_error() or "last scan" in feed.scan_geometry_error()
 	geom2, _ = feed.scan_geometry()
 	assert geom2 == geom_ok
 	assert feed._poll_geometry(FakeRelay(GEOM)) == 2.0
 	assert feed.scan_geometry_error() == ""
-
-
-def test_live_feed_geom_connection_reset_raises():
-	from prairie_live.live_feed import LiveFeed
-
-	class Boom:
-		def get_state(self, key, index=None):
-			raise ConnectionResetError(
-				"[WinError 10054] An existing connection was forcibly closed by the remote host"
-			)
-
-	feed = LiveFeed("127.0.0.1:25100")
-	with pytest.raises(ConnectionError, match="10054"):
-		feed._poll_geometry(Boom())
 
 
 def test_points_for_image_maps_galvo_for_scoring():

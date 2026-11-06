@@ -26,15 +26,6 @@ BASELINE_N = 60
 # Spatial mean-bin for the GUI PNG only (full-res kept for geometry / ROI).
 DISPLAY_BIN = 4
 
-# Temporal display smooth (~12 Hz relay): frame counts + optional post-bin blur σ.
-SMOOTH_LEVELS: dict[str, dict[str, float | int]] = {
-	"off": {"n": 1, "blur": 0.0},
-	"low": {"n": 4, "blur": 0.0},
-	"med": {"n": 8, "blur": 0.5},
-	"high": {"n": 18, "blur": 1.0},
-}
-DEFAULT_SMOOTH = "med"
-
 
 def bin_mean(img: np.ndarray, factor: int = DISPLAY_BIN) -> np.ndarray:
 	"""Mean-pool ``factor``×``factor`` blocks (crop to a multiple of ``factor``)."""
@@ -48,50 +39,6 @@ def bin_mean(img: np.ndarray, factor: int = DISPLAY_BIN) -> np.ndarray:
 		return arr
 	cropped = arr[: h2 * f, : w2 * f]
 	return cropped.reshape(h2, f, w2, f).mean(axis=(1, 3))
-
-
-def gaussian_blur(img: np.ndarray, sigma: float) -> np.ndarray:
-	"""Separable Gaussian (numpy only); no-op when ``sigma`` ≤ 0."""
-	sig = float(sigma)
-	if sig <= 0:
-		return np.asarray(img, dtype=np.float64)
-	arr = np.asarray(img, dtype=np.float64)
-	radius = max(1, int(round(2.0 * sig)))
-	x = np.arange(-radius, radius + 1, dtype=np.float64)
-	kern = np.exp(-(x * x) / (2.0 * sig * sig))
-	kern /= kern.sum()
-	pad = np.pad(arr, radius, mode="reflect")
-	# Rows then columns (valid length restores original shape).
-	rows = np.vstack(
-		[np.convolve(pad[i], kern, mode="valid") for i in range(pad.shape[0])]
-	)
-	cols = np.column_stack(
-		[np.convolve(rows[:, j], kern, mode="valid") for j in range(rows.shape[1])]
-	)
-	return cols
-
-
-def _link_dead(exc: BaseException) -> bool:
-	"""True when the analysis↔relay control socket is gone (reconnect LiveFeed).
-
-	A soft ``ValueError`` from ``fetch_scan_geometry`` that only says PV dropped
-	(relay already reconnected) is *not* link-dead — caller re-issues LiveScan.
-	"""
-	if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
-		return True
-	if isinstance(exc, ConnectionError) and not isinstance(exc, TimeoutError):
-		return True
-	msg = f"{type(exc).__name__}: {exc}".lower()
-	return any(
-		s in msg
-		for s in (
-			"10054",
-			"forcibly closed",
-			"control socket closed",
-			"broken pipe",
-			"connection reset by peer",
-		)
-	)
 
 
 class LiveFeed:
@@ -113,8 +60,6 @@ class LiveFeed:
 		self._baseline: np.ndarray | None = None
 		self._current: np.ndarray | None = None
 		self._mode = "raw"  # "raw" | "dff"
-		self._smooth = DEFAULT_SMOOTH
-		self._disp_buf = FrameBuffer(int(SMOOTH_LEVELS[DEFAULT_SMOOTH]["n"]))
 
 	def start(self) -> None:
 		if self._thread and self._thread.is_alive():
@@ -150,21 +95,7 @@ class LiveFeed:
 				raise ValueError("baseline not ready")
 			self._mode = m
 			if self._current is not None:
-				self.png = self._encode_locked()
-			return self._snapshot_locked()
-
-	def set_smooth(self, level: str) -> dict[str, Any]:
-		"""Temporal display smooth: off | low | med | high."""
-		key = str(level or "").strip().lower()
-		if key not in SMOOTH_LEVELS:
-			raise ValueError("smooth must be off|low|med|high")
-		with self._lock:
-			self._smooth = key
-			n = int(SMOOTH_LEVELS[key]["n"])
-			self._disp_buf = FrameBuffer(n)
-			if self._current is not None:
-				self._disp_buf.push(self._current)
-				self.png = self._encode_locked()
+				self.png = self._encode_locked(self._current)
 			return self._snapshot_locked()
 
 	def snapshot(self) -> dict:
@@ -179,14 +110,8 @@ class LiveFeed:
 		with self._lock:
 			return self.geometry_error
 
-	def _poll_geometry(self, client) -> float:
-		"""Seconds until the next poll.
-
-		Raises ``ConnectionError`` when the relay control link is dead so the
-		live thread can disconnect and open a fresh session (+ ``-LiveScan``).
-		A PV-side bounce that the relay already recovered from re-issues
-		``-LiveScan`` here (Live often stops when PV drops the script socket).
-		"""
+	def _poll_geometry(self, client) -> float | None:
+		"""Seconds until the next poll; None stops polling on this connection."""
 		from prairie_live.scan_geometry import fetch_scan_geometry
 
 		err = ""
@@ -195,19 +120,9 @@ class LiveFeed:
 			geom = fetch_scan_geometry(client)
 		except Exception as exc:
 			err = f"{type(exc).__name__}: {exc}"[:200]
-			if _link_dead(exc):
-				with self._lock:
-					self.geometry_error = err
-				raise ConnectionError(err) from exc
-		pv_bounced = bool(err) and "dropped the connection" in err.lower()
-		if pv_bounced:
-			# Relay reconnected to PV but LiveScan is usually off after a drop.
-			try:
-				client.start_live()
-			except Exception as live_exc:
-				err = f"{err}; LiveScan re-issue failed ({live_exc})"[:200]
-			else:
-				err = f"{err} — scan range paused; LiveScan re-issued"
+		if err and "dropped the connection" in err:
+			# Don't keep hammering PV; keep last good geometry so MP overlay stays up.
+			err = f"{err} — scan range polling paused"
 		with self._lock:
 			if geom is not None:
 				self.geometry = geom
@@ -220,8 +135,8 @@ class LiveFeed:
 					self.geometry_error = f"{err} (using last scan range)"
 		if not err:
 			return 2.0
-		# Back off after a bounce; soft parse errors retry sooner.
-		return 30.0 if pv_bounced else 15.0
+		# Retry later even after a drop; permanent None wiped the overlay before.
+		return 30.0 if "polling paused" in err else 15.0
 
 	def png_bytes(self) -> bytes | None:
 		with self._lock:
@@ -236,14 +151,13 @@ class LiveFeed:
 		with self._lock:
 			self._current = oriented
 			self.frame_wh = (int(oriented.shape[1]), int(oriented.shape[0]))
-			self._disp_buf.push(oriented)
 			if self._collecting:
 				self._buf.push(oriented)
 				if len(self._buf) >= self._baseline_n:
 					self._baseline = self._buf.mean()
 					self._collecting = False
 					self._mode = "dff"
-			self.png = self._encode_locked()
+			self.png = self._encode_locked(oriented)
 			self.ok = True
 
 	def roi_dff_pct(
@@ -280,24 +194,12 @@ class LiveFeed:
 		self._baseline = None
 		self._collecting = bool(collect)
 		self._mode = "raw"
-		n = int(SMOOTH_LEVELS.get(self._smooth, SMOOTH_LEVELS[DEFAULT_SMOOTH])["n"])
-		self._disp_buf = FrameBuffer(n)
 
-	def _encode_locked(self) -> bytes:
-		# Rolling mean → 4×4 bin → optional blur. Full-res _current stays for ROI.
-		src = self._disp_buf.mean()
-		if src is None:
-			src = self._current
-		if src is None:
-			return b""
-		disp = bin_mean(src, DISPLAY_BIN)
-		blur = float(SMOOTH_LEVELS.get(self._smooth, SMOOTH_LEVELS["off"])["blur"])
-		if blur > 0:
-			disp = gaussian_blur(disp, blur)
+	def _encode_locked(self, oriented: np.ndarray) -> bytes:
+		# Bin display only — keep full-res _current / frame_wh for overlays.
+		disp = bin_mean(oriented, DISPLAY_BIN)
 		if self._mode == "dff" and self._baseline is not None:
 			base = bin_mean(self._baseline, DISPLAY_BIN)
-			if blur > 0:
-				base = gaussian_blur(base, blur)
 			if base.shape != disp.shape:
 				u8 = to_u8(disp)
 				return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
@@ -323,7 +225,6 @@ class LiveFeed:
 			from prairie_live.scan_geometry import format_optics_line
 
 			detail = "ΔF/F · " + format_optics_line(self.geometry, self.frame_wh)
-		cfg = SMOOTH_LEVELS.get(self._smooth, SMOOTH_LEVELS[DEFAULT_SMOOTH])
 		return {
 			"ok": self.ok,
 			"detail": detail,
@@ -336,9 +237,6 @@ class LiveFeed:
 			"baseline_frames": n_buf if self._collecting else self._baseline_n,
 			"baseline_n": self._baseline_n,
 			"collecting_baseline": self._collecting,
-			"smooth": self._smooth,
-			"smooth_frames": int(cfg["n"]),
-			"smooth_levels": list(SMOOTH_LEVELS.keys()),
 		}
 
 	def _loop(self) -> None:
@@ -380,21 +278,12 @@ class LiveFeed:
 					self.detail = "LiveScan on"
 					# Fresh connection → collect a new baseline once.
 					self._reset_baseline_locked(collect=True)
-			# Defer -gts until Live is producing frames. A geometry poll that
-			# runs first can reset PV/relay and leave the FOV blank forever
-			# while this loop swallows the error and waits on a dead stream.
-			next_geom: float | None = None
+			# Zoom/pan change the scan range, so the Mark Points overlay re-reads it.
+			next_geom: float | None = 0.0
 			while not self._stop.is_set():
 				if next_geom is not None and time.monotonic() >= next_geom:
-					try:
-						wait = self._poll_geometry(client)
-					except ConnectionError as exc:
-						with self._lock:
-							self.ok = False
-							self.detail = f"live reconnecting ({exc})"[:180]
-							self.png = None
-						raise
-					next_geom = time.monotonic() + wait
+					wait = self._poll_geometry(client)
+					next_geom = None if wait is None else time.monotonic() + wait
 				with self._lock:
 					if self.addr != addr:
 						break
@@ -403,9 +292,6 @@ class LiveFeed:
 					self._stop.wait(0.08)
 					continue
 				self.ingest_frame(frame)
-				if next_geom is None:
-					# First frame in — ask for scan range shortly after.
-					next_geom = time.monotonic() + 1.0
 				with self._lock:
 					if started and not self._collecting and self._mode == "raw":
 						from prairie_live.scan_geometry import format_optics_line
