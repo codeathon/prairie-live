@@ -552,6 +552,9 @@ async function tick() {
     liveMode = st.live.mode || "raw";
     baselineReady = !!st.live.baseline_ready;
     applyDffToggle();
+    if (st.live.smooth && $("smooth_sel").value !== st.live.smooth) {
+      $("smooth_sel").value = st.live.smooth;
+    }
     const o = st.live.optics || {};
     if (o.fov_width_um && o.optical_zoom) {
       $("live_cap").textContent =
@@ -601,6 +604,15 @@ async function boot() {
     liveMode = res.mode || next;
     baselineReady = !!res.baseline_ready;
     applyDffToggle();
+  });
+  $("smooth_sel").addEventListener("change", async () => {
+    const level = $("smooth_sel").value;
+    const res = await jpost("/api/live-smooth", { smooth: level });
+    if (!res.ok) {
+      $("live_cap").textContent = res.error || "smooth failed";
+      return;
+    }
+    if (res.smooth) $("smooth_sel").value = res.smooth;
   });
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;

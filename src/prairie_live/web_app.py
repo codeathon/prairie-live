@@ -301,6 +301,14 @@ class Handler(BaseHTTPRequestHandler):
 			except Exception as exc:
 				_json(self, {"ok": False, "error": str(exc)}, 400)
 			return
+		if u.path == "/api/live-smooth":
+			try:
+				body = json.loads(raw.decode("utf-8") or "{}")
+				snap = STATE.live.set_smooth(str(body.get("smooth") or body.get("level") or "med"))
+				_json(self, {"ok": True, **snap})
+			except Exception as exc:
+				_json(self, {"ok": False, "error": str(exc)}, 400)
+			return
 		if u.path == "/api/series-kind":
 			self._series_kind(raw)
 			return

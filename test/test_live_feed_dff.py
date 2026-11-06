@@ -7,7 +7,7 @@ import struct
 import numpy as np
 import pytest
 
-from prairie_live.live_feed import DISPLAY_BIN, LiveFeed, bin_mean
+from prairie_live.live_feed import DISPLAY_BIN, LiveFeed, bin_mean, gaussian_blur
 
 
 def _frame(val: float, h: int = 32, w: int = 32) -> np.ndarray:
@@ -102,3 +102,42 @@ def test_roi_dff_pct_positive_at_center():
 	out = feed.roi_dff_pct(pts, radius=2)
 	assert "1" in out
 	assert out["1"] > 0
+
+
+def test_gaussian_blur_preserves_shape():
+	img = np.random.default_rng(0).random((16, 16))
+	out = gaussian_blur(img, 1.0)
+	assert out.shape == img.shape
+	assert gaussian_blur(img, 0.0).shape == img.shape
+
+
+def test_smooth_med_rolling_mean_differs_from_last_frame():
+	"""Med averages recent frames so the PNG is not the last frame alone."""
+	feed = LiveFeed(baseline_n=200)  # stay in raw (no auto ΔF/F)
+	dark = np.zeros((32, 32), dtype=np.float64)
+	bright = np.zeros((32, 32), dtype=np.float64)
+	bright[8:24, 8:24] = 200.0
+
+	feed.set_smooth("off")
+	feed.ingest_frame(dark)
+	feed.ingest_frame(bright)
+	off_png = feed.png_bytes()
+	assert off_png
+	assert feed.snapshot()["smooth"] == "off"
+
+	feed.set_smooth("med")
+	assert feed.snapshot()["smooth_frames"] == 8
+	for _ in range(4):
+		feed.ingest_frame(dark)
+	for _ in range(4):
+		feed.ingest_frame(bright)
+	med_png = feed.png_bytes()
+	assert med_png
+	# Off ends on full-bright square; med mean is a dimmer square → different PNG.
+	assert med_png != off_png
+
+
+def test_set_smooth_rejects_unknown():
+	feed = LiveFeed(baseline_n=2)
+	with pytest.raises(ValueError, match="off|low|med|high"):
+		feed.set_smooth("ultra")
