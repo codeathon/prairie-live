@@ -143,8 +143,7 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   letter-spacing: 0.04em;
   color: #00ffff;
 }
-.fov-smooth select,
-.fov-smooth input[type="number"] {
+.fov-smooth select {
   margin: 0;
   padding: 2px 4px;
   font-size: 0.75rem;
@@ -154,10 +153,6 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   border: 1px solid #00cccc;
   border-radius: 4px;
   cursor: pointer;
-}
-.fov-smooth input[type="number"] {
-  width: 4.5rem;
-  cursor: text;
 }
 
 /* Two sub-columns: Rig + Session | Fat XML; log (+ candidates) share the rest. */

@@ -16,7 +16,6 @@ from prairie_live.trial_images import (
 	run_dir,
 	save_trial_images,
 	to_u8,
-	to_u8_clim,
 	trial_dir_name,
 )
 from prairie_live.viewer import (
@@ -40,16 +39,6 @@ def test_power_tag_and_trial_dir_name():
 	assert power_tag(12.5) == "p12p5"
 	assert trial_dir_name(3, 140) == "t0003_p140"
 	assert trial_dir_name(3) == "t0003"
-
-
-def test_to_u8_clim_fixed_stretch():
-	img = np.array([[0.0, 50.0], [100.0, 200.0]])
-	u8 = to_u8_clim(img, 0.0, 100.0)
-	assert u8.dtype == np.uint8
-	assert int(u8[0, 0]) == 0
-	assert int(u8[0, 1]) == pytest.approx(127, abs=1)
-	assert int(u8[1, 0]) == 255
-	assert int(u8[1, 1]) == 255  # clipped above hi
 
 
 def test_save_trial_images_layout(tmp_path: Path):

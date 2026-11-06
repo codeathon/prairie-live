@@ -87,15 +87,9 @@ class FrameBuffer:
 def to_u8(img: np.ndarray, *, p_lo: float = 1.0, p_hi: float = 99.0) -> np.ndarray:
 	"""Percentile-stretch float/int frame → uint8 for display."""
 	lo, hi = np.percentile(img, (p_lo, p_hi))
-	return to_u8_clim(img, lo, hi)
-
-
-def to_u8_clim(img: np.ndarray, lo: float, hi: float) -> np.ndarray:
-	"""Fixed black/white stretch (PV Z-scale style) → uint8."""
-	lo_f, hi_f = float(lo), float(hi)
-	if hi_f <= lo_f:
-		hi_f = lo_f + 1.0
-	scaled = (img.astype(np.float64) - lo_f) / (hi_f - lo_f)
+	if hi <= lo:
+		hi = lo + 1.0
+	scaled = (img.astype(np.float64) - lo) / (hi - lo)
 	return np.clip(scaled * 255.0, 0, 255).astype(np.uint8)
 
 
@@ -189,22 +183,11 @@ def gray_to_marked_rgb(
 	return draw_point_rings(rgb, fired_points, radius=radius, color=fired_color)
 
 
-def dff_rgb(
-	f0: np.ndarray,
-	f1: np.ndarray,
-	*,
-	lim: float | None = None,
-) -> np.ndarray:
-	"""Signed ΔF/F as blue–white–red RGB (no matplotlib).
-
-	``lim`` is the absolute ΔF/F that maps to full red/blue. ``None`` uses the
-	98th-percentile of |ΔF/F| (auto Z-scale — noisy maps stay loud).
-	"""
+def dff_rgb(f0: np.ndarray, f1: np.ndarray) -> np.ndarray:
+	"""Signed ΔF/F as blue–white–red RGB (no matplotlib)."""
 	eps = 1e-6
 	dff = (f1 - f0) / (np.abs(f0) + eps)
-	if lim is None or float(lim) <= 0:
-		lim = float(np.percentile(np.abs(dff), 98))
-	lim = float(lim)
+	lim = float(np.percentile(np.abs(dff), 98))
 	if lim <= 0:
 		lim = 1.0
 	t = np.clip(dff / lim, -1.0, 1.0)

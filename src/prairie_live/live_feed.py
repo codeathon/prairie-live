@@ -19,7 +19,6 @@ from prairie_live.trial_images import (
 	disk_mean,
 	png_bytes_rgb,
 	to_u8,
-	to_u8_clim,
 )
 from prairie_live.viewer import orient_fov
 
@@ -35,15 +34,6 @@ SMOOTH_LEVELS: dict[str, dict[str, float | int]] = {
 	"high": {"n": 18, "blur": 1.0},
 }
 DEFAULT_SMOOTH = "med"
-
-# Candidate -gts keys for PV image-window Z-scale (min/max). First hit wins.
-_PV_CLIM_KEY_PAIRS: tuple[tuple[str, str], ...] = (
-	("displayMin", "displayMax"),
-	("min", "max"),
-	("channelMin", "channelMax"),
-	("imageMin", "imageMax"),
-	("minDataValue", "maxDataValue"),
-)
 
 
 def bin_mean(img: np.ndarray, factor: int = DISPLAY_BIN) -> np.ndarray:
@@ -125,16 +115,6 @@ class LiveFeed:
 		self._mode = "raw"  # "raw" | "dff"
 		self._smooth = DEFAULT_SMOOTH
 		self._disp_buf = FrameBuffer(int(SMOOTH_LEVELS[DEFAULT_SMOOTH]["n"]))
-		# Display Z-scale: None = auto percentile / auto ΔF/F lim.
-		self._clim_lo: float | None = None
-		self._clim_hi: float | None = None
-		self._dff_lim: float | None = None
-		self._scale_source = "auto"  # auto | manual | pv
-		self._pv_scale_note = ""
-		self._grab_channel = 1
-		# Live stream's RelayClient (control + frames). Used by pull_pv_scale_now
-		# so the API does not open a competing frame socket.
-		self._active_client = None
 
 	def start(self) -> None:
 		if self._thread and self._thread.is_alive():
@@ -187,42 +167,6 @@ class LiveFeed:
 				self.png = self._encode_locked()
 			return self._snapshot_locked()
 
-	def set_scale(
-		self,
-		*,
-		lo: float | None = None,
-		hi: float | None = None,
-		dff_lim: float | None = None,
-		auto: bool = False,
-		source: str | None = None,
-	) -> dict[str, Any]:
-		"""Set Raw clim (ADU) and/or fixed |ΔF/F| lim. ``auto=True`` clears fixed scale."""
-		with self._lock:
-			if auto:
-				self._clim_lo = None
-				self._clim_hi = None
-				self._dff_lim = None
-				self._scale_source = "auto"
-				self._pv_scale_note = ""
-			else:
-				if lo is not None:
-					self._clim_lo = float(lo)
-				if hi is not None:
-					self._clim_hi = float(hi)
-				if dff_lim is not None:
-					self._dff_lim = float(dff_lim) if float(dff_lim) > 0 else None
-				if source:
-					self._scale_source = str(source)
-				elif self._clim_hi is not None or self._dff_lim is not None:
-					self._scale_source = "manual"
-			if self._current is not None:
-				self.png = self._encode_locked()
-			return self._snapshot_locked()
-
-	def set_grab_channel(self, channel: int) -> None:
-		with self._lock:
-			self._grab_channel = max(int(channel), 1)
-
 	def snapshot(self) -> dict:
 		with self._lock:
 			return self._snapshot_locked()
@@ -274,71 +218,10 @@ class LiveFeed:
 				had = self.geometry is not None
 				if had and err:
 					self.geometry_error = f"{err} (using last scan range)"
-		# Refresh image Z-scale from PV when user asked for PV scale.
-		with self._lock:
-			want_pv = self._scale_source == "pv"
-			ch = self._grab_channel
-		if want_pv and not err:
-			self._pull_pv_scale(client, ch)
 		if not err:
 			return 2.0
 		# Back off after a bounce; soft parse errors retry sooner.
 		return 30.0 if pv_bounced else 15.0
-
-	def _pull_pv_scale(self, client, channel: int) -> bool:
-		"""Try candidate -gts keys for channel display min/max. Returns True on hit."""
-		from prairie_live.scan_geometry import _try_state
-
-		ch = str(int(channel))
-		tried: list[str] = []
-		for kmin, kmax in _PV_CLIM_KEY_PAIRS:
-			# Prefer keyed-by-channel, then bare key.
-			for index in (ch, None):
-				hi = _try_state(client, kmax, index)
-				label = f"{kmax}" + (f"[{index}]" if index else "")
-				tried.append(label)
-				if hi is None or hi <= 0:
-					continue
-				lo = _try_state(client, kmin, index)
-				if lo is None:
-					lo = 0.0
-				with self._lock:
-					self._clim_lo = float(lo)
-					self._clim_hi = float(hi)
-					self._scale_source = "pv"
-					self._pv_scale_note = f"PV {label}={hi:g}"
-					if self._current is not None:
-						self.png = self._encode_locked()
-				return True
-		with self._lock:
-			self._pv_scale_note = (
-				"no PV display min/max via -gts ("
-				+ ", ".join(tried[:6])
-				+ "…); use Scale slider"
-			)
-		return False
-
-	def pull_pv_scale_now(self, client=None) -> dict[str, Any]:
-		"""One-shot pull (API). Sets source=pv and probes keys.
-
-		Uses ``client`` when given; otherwise the live stream's active client.
-		If neither is available, marks source=pv so the next geometry poll retries.
-		"""
-		with self._lock:
-			self._scale_source = "pv"
-			ch = self._grab_channel
-			c = client if client is not None else self._active_client
-		if c is None:
-			with self._lock:
-				self._pv_scale_note = "PV scale pending (waiting for live link)"
-				snap = self._snapshot_locked()
-			snap["pv_scale_ok"] = False
-			return snap
-		ok = self._pull_pv_scale(c, ch)
-		with self._lock:
-			snap = self._snapshot_locked()
-		snap["pv_scale_ok"] = ok
-		return snap
 
 	def png_bytes(self) -> bytes | None:
 		with self._lock:
@@ -400,12 +283,6 @@ class LiveFeed:
 		n = int(SMOOTH_LEVELS.get(self._smooth, SMOOTH_LEVELS[DEFAULT_SMOOTH])["n"])
 		self._disp_buf = FrameBuffer(n)
 
-	def _raw_u8(self, disp: np.ndarray) -> np.ndarray:
-		if self._clim_hi is not None:
-			lo = 0.0 if self._clim_lo is None else float(self._clim_lo)
-			return to_u8_clim(disp, lo, float(self._clim_hi))
-		return to_u8(disp)
-
 	def _encode_locked(self) -> bytes:
 		# Rolling mean → 4×4 bin → optional blur. Full-res _current stays for ROI.
 		src = self._disp_buf.mean()
@@ -422,11 +299,11 @@ class LiveFeed:
 			if blur > 0:
 				base = gaussian_blur(base, blur)
 			if base.shape != disp.shape:
-				u8 = self._raw_u8(disp)
+				u8 = to_u8(disp)
 				return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
-			rgb = dff_rgb(base, disp, lim=self._dff_lim)
+			rgb = dff_rgb(base, disp)
 			return png_bytes_rgb(rgb)
-		u8 = self._raw_u8(disp)
+		u8 = to_u8(disp)
 		return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
 
 	def _snapshot_locked(self) -> dict:
@@ -462,12 +339,6 @@ class LiveFeed:
 			"smooth": self._smooth,
 			"smooth_frames": int(cfg["n"]),
 			"smooth_levels": list(SMOOTH_LEVELS.keys()),
-			"scale_source": self._scale_source,
-			"clim_lo": self._clim_lo,
-			"clim_hi": self._clim_hi,
-			"dff_lim": self._dff_lim,
-			"pv_scale_note": self._pv_scale_note,
-			"grab_channel": self._grab_channel,
 		}
 
 	def _loop(self) -> None:
@@ -497,8 +368,6 @@ class LiveFeed:
 		client.connect()
 		started = False
 		try:
-			with self._lock:
-				self._active_client = client
 			try:
 				client.start_live()
 				started = True
@@ -546,7 +415,4 @@ class LiveFeed:
 						)
 				self._stop.wait(0.08)
 		finally:
-			with self._lock:
-				if self._active_client is client:
-					self._active_client = None
 			client.disconnect()
