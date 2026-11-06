@@ -16,7 +16,15 @@
       <div class="tile" id="tile_live">
         <div class="tile-head">
           <h3>Live scan</h3>
-          <button type="button" id="marks_toggle" class="fov-toggle" aria-pressed="true" title="Hide Mark Points overlay">MP</button>
+          <div class="fov-toggles">
+            <button type="button" id="baseline_btn" class="fov-toggle" title="Recompute 60-frame ΔF/F baseline">Baseline</button>
+            <button type="button" id="dff_toggle" class="fov-toggle" aria-pressed="false" title="Show raw FOV (ΔF/F needs baseline)">Raw</button>
+            <label class="fov-scale" title="Raw white-point ADU (PV LUT handle on X). Empty = auto percentile.">Max
+              <input id="scale_hi" type="number" min="1" step="1" placeholder="auto" />
+            </label>
+            <button type="button" id="scale_auto_btn" class="fov-toggle" title="Auto percentile stretch">Auto</button>
+            <button type="button" id="marks_toggle" class="fov-toggle" aria-pressed="true" title="Hide Mark Points overlay">MP</button>
+          </div>
         </div>
         <div class="fov-wrap">
           <img id="live_img" alt="live FOV" />
@@ -51,20 +59,45 @@
       <input id="xml_file" type="file" accept=".xml,.gpl" />
     </label>
     <p id="xml_path" class="muted"></p>
-    <label>Powers
-      <input id="powers" type="text" placeholder="e.g. 160 or 75,140,200" />
-    </label>
     <div class="row">
-      <label>Seed <input id="seed" type="number" /></label>
-      <label>Repetitions <input id="repetitions" type="number" /></label>
-      <label title="Count a point as changed when |ΔF/F| is above this (burns often go negative).">|ΔF/F| min <input id="stim_dff_min" type="number" step="0.01" /></label>
+      <button id="gen_groups" type="button" title="Build random groups of 3 for a manual PV Mark Points run">Generate random groups</button>
     </div>
-    <p id="plan" class="plan"></p>
     <div class="row">
-      <button id="run" type="button">Run</button>
-      <button id="stop" type="button" disabled>Stop</button>
+      <button id="run" type="button" disabled title="Disabled on this branch — use Generate random groups + manual PV Mark Points">Run</button>
+      <button id="stop" type="button" disabled title="Disabled on this branch — use Generate random groups + manual PV Mark Points">Stop</button>
     </div>
   </section>
+
+  <dialog id="gen_dlg">
+    <form method="dialog" id="gen_form">
+      <h2>Generate random groups</h2>
+      <p class="muted">Exactly 3 points per group (unique within a group; every point appears in at least one group; points may repeat across groups). Saves a series <code>.xml</code> plus a companion Galvo Points <code>.gpl</code> — in PrairieView load the <code>.gpl</code> first, then the series, then run Mark Points.</p>
+      <label># groups <input id="gen_n" type="number" min="1" value="10" required /></label>
+      <label>Power (UI Display) <input id="gen_power" type="number" min="0" step="1" value="160" required /></label>
+      <label>Initial Delay (ms) <input id="gen_delay" type="number" min="0" step="any" value="22.1" required /></label>
+      <label>Seed (optional) <input id="gen_seed" type="number" placeholder="random" /></label>
+      <div class="row">
+        <button id="gen_cancel" type="button" value="cancel">Cancel</button>
+        <button id="gen_ok" type="submit" value="ok">Save XML…</button>
+      </div>
+      <p id="gen_status" class="muted"></p>
+    </form>
+  </dialog>
+
+  <dialog id="seq_dlg">
+    <form method="dialog" id="seq_form">
+      <h2>Random group sequence</h2>
+      <p class="muted">Input XML already has multi-point groups (nested coords or Indices like <code>1-3</code>). Build a length-<strong>N</strong> series by concatenating shuffled copies of the catalog. Fat catalogs also get a companion <code>.gpl</code>; slim Group/Indices series keeps your existing PV galvo list. Initial Delay and Repetitions stay from each source group.</p>
+      <p id="seq_catalog" class="muted"></p>
+      <label>Sequence length N <input id="seq_n" type="number" min="1" value="20" required /></label>
+      <label>Seed (optional) <input id="seq_seed" type="number" placeholder="random" /></label>
+      <div class="row">
+        <button id="seq_cancel" type="button" value="cancel">Cancel</button>
+        <button id="seq_ok" type="submit" value="ok">Save XML…</button>
+      </div>
+      <p id="seq_status" class="muted"></p>
+    </form>
+  </dialog>
 
   <section class="card xml-card">
     <h2>From Fat XML</h2>
@@ -75,6 +108,24 @@
   <section class="card log-card">
     <h2>Trial log</h2>
     <pre id="log"></pre>
+  </section>
+
+  <section class="card" id="group_box" hidden>
+    <h2 id="group_box_title">Selected groups</h2>
+    <p id="group_box_help" class="muted">Click a colored Mark Point on Live (or a row) to toggle its group. After a manual PV run, save the keepers as a new series of 3-point groups.</p>
+    <div class="table-wrap">
+    <table id="group_table">
+      <thead id="group_table_head">
+        <tr><th></th><th>group</th><th>points</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <div class="row" id="group_box_actions">
+      <button id="grp_clear" type="button">Clear</button>
+      <button id="grp_save" type="button">Save selected groups XML</button>
+    </div>
+    <p id="grp_status" class="muted"></p>
   </section>
 
   <section class="card" id="cand_box" hidden>

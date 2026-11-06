@@ -49,6 +49,15 @@ class AppState:
 		self.planned_powers: list[float] = []
 		self.n_trials: int | None = None
 		self.live = LiveFeed(DEFAULT_RELAY)
+		# Offline random groups (manual PV run on scope PC).
+		self.random_groups: list[dict] = []
+		self.selected_group_ids: list[str] = []
+		self.random_groups_power: float | None = None
+		self.random_groups_reps: int | None = None
+		self.random_groups_path: str | None = None
+		self.random_groups_meta: dict[str, Any] = {}
+		# Ordered draws from group-catalog Generate (length N); empty for pool mode.
+		self.group_sequence: list[dict] = []
 
 	def append(self, line: str) -> None:
 		with self.lock:
@@ -109,6 +118,7 @@ class Handler(BaseHTTPRequestHandler):
 					"powers": "",
 					"seed": d["seed"],
 					"repetitions": d["repetitions"],
+					"initial_delay": d.get("initial_delay_ms", 22.1),
 					"stim_dff_min": d["stim_dff_min"],
 					"com_ports": ports,
 					"relay": probe_relay(DEFAULT_RELAY),
@@ -163,6 +173,35 @@ class Handler(BaseHTTPRequestHandler):
 				list(STATE.points or []), geom, STATE.live.scan_geometry_error()
 			)
 			out["frame_wh"] = list(wh) if wh else None
+			with STATE.lock:
+				groups = list(STATE.random_groups or [])
+				sel = set(STATE.selected_group_ids or [])
+			# Color Mark Points by random-group membership (no centroid circles —
+			# group averages sit near FOV center and are hard to pick).
+			by_pid: dict[str, list[dict[str, Any]]] = {}
+			g_rows: list[dict[str, Any]] = []
+			for g in groups:
+				rgb = [int(x) for x in (g.get("rgb") or [0, 255, 255])]
+				gid = str(g["id"])
+				row = {
+					"id": gid,
+					"name": str(g.get("name") or f"G{gid}"),
+					"point_ids": list(g.get("point_ids") or []),
+					"rgb": rgb,
+					"selected": gid in sel,
+				}
+				g_rows.append(row)
+				for pid in row["point_ids"]:
+					by_pid.setdefault(str(pid), []).append(row)
+			for p in out.get("points") or []:
+				membership = by_pid.get(str(p.get("id")), [])
+				p["group_ids"] = [m["id"] for m in membership]
+				if not membership:
+					continue
+				picked = next((m for m in membership if m["selected"]), membership[0])
+				p["rgb"] = list(picked["rgb"])
+				p["group_selected"] = any(m["selected"] for m in membership)
+			out["groups"] = g_rows
 			_json(self, out)
 			return
 		if u.path == "/api/status":
@@ -187,6 +226,28 @@ class Handler(BaseHTTPRequestHandler):
 						"has_candidates": bool(STATE.ranked),
 						"live": STATE.live.snapshot(),
 						"boards": boards,
+						"random_groups": [
+							{
+								"id": g["id"],
+								"name": g.get("name"),
+								"point_ids": g.get("point_ids"),
+								"rgb": g.get("rgb"),
+							}
+							for g in STATE.random_groups
+						],
+						"group_sequence": [
+							{
+								"ord": g.get("ord"),
+								"id": g["id"],
+								"name": g.get("name"),
+								"point_ids": g.get("point_ids"),
+								"rgb": g.get("rgb"),
+							}
+							for g in STATE.group_sequence
+						],
+						"selected_group_ids": list(STATE.selected_group_ids),
+						"random_groups_power": STATE.random_groups_power,
+						"random_groups_path": STATE.random_groups_path,
 						"ranked": [
 							{
 								"id": r["id"],
@@ -225,6 +286,46 @@ class Handler(BaseHTTPRequestHandler):
 			except Exception as exc:
 				_json(self, {"ok": False, "error": str(exc)}, 400)
 			return
+		if u.path == "/api/live-baseline":
+			try:
+				snap = STATE.live.request_baseline()
+				_json(self, {"ok": True, **snap})
+			except Exception as exc:
+				_json(self, {"ok": False, "error": str(exc)}, 400)
+			return
+		if u.path == "/api/live-mode":
+			try:
+				body = json.loads(raw.decode("utf-8") or "{}")
+				snap = STATE.live.set_mode(str(body.get("mode") or "raw"))
+				_json(self, {"ok": True, **snap})
+			except Exception as exc:
+				_json(self, {"ok": False, "error": str(exc)}, 400)
+			return
+		if u.path == "/api/live-scale":
+			try:
+				body = json.loads(raw.decode("utf-8") or "{}")
+				if body.get("auto") or str(body.get("source") or "").lower() == "auto":
+					snap = STATE.live.set_scale(auto=True)
+				else:
+					lo = body.get("lo", body.get("clim_lo"))
+					hi = body.get("hi", body.get("clim_hi"))
+					if hi is None:
+						hi = body.get("max")
+					kwargs: dict = {}
+					if lo not in (None, ""):
+						kwargs["lo"] = float(lo)
+					if hi not in (None, ""):
+						kwargs["hi"] = float(hi)
+					if not kwargs:
+						raise ValueError("provide hi (ADU white-point), or auto")
+					snap = STATE.live.set_scale(**kwargs)
+				_json(self, {"ok": True, **snap})
+			except Exception as exc:
+				_json(self, {"ok": False, "error": str(exc)}, 400)
+			return
+		if u.path == "/api/series-kind":
+			self._series_kind(raw)
+			return
 		if u.path == "/api/stop":
 			STATE.stop.set()
 			STATE.append("stop requested — finishing current trial")
@@ -232,6 +333,15 @@ class Handler(BaseHTTPRequestHandler):
 			return
 		if u.path == "/api/save-candidates":
 			self._save(raw)
+			return
+		if u.path == "/api/random-groups":
+			self._random_groups(raw)
+			return
+		if u.path == "/api/select-groups":
+			self._select_groups(raw)
+			return
+		if u.path == "/api/selected-groups-xml":
+			self._selected_groups_xml(raw)
 			return
 		self.send_error(404)
 
@@ -248,11 +358,45 @@ class Handler(BaseHTTPRequestHandler):
 				path = str(STATE.xml_dir / Path(name).name)
 				Path(path).write_bytes(base64.b64decode(b64))
 			if not path or not Path(path).is_file():
-				raise ValueError("choose a Fat Mark Points XML")
+				raise ValueError("choose a Mark Points XML")
+			from prairie_live.random_groups import (
+				catalog_groups_from_steps,
+				classify_series,
+			)
+
+			steps = load_mark_points_file(path)
+			kind = classify_series(steps)
 			fields = summarize_fat_xml(path)
-			pts = extract_unique_points(load_mark_points_file(path))
-			ng = n_groups_for_pool(len(pts))
-			sizes = group_sizes_for_pool(len(pts), n_groups=ng)
+			if kind == "group_catalog":
+				catalog = catalog_groups_from_steps(steps)
+				try:
+					pts = extract_unique_points(steps)
+				except ValueError:
+					pts = []
+				# Slim Group/Indices XML has no coords — keep the previously
+				# loaded fat Mark Points pool for Live overlay / optional .gpl.
+				if not pts:
+					with STATE.lock:
+						prior = list(STATE.points or [])
+					if prior:
+						pts = prior
+						fields = dict(fields)
+						fields["fov_note"] = (
+							f"{fields.get('fov_note') or 'Group catalog'} "
+							f"(keeping {len(pts)} points from earlier fat XML)"
+						)
+				ng = len(catalog)
+				sizes: list[int] = [len(g["point_ids"]) for g in catalog]
+				with STATE.lock:
+					STATE.random_groups = catalog
+					STATE.selected_group_ids = []
+					STATE.group_sequence = []
+			else:
+				pts = extract_unique_points(steps)
+				ng = n_groups_for_pool(len(pts))
+				sizes = group_sizes_for_pool(len(pts), n_groups=ng)
+				with STATE.lock:
+					STATE.group_sequence = []
 			STATE.series_path = path
 			STATE.xml_fields = fields
 			STATE.points = pts
@@ -265,9 +409,9 @@ class Handler(BaseHTTPRequestHandler):
 					"ok": True,
 					"path": path,
 					"fields": fields,
+					"kind": kind,
 					"n_groups": ng,
 					"group_sizes": sizes,
-					"plan": f"{len(pts)} points → {len(sizes)} groups ({'+'.join(map(str, sizes))})",
 				},
 			)
 		except Exception as exc:
@@ -365,6 +509,400 @@ class Handler(BaseHTTPRequestHandler):
 			)
 			STATE.append(f"next-round XML → {path}")
 			_json(self, {"ok": True, "path": str(path)})
+		except Exception as exc:
+			_json(self, {"ok": False, "error": str(exc)}, 400)
+
+	def _series_meta(self) -> dict[str, Any]:
+		from prairie_live.markpoints import template_meta
+
+		series = STATE.series_path
+		if series and Path(series).is_file():
+			return template_meta(load_mark_points_file(series))
+		return dict(STATE.random_groups_meta or template_meta([]))
+
+	def _series_kind(self, raw: bytes) -> None:
+		from prairie_live.markpoints import template_meta
+		from prairie_live.random_groups import (
+			catalog_groups_from_steps,
+			classify_series,
+		)
+
+		try:
+			body = json.loads(raw.decode("utf-8") or "{}")
+			series = body.get("series") or STATE.series_path
+			if not series or not Path(series).is_file():
+				raise ValueError("choose a Fat Mark Points XML first")
+			steps = load_mark_points_file(series)
+			kind = classify_series(steps)
+			n_groups = 0
+			n_points = 0
+			slim = False
+			initial_delay = "22.1"
+			if kind == "group_catalog":
+				cat = catalog_groups_from_steps(steps)
+				n_groups = len(cat)
+				n_points = len({pid for g in cat for pid in g["point_ids"]})
+				slim = all(bool(g.get("slim")) for g in cat)
+				src0 = (cat[0].get("source_step") or {}) if cat else {}
+				if src0.get("initial_delay") not in (None, ""):
+					initial_delay = str(src0["initial_delay"])
+				else:
+					meta = template_meta(steps)
+					if meta.get("initial_delay") not in (None, ""):
+						initial_delay = str(meta["initial_delay"])
+			else:
+				pts = extract_unique_points(steps)
+				n_points = len(pts)
+			_json(
+				self,
+				{
+					"ok": True,
+					"kind": kind,
+					"n_groups": n_groups,
+					"n_points": n_points,
+					"slim": slim,
+					"initial_delay": initial_delay,
+					"series": str(series),
+				},
+			)
+		except Exception as exc:
+			_json(self, {"ok": False, "error": str(exc)}, 400)
+
+	def _random_groups(self, raw: bytes) -> None:
+		from prairie_live.markpoints import template_meta
+		from prairie_live.random_groups import (
+			build_group_sequence,
+			build_random_groups,
+			catalog_groups_from_steps,
+			catalog_power,
+			classify_series,
+			export_timestamp,
+			groups_gpl_text,
+			groups_xml_text,
+			sequence_xml_text,
+			write_groups_gpl,
+			write_groups_xml,
+			write_sequence_xml,
+		)
+
+		try:
+			body = json.loads(raw.decode("utf-8") or "{}")
+			series = body.get("series") or STATE.series_path
+			if not series or not Path(series).is_file():
+				raise ValueError("choose a Fat Mark Points XML first")
+			seed_raw = body.get("seed")
+			seed = int(seed_raw) if seed_raw not in (None, "") else None
+			steps = load_mark_points_file(series)
+			kind = str(body.get("mode") or classify_series(steps))
+			if kind in ("sequence", "group_catalog"):
+				self._random_group_sequence(
+					body,
+					series=str(series),
+					steps=steps,
+					seed=seed,
+					template_meta=template_meta,
+					catalog_groups_from_steps=catalog_groups_from_steps,
+					build_group_sequence=build_group_sequence,
+					catalog_power=catalog_power,
+					sequence_xml_text=sequence_xml_text,
+					write_sequence_xml=write_sequence_xml,
+					groups_gpl_text=groups_gpl_text,
+					write_groups_gpl=write_groups_gpl,
+				)
+				return
+			n_groups = int(body.get("n_groups") or 0)
+			power = float(body.get("power") if body.get("power") not in (None, "") else 160)
+			pts = extract_unique_points(steps)
+			meta = template_meta(steps)
+			# Repetitions stay from the source series; dialog sets Initial Delay.
+			delay_raw = body.get("initial_delay")
+			if delay_raw not in (None, ""):
+				meta["initial_delay"] = str(delay_raw)
+			repetitions = int(meta.get("repetitions") or 1)
+			groups = build_random_groups(pts, n_groups, seed=seed)
+			xml_text = groups_xml_text(groups, power=power, meta=meta)
+			gpl_text = groups_gpl_text(groups, power=power, meta=meta)
+			ts = export_timestamp()
+			base_name = f"random_groups_{ts}"
+			save_path = body.get("path") or body.get("save_path")
+			path_str: str | None = None
+			gpl_path: str | None = None
+			if save_path:
+				xml_path = Path(str(save_path))
+				# Keep user path stem but ensure .xml; stamp only when using defaults.
+				path_str = str(
+					write_groups_xml(groups, power=power, meta=meta, path=xml_path)
+				)
+				gpl_path = str(
+					write_groups_gpl(
+						groups,
+						power=power,
+						meta=meta,
+						path=xml_path.with_suffix(".gpl"),
+					)
+				)
+			else:
+				dest = STATE.xml_dir / f"{base_name}.xml"
+				path_str = str(
+					write_groups_xml(groups, power=power, meta=meta, path=dest)
+				)
+				gpl_path = str(
+					write_groups_gpl(
+						groups,
+						power=power,
+						meta=meta,
+						path=dest.with_suffix(".gpl"),
+					)
+				)
+			with STATE.lock:
+				STATE.points = pts
+				STATE.series_path = series
+				STATE.random_groups = groups
+				STATE.selected_group_ids = []
+				STATE.group_sequence = []
+				STATE.random_groups_power = power
+				STATE.random_groups_reps = repetitions
+				STATE.random_groups_path = path_str
+				STATE.random_groups_meta = meta
+			covered = {pid for g in groups for pid in g["point_ids"]}
+			pool_ids = {str(p["id"]) for p in pts}
+			STATE.append(
+				f"random groups  n={len(groups)}  size=3  power={power:g}  "
+				f"delay={meta.get('initial_delay')}  "
+				f"cover={len(covered)}/{len(pool_ids)}  "
+				f"→ {path_str} + {gpl_path}"
+			)
+			_json(
+				self,
+				{
+					"ok": True,
+					"mode": "points_pool",
+					"path": path_str,
+					"gpl_path": gpl_path,
+					"n_groups": len(groups),
+					"n_points": len(pool_ids),
+					"n_covered": len(covered),
+					"power": power,
+					"repetitions": repetitions,
+					"initial_delay": meta.get("initial_delay"),
+					"xml": xml_text,
+					"gpl": gpl_text,
+					"timestamp": ts,
+					"filename": f"{base_name}.xml",
+					"gpl_filename": f"{base_name}.gpl",
+					"groups": [
+						{
+							"id": g["id"],
+							"name": g["name"],
+							"point_ids": g["point_ids"],
+							"rgb": g["rgb"],
+						}
+						for g in groups
+					],
+				},
+			)
+		except Exception as exc:
+			_json(self, {"ok": False, "error": str(exc)}, 400)
+
+	def _random_group_sequence(self, body: dict, **kw: Any) -> None:
+		from prairie_live.random_groups import sequence_is_slim
+
+		series = kw["series"]
+		steps = kw["steps"]
+		seed = kw["seed"]
+		template_meta = kw["template_meta"]
+		catalog_groups_from_steps = kw["catalog_groups_from_steps"]
+		build_group_sequence = kw["build_group_sequence"]
+		catalog_power = kw["catalog_power"]
+		sequence_xml_text = kw["sequence_xml_text"]
+		write_sequence_xml = kw["write_sequence_xml"]
+		groups_gpl_text = kw["groups_gpl_text"]
+		write_groups_gpl = kw["write_groups_gpl"]
+
+		from prairie_live.random_groups import export_timestamp
+
+		n_raw = body.get("n_sequences", body.get("n_groups"))
+		n_seq = int(n_raw or 0)
+		if n_seq < 1:
+			raise ValueError("n_sequences must be >= 1")
+		catalog = catalog_groups_from_steps(steps)
+		meta = template_meta(steps)
+		# Sequence dialog is seed-only; keep each source group's InitialDelay/Reps.
+		sequence = build_group_sequence(catalog, n_seq, seed=seed)
+		power = catalog_power(catalog)
+		xml_text = sequence_xml_text(sequence, meta=meta)
+		slim = sequence_is_slim(sequence)
+		# Slim Indices/Group series has no coords — companion .gpl cannot be built;
+		# user keeps the existing Galvo Point List loaded in PrairieView.
+		gpl_text: str | None = None
+		gpl_path: str | None = None
+		ts = export_timestamp()
+		base_name = f"group_sequence_{ts}"
+		save_path = body.get("path") or body.get("save_path")
+		if save_path:
+			xml_path = Path(str(save_path))
+			path_str = str(write_sequence_xml(sequence, meta=meta, path=xml_path))
+			if not slim:
+				gpl_path = str(
+					write_groups_gpl(
+						catalog,
+						power=power,
+						meta=meta,
+						path=xml_path.with_suffix(".gpl"),
+					)
+				)
+				gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
+		else:
+			dest = STATE.xml_dir / f"{base_name}.xml"
+			path_str = str(write_sequence_xml(sequence, meta=meta, path=dest))
+			if not slim:
+				gpl_path = str(
+					write_groups_gpl(
+						catalog, power=power, meta=meta, path=dest.with_suffix(".gpl")
+					)
+				)
+				gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
+		try:
+			pts = extract_unique_points(steps)
+		except ValueError:
+			pts = []
+		n_points = len(pts) or len({pid for g in catalog for pid in g["point_ids"]})
+		seq_rows = [
+			{
+				"ord": i,
+				"id": str(g["id"]),
+				"name": str(g.get("name") or f"G{g['id']}"),
+				"point_ids": list(g.get("point_ids") or []),
+				"rgb": list(g.get("rgb") or []),
+			}
+			for i, g in enumerate(sequence, start=1)
+		]
+		# Overlay uses catalog colors; bottom box shows the ordered sequence.
+		with STATE.lock:
+			STATE.points = pts
+			STATE.series_path = series
+			STATE.random_groups = catalog
+			STATE.group_sequence = seq_rows
+			STATE.selected_group_ids = []
+			STATE.random_groups_power = power
+			STATE.random_groups_reps = int(meta.get("repetitions") or 1)
+			STATE.random_groups_path = path_str
+			STATE.random_groups_meta = meta
+		gpl_bit = f" + {gpl_path}" if gpl_path else " (no .gpl; keep PV galvo list)"
+		STATE.append(
+			f"group sequence  n={n_seq}  catalog={len(catalog)}  "
+			f"power={power:g}  → {path_str}{gpl_bit}"
+		)
+		_json(
+			self,
+			{
+				"ok": True,
+				"mode": "sequence",
+				"slim": slim,
+				"path": path_str,
+				"gpl_path": gpl_path,
+				"n_groups": n_seq,
+				"n_sequences": n_seq,
+				"n_catalog": len(catalog),
+				"n_points": n_points,
+				"power": power,
+				"xml": xml_text,
+				"gpl": gpl_text,
+				"timestamp": ts,
+				"initial_delay": meta.get("initial_delay"),
+				"filename": f"{base_name}.xml",
+				"gpl_filename": f"{base_name}.gpl" if gpl_text else None,
+				"groups": [
+					{
+						"id": g["id"],
+						"name": g["name"],
+						"point_ids": g["point_ids"],
+						"rgb": g["rgb"],
+					}
+					for g in catalog
+				],
+				"sequence": seq_rows,
+				"sequence_ids": [str(g["id"]) for g in sequence],
+			},
+		)
+
+	def _select_groups(self, raw: bytes) -> None:
+		try:
+			body = json.loads(raw.decode("utf-8") or "{}")
+			ids = [str(i) for i in (body.get("ids") or [])]
+			known = {str(g["id"]) for g in STATE.random_groups}
+			bad = [i for i in ids if i not in known]
+			if bad and STATE.random_groups:
+				raise ValueError(f"unknown group id(s): {', '.join(bad)}")
+			with STATE.lock:
+				STATE.selected_group_ids = ids
+			_json(self, {"ok": True, "ids": ids})
+		except Exception as exc:
+			_json(self, {"ok": False, "error": str(exc)}, 400)
+
+	def _selected_groups_xml(self, raw: bytes) -> None:
+		from prairie_live.random_groups import (
+			export_timestamp,
+			groups_gpl_text,
+			groups_xml_text,
+			select_groups_by_id,
+			write_groups_gpl,
+			write_groups_xml,
+		)
+
+		try:
+			body = json.loads(raw.decode("utf-8") or "{}")
+			ids = body.get("ids") or list(STATE.selected_group_ids)
+			if not ids:
+				raise ValueError("no groups selected")
+			if STATE.random_groups_power is None:
+				raise ValueError("generate random groups first")
+			picked = select_groups_by_id(STATE.random_groups, ids)
+			meta = STATE.random_groups_meta or self._series_meta()
+			power = float(STATE.random_groups_power)
+			# Series = selected groups only; companion .gpl = full renumbered
+			# pool so Indices in the series still resolve (Point N ↔ Index N).
+			catalog = STATE.random_groups or picked
+			xml_text = groups_xml_text(picked, power=power, meta=meta)
+			gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
+			ts = export_timestamp()
+			base_name = f"selected_groups_{ts}"
+			save_path = body.get("path") or body.get("save_path")
+			if save_path:
+				path = write_groups_xml(
+					picked, power=power, meta=meta, path=Path(str(save_path))
+				)
+				gpl_path = write_groups_gpl(
+					catalog, power=power, meta=meta, path=path.with_suffix(".gpl")
+				)
+			else:
+				path = write_groups_xml(
+					picked,
+					power=power,
+					meta=meta,
+					path=STATE.xml_dir / f"{base_name}.xml",
+				)
+				gpl_path = write_groups_gpl(
+					catalog,
+					power=power,
+					meta=meta,
+					path=path.with_suffix(".gpl"),
+				)
+			STATE.append(f"selected groups ({len(picked)}) → {path} + {gpl_path}")
+			_json(
+				self,
+				{
+					"ok": True,
+					"path": str(path),
+					"gpl_path": str(gpl_path),
+					"n_groups": len(picked),
+					"xml": xml_text,
+					"gpl": gpl_text,
+					"timestamp": ts,
+					"filename": f"{base_name}.xml",
+					"gpl_filename": f"{base_name}.gpl",
+				},
+			)
 		except Exception as exc:
 			_json(self, {"ok": False, "error": str(exc)}, 400)
 

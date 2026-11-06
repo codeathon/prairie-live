@@ -5,10 +5,18 @@ from __future__ import annotations
 import os
 from typing import Any
 
-# Scope DHCP address changes; `gui --relay` / PRAIRIE_LIVE_RELAY override it.
-DEFAULT_RELAY = os.environ.get("PRAIRIE_LIVE_RELAY") or "10.33.107.221:25100"
+# Scope-first default (this branch): GUI + relay on the scope PC.
+# Override with `gui --relay` / PRAIRIE_LIVE_RELAY for an analysis-PC setup.
+DEFAULT_RELAY = os.environ.get("PRAIRIE_LIVE_RELAY") or "127.0.0.1:25100"
 DEFAULT_SERIAL = "COM3"
 DEFAULT_STIM_MODE = "slm"
+# Live optics on the scope (Zoom 1.5). Zoom 1 is ~1136.7 µm / 2.220 µm/px / ±4.20356 V.
+DEFAULT_OPTICAL_ZOOM = 1.5
+DEFAULT_IMAGE_PX = 512
+DEFAULT_FOV_WIDTH_UM = 757.8
+DEFAULT_FOV_HEIGHT_UM = 757.8
+DEFAULT_PIXEL_SIZE_UM = 1.480
+DEFAULT_SCAN_AMP_ZOOM1 = 4.2035577285
 # Bruker System Trigger BNC label (DTR → Trig In 1). Older configs used "PFI1".
 DEFAULT_TRIGGER_SELECTION = "Trig In 1"
 # PVSavedMarkPointSeriesElements uses a GUID, not the label. This is Trig In 1
@@ -58,8 +66,8 @@ def lab_defaults() -> dict[str, Any]:
 		"port": 1236,
 		"log": "trials.jsonl",
 		"images_dir": "trial_images",
-		"image_width_px": 512,
-		"image_height_px": 512,
+		"image_width_px": DEFAULT_IMAGE_PX,
+		"image_height_px": DEFAULT_IMAGE_PX,
 		"laser": "Monaco",
 		"use_3d": False,
 		# None: use the Mark Points file (PV default is one point at a time).
@@ -70,9 +78,11 @@ def lab_defaults() -> dict[str, Any]:
 		"duration_ms": 100.0,
 		"initial_delay_ms": 22.1,
 		"inter_point_delay_ms": 10.0,
-		"fov_width_um": 1136.7,
-		"fov_height_um": 1136.7,
-		"pixel_size_um": 2.220,
+		"optical_zoom": DEFAULT_OPTICAL_ZOOM,
+		"fov_width_um": DEFAULT_FOV_WIDTH_UM,
+		"fov_height_um": DEFAULT_FOV_HEIGHT_UM,
+		"pixel_size_um": DEFAULT_PIXEL_SIZE_UM,
+		"scan_amp_zoom1": DEFAULT_SCAN_AMP_ZOOM1,
 		"ttl_width": 0.01,
 		"inter_trial": 0.5,
 		"pad_ms": 100.0,

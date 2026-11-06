@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Slim PVSaved group series: Indices only (no nested Point coords). Needs a .gpl in PV. -->
+<PVSavedMarkPointSeriesElements Iterations="1" IterationDelay="0.00" CalcFunctMap="False">
+  <PVMarkPointElement Repetitions="4" UncagingLaser="Monaco" UncagingLaserPower="0.25" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="36" SpiralRevolutions="8" Points="Group 4" Indices="1-3" />
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="4" UncagingLaser="Monaco" UncagingLaserPower="0.25" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="36" SpiralRevolutions="8" Points="Group 5" Indices="7-9" />
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="4" UncagingLaser="Monaco" UncagingLaserPower="0.25" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="36" SpiralRevolutions="8" Points="Group 7" Indices="4-6" />
+  </PVMarkPointElement>
+  <PVMarkPointElement Repetitions="4" UncagingLaser="Monaco" UncagingLaserPower="0.25" TriggerFrequency="None" TriggerIdentifier="00000000-0000-0000-0000-000000000000" TriggerCount="1" AsyncSyncFrequency="None" VoltageOutputCategoryName="None" VoltageRecCategoryName="None">
+    <PVGalvoPointElement InitialDelay="22.1" InterPointDelay="10" Duration="36" SpiralRevolutions="8" Points="Group 6" Indices="10-12" />
+  </PVMarkPointElement>
+</PVSavedMarkPointSeriesElements>

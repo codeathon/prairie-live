@@ -100,10 +100,18 @@ def parse_galvo_point_list(xml_string: str) -> list[dict]:
 			continue
 		if "X" not in el.attrib or "Y" not in el.attrib:
 			continue
+		# Prefer "Point N" → id N (PV .gpl Index is 0-based; series Indices are not).
+		name_attr = str(el.attrib.get("Name") or "").strip()
+		name_num = None
+		if name_attr.lower().startswith("point "):
+			tail = name_attr.split(None, 1)[-1]
+			if tail.isdigit():
+				name_num = tail
+		raw_index = str(el.attrib.get("Index") or "").strip()
 		idx = str(
-			el.attrib.get("Index")
+			name_num
 			or el.attrib.get("Id")
-			or el.attrib.get("Name")
+			or (raw_index if raw_index.isdigit() else None)
 			or (len(pts) + 1)
 		)
 		if idx in seen:
@@ -111,7 +119,7 @@ def parse_galvo_point_list(xml_string: str) -> list[dict]:
 		seen.add(idx)
 		row = {
 			"id": idx,
-			"name": el.attrib.get("Name", f"Point {idx}"),
+			"name": name_attr or f"Point {idx}",
 			"is_active": True,
 			"x": float(el.attrib["X"]),
 			"y": float(el.attrib["Y"]),
@@ -450,7 +458,8 @@ def groups_to_xml(groups: list[dict]) -> str:
 		active_pts = [pt for pt in g["points"] if pt.get("is_active", True)]
 		if not active_pts:
 			continue
-		points_str = g.get("raw_points") or g.get("name") or "Group"
+		# Name list must match nested <Point Index>: "Point 7" ↔ Index 7.
+		points_str = ", ".join(f"Point {pt.get('id')}" for pt in active_pts)
 		el = ET.SubElement(root, "PVMarkPointElement")
 		el.set("Repetitions", str(g["repetitions"]))
 		el.set("UncagingLaser", str(g.get("uncaging_laser", _DEFAULT_LASER)))
@@ -571,16 +580,30 @@ def galvo_points_to_gpl_xml(
 	Why: .gpl coords are often outside 0–1 imaging FOV; -MarkAllPoints treats
 	numbers as FOV fractions and misplaces them. -LoadMarkPoints of a .gpl
 	keeps Prairie's native interpretation (same as the UI).
+
+	Must use ``<PVGalvoPoint>`` children (not series ``<Point>``) — PrairieView's
+	``clsGalvoPointList.Import`` deserializes that type; a wrong tag yields a
+	null point and ``AddPoint`` throws "Object reference not set…".
+
+	PV-saved .gpl files are **0-based** on ``Index`` (``Name="Point 1"`` ↔
+	``Index="0"``). Writing 1-based Index makes the UI show Point 1 as Index 2.
+	Series ``Indices`` stay 1-based point numbers (``Indices="1"`` → Point 1).
+
+	Rows are sorted so file order is Point 1, Point 2, …
 	"""
+	def _key(p: dict) -> tuple:
+		pid = str(p.get("id") or "")
+		return (0, int(pid)) if pid.isdigit() else (1, 0)
+
+	ordered = sorted(points, key=_key)
 	root = ET.Element("PVGalvoPointList")
-	for i, pt in enumerate(points):
+	# Attribute order matches PV-saved .gpl (rig fixture).
+	for i, pt in enumerate(ordered, start=1):
 		el = ET.SubElement(root, "PVGalvoPoint")
 		el.set("X", str(pt["x"]))
 		el.set("Y", str(pt["y"]))
-		el.set("Z", str(pt.get("z", 0)))
-		el.set("Name", str(pt.get("name", f"Point {i + 1}")))
-		el.set("Index", str(pt.get("id", i)))
-		el.set("ActivityType", "MarkPoints")
+		el.set("Name", f"Point {i}")
+		el.set("Index", str(i - 1))  # 0-based, same as PV export
 		el.set("UncagingLaser", str(pt.get("uncaging_laser") or laser))
 		el.set("UncagingLaserPower", str(power))
 		dur = pt.get("duration_ms")
@@ -591,6 +614,8 @@ def galvo_points_to_gpl_xml(
 			el.set("SpiralSize", str(fov))
 		revs = pt.get("spiral_revolutions", _DEFAULT_SPIRAL_REVS)
 		el.set("SpiralRevolutions", str(revs))
+		el.set("Z", str(pt.get("z", 0)))
+	# No XML declaration: matches PV-exported .gpl and avoids serializer quirks.
 	return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
 
@@ -782,6 +807,28 @@ def _indices_from_points(points: list[dict]) -> str:
 	if not ids:
 		return "1"
 	return ",".join(ids)
+
+
+def parse_indices_attr(indices: str | None) -> list[str]:
+	"""Expand ``Indices`` like ``1-3``, ``7-9``, or ``1,3,4`` to id strings."""
+	raw = str(indices or "").strip()
+	if not raw:
+		return []
+	out: list[str] = []
+	for part in raw.split(","):
+		tok = part.strip()
+		if not tok:
+			continue
+		if "-" in tok:
+			a, _, b = tok.partition("-")
+			a, b = a.strip(), b.strip()
+			if a.isdigit() and b.isdigit():
+				lo, hi = int(a), int(b)
+				step = 1 if hi >= lo else -1
+				out.extend(str(i) for i in range(lo, hi + step, step))
+				continue
+		out.append(tok)
+	return out
 
 
 def _strip_xml_decl(text: str) -> str:
