@@ -309,6 +309,9 @@ class Handler(BaseHTTPRequestHandler):
 			except Exception as exc:
 				_json(self, {"ok": False, "error": str(exc)}, 400)
 			return
+		if u.path == "/api/live-scale":
+			self._live_scale(raw)
+			return
 		if u.path == "/api/series-kind":
 			self._series_kind(raw)
 			return
@@ -330,6 +333,42 @@ class Handler(BaseHTTPRequestHandler):
 			self._selected_groups_xml(raw)
 			return
 		self.send_error(404)
+
+	def _live_scale(self, raw: bytes) -> None:
+		"""Set Raw clim / ΔF/F lim, or pull PV image-window Z-scale via -gts."""
+		try:
+			body = json.loads(raw.decode("utf-8") or "{}")
+			ch = body.get("channel")
+			if ch not in (None, ""):
+				STATE.live.set_grab_channel(int(ch))
+			src = str(body.get("source") or "").strip().lower()
+			from_pv = bool(body.get("from_pv")) or src == "pv"
+			if from_pv:
+				snap = STATE.live.pull_pv_scale_now()
+				_json(self, {"ok": True, **snap})
+				return
+			if body.get("auto") or src == "auto":
+				snap = STATE.live.set_scale(auto=True)
+				_json(self, {"ok": True, **snap})
+				return
+			lo = body.get("lo", body.get("clim_lo"))
+			hi = body.get("hi", body.get("clim_hi"))
+			if hi is None:
+				hi = body.get("max")
+			dff_lim = body.get("dff_lim", body.get("lim"))
+			kwargs: dict = {}
+			if lo not in (None, ""):
+				kwargs["lo"] = float(lo)
+			if hi not in (None, ""):
+				kwargs["hi"] = float(hi)
+			if dff_lim not in (None, ""):
+				kwargs["dff_lim"] = float(dff_lim)
+			if not kwargs:
+				raise ValueError("provide lo/hi/dff_lim, auto, or from_pv")
+			snap = STATE.live.set_scale(**kwargs)
+			_json(self, {"ok": True, **snap})
+		except Exception as exc:
+			_json(self, {"ok": False, "error": str(exc)}, 400)
 
 	def _parse_xml(self, raw: bytes) -> None:
 		try:

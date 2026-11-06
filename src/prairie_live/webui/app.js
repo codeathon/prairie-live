@@ -118,6 +118,36 @@ function applyDffToggle() {
     : baselineReady
       ? "Showing raw FOV — click for %ΔF/F"
       : "Collect a baseline first";
+  const scale = $("scale_hi");
+  if (scale) {
+    scale.placeholder = dff ? "auto lim" : "auto";
+    scale.title = dff
+      ? "|ΔF/F| that maps to full red/blue (empty = 98th %)"
+      : "Raw white-point ADU (empty = auto percentile)";
+  }
+}
+
+function syncScaleInput(live) {
+  const el = $("scale_hi");
+  if (!el || document.activeElement === el) return;
+  const dff = (live.mode || liveMode) === "dff";
+  const v = dff ? live.dff_lim : live.clim_hi;
+  el.value = v != null && v !== "" ? v : "";
+}
+
+async function postLiveScale(body) {
+  const res = await jpost("/api/live-scale", body);
+  if (!res.ok) {
+    $("live_cap").textContent = res.error || "scale failed";
+    return null;
+  }
+  syncScaleInput(res);
+  if (res.pv_scale_note) {
+    $("live_cap").textContent = res.pv_scale_note;
+  } else if (res.detail) {
+    $("live_cap").textContent = res.detail;
+  }
+  return res;
 }
 
 function rgbCss(rgb) {
@@ -555,16 +585,26 @@ async function tick() {
     if (st.live.smooth && $("smooth_sel").value !== st.live.smooth) {
       $("smooth_sel").value = st.live.smooth;
     }
+    syncScaleInput(st.live);
     const o = st.live.optics || {};
+    let cap = "";
     if (o.fov_width_um && o.optical_zoom) {
-      $("live_cap").textContent =
+      cap =
         (st.live.detail || "live") +
         (!String(st.live.detail || "").includes("FOV")
           ? ` · FOV ${Number(o.fov_width_um).toFixed(1)} µm · zoom ${o.optical_zoom}`
           : "");
     } else {
-      $("live_cap").textContent = st.live.detail || "";
+      cap = st.live.detail || "";
     }
+    if (st.live.pv_scale_note) {
+      cap = (cap ? cap + " · " : "") + st.live.pv_scale_note;
+    } else if (st.live.scale_source === "manual" && st.live.clim_hi != null && liveMode !== "dff") {
+      cap = (cap ? cap + " · " : "") + `scale 0–${Number(st.live.clim_hi)}`;
+    } else if (st.live.scale_source === "manual" && st.live.dff_lim != null && liveMode === "dff") {
+      cap = (cap ? cap + " · " : "") + `ΔF/F lim ±${Number(st.live.dff_lim)}`;
+    }
+    $("live_cap").textContent = cap;
   }
   if (st.boards && st.boards.length) {
     ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready));
@@ -613,6 +653,29 @@ async function boot() {
       return;
     }
     if (res.smooth) $("smooth_sel").value = res.smooth;
+  });
+  $("scale_hi").addEventListener("change", async () => {
+    const raw = $("scale_hi").value.trim();
+    if (raw === "") {
+      await postLiveScale({ auto: true });
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) {
+      $("live_cap").textContent = "scale must be a non-negative number";
+      return;
+    }
+    if (liveMode === "dff") {
+      await postLiveScale({ dff_lim: n });
+    } else {
+      await postLiveScale({ lo: 0, hi: n });
+    }
+  });
+  $("scale_pv_btn").addEventListener("click", async () => {
+    await postLiveScale({ from_pv: true });
+  });
+  $("scale_auto_btn").addEventListener("click", async () => {
+    await postLiveScale({ auto: true });
   });
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;
