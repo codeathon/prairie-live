@@ -87,9 +87,15 @@ class FrameBuffer:
 def to_u8(img: np.ndarray, *, p_lo: float = 1.0, p_hi: float = 99.0) -> np.ndarray:
 	"""Percentile-stretch float/int frame → uint8 for display."""
 	lo, hi = np.percentile(img, (p_lo, p_hi))
-	if hi <= lo:
-		hi = lo + 1.0
-	scaled = (img.astype(np.float64) - lo) / (hi - lo)
+	return to_u8_clim(img, float(lo), float(hi))
+
+
+def to_u8_clim(img: np.ndarray, lo: float, hi: float) -> np.ndarray:
+	"""Fixed black/white stretch (PV Z-scale style) → uint8."""
+	lo_f, hi_f = float(lo), float(hi)
+	if hi_f <= lo_f:
+		hi_f = lo_f + 1.0
+	scaled = (img.astype(np.float64) - lo_f) / (hi_f - lo_f)
 	return np.clip(scaled * 255.0, 0, 255).astype(np.uint8)
 
 

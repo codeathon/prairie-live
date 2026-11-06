@@ -7,7 +7,14 @@ import struct
 import numpy as np
 import pytest
 
-from prairie_live.live_feed import DISPLAY_BIN, LiveFeed, bin_mean
+from prairie_live.live_feed import (
+	DISPLAY_BIN,
+	DISPLAY_CLIM_HI,
+	DISPLAY_CLIM_LO,
+	LiveFeed,
+	bin_mean,
+)
+from prairie_live.trial_images import to_u8, to_u8_clim
 
 
 def _frame(val: float, h: int = 32, w: int = 32) -> np.ndarray:
@@ -102,3 +109,21 @@ def test_roi_dff_pct_positive_at_center():
 	out = feed.roi_dff_pct(pts, radius=2)
 	assert "1" in out
 	assert out["1"] > 0
+
+
+def test_raw_clim_is_fixed_0_to_100k():
+	"""Dim ADU must stay dim vs auto percentile stretch."""
+	feed = LiveFeed(baseline_n=200)  # stay in raw
+	img = np.zeros((32, 32), dtype=np.float64)
+	img[8:24, 8:24] = 50.0
+	feed.ingest_frame(img)
+	snap = feed.snapshot()
+	assert snap["clim_lo"] == DISPLAY_CLIM_LO
+	assert snap["clim_hi"] == DISPLAY_CLIM_HI
+	assert DISPLAY_CLIM_LO == 0.0
+	assert DISPLAY_CLIM_HI == 100_000.0
+	# Fixed clim: 50/100000 → ~0 gray; auto percentile would blast the square white.
+	fixed = to_u8_clim(img, DISPLAY_CLIM_LO, DISPLAY_CLIM_HI)
+	auto = to_u8(img)
+	assert int(fixed[16, 16]) < 5
+	assert int(auto[16, 16]) > 200

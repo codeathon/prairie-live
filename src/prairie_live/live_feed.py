@@ -18,13 +18,16 @@ from prairie_live.trial_images import (
 	dff_rgb,
 	disk_mean,
 	png_bytes_rgb,
-	to_u8,
+	to_u8_clim,
 )
 from prairie_live.viewer import orient_fov
 
 BASELINE_N = 60
 # Spatial mean-bin for the GUI PNG only (full-res kept for geometry / ROI).
 DISPLAY_BIN = 4
+# Fixed Raw display clim (ADU) — match PV Z-scale; avoids percentile noise pump.
+DISPLAY_CLIM_LO = 0.0
+DISPLAY_CLIM_HI = 100_000.0
 
 
 def bin_mean(img: np.ndarray, factor: int = DISPLAY_BIN) -> np.ndarray:
@@ -195,17 +198,20 @@ class LiveFeed:
 		self._collecting = bool(collect)
 		self._mode = "raw"
 
+	def _raw_u8(self, disp: np.ndarray) -> np.ndarray:
+		return to_u8_clim(disp, DISPLAY_CLIM_LO, DISPLAY_CLIM_HI)
+
 	def _encode_locked(self, oriented: np.ndarray) -> bytes:
 		# Bin display only — keep full-res _current / frame_wh for overlays.
 		disp = bin_mean(oriented, DISPLAY_BIN)
 		if self._mode == "dff" and self._baseline is not None:
 			base = bin_mean(self._baseline, DISPLAY_BIN)
 			if base.shape != disp.shape:
-				u8 = to_u8(disp)
+				u8 = self._raw_u8(disp)
 				return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
 			rgb = dff_rgb(base, disp)
 			return png_bytes_rgb(rgb)
-		u8 = to_u8(disp)
+		u8 = self._raw_u8(disp)
 		return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
 
 	def _snapshot_locked(self) -> dict:
@@ -237,6 +243,8 @@ class LiveFeed:
 			"baseline_frames": n_buf if self._collecting else self._baseline_n,
 			"baseline_n": self._baseline_n,
 			"collecting_baseline": self._collecting,
+			"clim_lo": DISPLAY_CLIM_LO,
+			"clim_hi": DISPLAY_CLIM_HI,
 		}
 
 	def _loop(self) -> None:
