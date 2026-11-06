@@ -118,6 +118,7 @@ class Handler(BaseHTTPRequestHandler):
 					"powers": "",
 					"seed": d["seed"],
 					"repetitions": d["repetitions"],
+					"initial_delay": d.get("initial_delay_ms", 22.1),
 					"stim_dff_min": d["stim_dff_min"],
 					"com_ports": ports,
 					"relay": probe_relay(DEFAULT_RELAY),
@@ -589,15 +590,13 @@ class Handler(BaseHTTPRequestHandler):
 				return
 			n_groups = int(body.get("n_groups") or 0)
 			power = float(body.get("power") if body.get("power") not in (None, "") else 160)
-			reps_raw = body.get("repetitions")
-			repetitions = (
-				int(reps_raw) if reps_raw not in (None, "") else 1
-			)
-			if repetitions < 1:
-				raise ValueError("repetitions must be >= 1")
 			pts = extract_unique_points(steps)
 			meta = template_meta(steps)
-			meta["repetitions"] = repetitions
+			# Repetitions stay from the source series; dialog sets Initial Delay.
+			delay_raw = body.get("initial_delay")
+			if delay_raw not in (None, ""):
+				meta["initial_delay"] = str(delay_raw)
+			repetitions = int(meta.get("repetitions") or 1)
 			groups = build_random_groups(pts, n_groups, seed=seed)
 			xml_text = groups_xml_text(groups, power=power, meta=meta)
 			gpl_text = groups_gpl_text(groups, power=power, meta=meta)
@@ -647,7 +646,8 @@ class Handler(BaseHTTPRequestHandler):
 			pool_ids = {str(p["id"]) for p in pts}
 			STATE.append(
 				f"random groups  n={len(groups)}  size=3  power={power:g}  "
-				f"reps={repetitions}  cover={len(covered)}/{len(pool_ids)}  "
+				f"delay={meta.get('initial_delay')}  "
+				f"cover={len(covered)}/{len(pool_ids)}  "
 				f"→ {path_str} + {gpl_path}"
 			)
 			_json(
@@ -662,6 +662,7 @@ class Handler(BaseHTTPRequestHandler):
 					"n_covered": len(covered),
 					"power": power,
 					"repetitions": repetitions,
+					"initial_delay": meta.get("initial_delay"),
 					"xml": xml_text,
 					"gpl": gpl_text,
 					"timestamp": ts,
@@ -704,9 +705,7 @@ class Handler(BaseHTTPRequestHandler):
 			raise ValueError("n_sequences must be >= 1")
 		catalog = catalog_groups_from_steps(steps)
 		meta = template_meta(steps)
-		delay_raw = body.get("initial_delay")
-		if delay_raw not in (None, ""):
-			meta["initial_delay"] = str(delay_raw)
+		# Sequence dialog is seed-only; keep each source group's InitialDelay/Reps.
 		sequence = build_group_sequence(catalog, n_seq, seed=seed)
 		power = catalog_power(catalog)
 		xml_text = sequence_xml_text(sequence, meta=meta)

@@ -84,6 +84,7 @@ def test_rig_scan_puts_all_picked_points_in_frame():
 
 def test_zoom15_scales_stale_zoom1_amplitude():
 	"""If Live is Zoom 1.5 but PV still reports ±4.2 V, map with ±2.8 V."""
+	from prairie_live.lab_defaults import DEFAULT_OPTICAL_ZOOM
 	from prairie_live.scan_geometry import effective_scan_amplitude, galvo_to_fraction
 
 	assert effective_scan_amplitude(4.2035577285, optical_zoom=1.5) == pytest.approx(
@@ -110,6 +111,30 @@ def test_zoom15_scales_stale_zoom1_amplitude():
 	# With zoom-1 amp this was ~0.113; scaled amp spreads farther from center.
 	assert fx == pytest.approx(0.5 + -3.25489489483074 / (2 * g["map_amp_x"]), abs=1e-4)
 	assert fx < 0.05
+
+
+def test_missing_optical_zoom_uses_default_for_mapping():
+	"""When -gts opticalZoom fails, map with DEFAULT_OPTICAL_ZOOM — not silent 1.0."""
+	from prairie_live.lab_defaults import DEFAULT_OPTICAL_ZOOM
+
+	class PartialRelay(FakeRelay):
+		def get_state(self, key, index=None):
+			if key == "opticalZoom":
+				return {"ok": False, "error": "unknown"}
+			return super().get_state(key, index)
+
+	rig = {
+		("currentScanAmplitude", "XAxis"): "4.2035577285",
+		("currentScanAmplitude", "YAxis"): "4.2035577285",
+		("currentScanCenter", "XAxis"): "0",
+		("currentScanCenter", "YAxis"): "0",
+		("micronsPerPixel", None): "1.48",
+		("pixelsPerLine", None): "512",
+		("linesPerFrame", None): "512",
+	}
+	g = fetch_scan_geometry(PartialRelay(rig))
+	assert g["optical_zoom"] == pytest.approx(float(DEFAULT_OPTICAL_ZOOM))
+	assert g["map_amp_x"] == pytest.approx(4.2035577285 / float(DEFAULT_OPTICAL_ZOOM))
 
 
 def test_points_outside_scan_are_counted():

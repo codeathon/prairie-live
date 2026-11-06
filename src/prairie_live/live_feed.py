@@ -23,6 +23,22 @@ from prairie_live.trial_images import (
 from prairie_live.viewer import orient_fov
 
 BASELINE_N = 60
+# Spatial mean-bin for the GUI PNG only (full-res kept for geometry / ROI).
+DISPLAY_BIN = 4
+
+
+def bin_mean(img: np.ndarray, factor: int = DISPLAY_BIN) -> np.ndarray:
+	"""Mean-pool ``factor``×``factor`` blocks (crop to a multiple of ``factor``)."""
+	f = max(int(factor), 1)
+	if f == 1:
+		return np.asarray(img, dtype=np.float64)
+	arr = np.asarray(img, dtype=np.float64)
+	h, w = arr.shape[:2]
+	h2, w2 = h // f, w // f
+	if h2 < 1 or w2 < 1:
+		return arr
+	cropped = arr[: h2 * f, : w2 * f]
+	return cropped.reshape(h2, f, w2, f).mean(axis=(1, 3))
 
 
 class LiveFeed:
@@ -180,13 +196,16 @@ class LiveFeed:
 		self._mode = "raw"
 
 	def _encode_locked(self, oriented: np.ndarray) -> bytes:
+		# Bin display only — keep full-res _current / frame_wh for overlays.
+		disp = bin_mean(oriented, DISPLAY_BIN)
 		if self._mode == "dff" and self._baseline is not None:
-			if self._baseline.shape != oriented.shape:
-				u8 = to_u8(oriented)
+			base = bin_mean(self._baseline, DISPLAY_BIN)
+			if base.shape != disp.shape:
+				u8 = to_u8(disp)
 				return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
-			rgb = dff_rgb(self._baseline, oriented)
+			rgb = dff_rgb(base, disp)
 			return png_bytes_rgb(rgb)
-		u8 = to_u8(oriented)
+		u8 = to_u8(disp)
 		return png_bytes_rgb(np.stack([u8, u8, u8], axis=-1))
 
 	def _snapshot_locked(self) -> dict:

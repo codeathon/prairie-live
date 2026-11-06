@@ -259,7 +259,7 @@ def test_export_timestamp_format():
 	assert ts[9:].isdigit()
 
 
-def test_slim_sequence_initial_delay_override_keeps_reps():
+def test_slim_sequence_keeps_source_delay_and_reps():
 	from prairie_live.markpoints import load_mark_points_file
 	from prairie_live.random_groups import (
 		build_group_sequence,
@@ -272,42 +272,35 @@ def test_slim_sequence_initial_delay_override_keeps_reps():
 	catalog = catalog_groups_from_steps(steps)
 	seq = build_group_sequence(catalog, 6, seed=3)
 	meta = template_meta(steps)
+	# Dialog no longer overrides — meta delay must not rewrite source steps.
 	meta["initial_delay"] = "99.5"
 	xml = sequence_xml_text(seq, meta=meta)
 	root = ET.fromstring(xml)
 	for el in root.findall("PVMarkPointElement"):
 		assert el.get("Repetitions") == "4"
 		galvo = el.find("PVGalvoPointElement")
-		assert galvo.get("InitialDelay") == "99.5"
+		assert galvo.get("InitialDelay") == "22.1"
 
 
-def test_fat_sequence_initial_delay_override(tmp_path):
-	from prairie_live.markpoints import load_mark_points_file
-	from prairie_live.random_groups import (
-		build_group_sequence,
-		catalog_groups_from_steps,
-		sequence_xml_text,
-		write_groups_xml,
-	)
+def test_points_pool_meta_initial_delay(tmp_path):
+	from prairie_live.random_groups import groups_xml_text, write_groups_xml
 
 	pts = _pool(9)
 	groups = build_random_groups(pts, 3, seed=4)
-	path = write_groups_xml(
-		groups, power=160.0, meta=template_meta([]), path=tmp_path / "fat_cat.xml"
-	)
-	steps = load_mark_points_file(path)
-	catalog = catalog_groups_from_steps(steps)
-	seq = build_group_sequence(catalog, 5, seed=2)
-	meta = template_meta(steps)
+	meta = template_meta([])
 	meta["initial_delay"] = "17.25"
-	xml = sequence_xml_text(seq, meta=meta)
+	xml = groups_xml_text(groups, power=160.0, meta=meta)
 	root = ET.fromstring(xml)
 	for el in root.findall("PVMarkPointElement"):
 		galvo = el.find("PVGalvoPointElement")
 		assert galvo.get("InitialDelay") == "17.25"
+	path = write_groups_xml(
+		groups, power=160.0, meta=meta, path=tmp_path / "delay.xml"
+	)
+	assert path.is_file()
 
 
-def test_sequence_shuffle_blocks_balanced_and_no_adjacent_when_possible():
+def test_sequence_sample_blocks_balanced_and_reproducible():
 	from prairie_live.random_groups import build_group_sequence
 
 	catalog = [
@@ -317,13 +310,12 @@ def test_sequence_shuffle_blocks_balanced_and_no_adjacent_when_possible():
 	seq = build_group_sequence(catalog, 20, seed=11)
 	ids = [g["id"] for g in seq]
 	assert len(ids) == 20
-	# Shuffle-blocks: over 5 full permutations of 4, each id appears exactly 5 times.
+	# Five full permutations of 4 → each id appears exactly 5 times.
 	for i in range(1, 5):
 		assert ids.count(str(i)) == 5
-	# Adjacent duplicates broken when catalog has >1 group.
-	for a, b in zip(ids, ids[1:]):
-		assert a != b
-	# Seeded runs are reproducible.
+	# Each block of 4 is a permutation of the catalog.
+	for start in range(0, 20, 4):
+		assert sorted(ids[start : start + 4]) == ["1", "2", "3", "4"]
 	again = build_group_sequence(catalog, 20, seed=11)
 	assert [g["id"] for g in again] == ids
 

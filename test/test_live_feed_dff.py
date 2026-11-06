@@ -2,14 +2,46 @@
 
 from __future__ import annotations
 
+import struct
+
 import numpy as np
 import pytest
 
-from prairie_live.live_feed import LiveFeed
+from prairie_live.live_feed import DISPLAY_BIN, LiveFeed, bin_mean
 
 
 def _frame(val: float, h: int = 32, w: int = 32) -> np.ndarray:
 	return np.full((h, w), val, dtype=np.float64)
+
+
+def _png_wh(png: bytes) -> tuple[int, int]:
+	assert png[:8] == b"\x89PNG\r\n\x1a\n"
+	# IHDR: length(4) + type(4) + width/height
+	w, h = struct.unpack(">II", png[16:24])
+	return int(w), int(h)
+
+
+def test_bin_mean_factor_four():
+	img = np.arange(64, dtype=np.float64).reshape(8, 8)
+	out = bin_mean(img, 4)
+	assert out.shape == (2, 2)
+	assert float(out[0, 0]) == pytest.approx(float(img[:4, :4].mean()))
+	assert float(out[1, 1]) == pytest.approx(float(img[4:, 4:].mean()))
+
+
+def test_encode_png_is_display_binned():
+	feed = LiveFeed(baseline_n=2)
+	feed.ingest_frame(_frame(10.0, h=32, w=32))
+	feed.ingest_frame(_frame(20.0, h=32, w=32))
+	png = feed.png_bytes()
+	assert png
+	w, h = _png_wh(png)
+	assert (w, h) == (32 // DISPLAY_BIN, 32 // DISPLAY_BIN)
+	# Full-res geometry / ROI buffer unchanged.
+	assert feed.frame_wh == (32, 32)
+	with feed._lock:
+		assert feed._current is not None
+		assert feed._current.shape == (32, 32)
 
 
 def test_baseline_mean_after_n_frames():

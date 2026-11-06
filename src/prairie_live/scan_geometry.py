@@ -136,12 +136,15 @@ def fetch_scan_geometry(client) -> dict[str, float]:
 	if not geom["amp_x"] or not geom["amp_y"]:
 		raise ValueError(f"scan amplitude is 0 (X {geom['amp_x']}, Y {geom['amp_y']})")
 
-	# Mapping zoom: only trust PV. Display zoom may fall back to scope default.
+	# One zoom for caption and galvo→FOV map (never map at silent 1.0 while
+	# the caption shows DEFAULT_OPTICAL_ZOOM — that clusters Mark Points).
 	zoom_pv = _try_state(client, "opticalZoom")
-	zoom_map = float(zoom_pv) if zoom_pv and zoom_pv > 0 else 1.0
-	geom["optical_zoom"] = (
-		float(zoom_pv) if zoom_pv and zoom_pv > 0 else float(DEFAULT_OPTICAL_ZOOM)
+	zoom = (
+		float(zoom_pv)
+		if zoom_pv and zoom_pv > 0
+		else float(DEFAULT_OPTICAL_ZOOM)
 	)
+	geom["optical_zoom"] = zoom
 
 	um_x = _try_state(client, "micronsPerPixel", "XAxis")
 	if um_x is None:
@@ -171,10 +174,10 @@ def fetch_scan_geometry(client) -> dict[str, float]:
 		geom["fov_height_um"] = float(DEFAULT_FOV_HEIGHT_UM)
 
 	geom["map_amp_x"] = effective_scan_amplitude(
-		geom["amp_x"], optical_zoom=zoom_map
+		geom["amp_x"], optical_zoom=zoom
 	)
 	geom["map_amp_y"] = effective_scan_amplitude(
-		geom["amp_y"], optical_zoom=zoom_map
+		geom["amp_y"], optical_zoom=zoom
 	)
 	return geom
 

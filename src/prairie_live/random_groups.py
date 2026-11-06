@@ -434,11 +434,10 @@ def build_group_sequence(
 	*,
 	seed: int | None = None,
 ) -> list[dict[str, Any]]:
-	"""Length-``n`` sequence via shuffled catalog blocks (with replacement).
+	"""Length-``n`` sequence via permuted catalog blocks.
 
-	Concatenates full random permutations of the catalog until length ≥ n,
-	truncates to n, then breaks adjacent duplicates when the catalog has more
-	than one group (swap with a later different entry when possible).
+	Repeats the catalog to cover N, shuffling each full copy independently
+	with ``Random.sample`` (a permutation). Truncates to exactly N.
 	"""
 	if len(catalog) < 1:
 		raise ValueError("empty group catalog")
@@ -448,19 +447,8 @@ def build_group_sequence(
 	rng = _rng(seed)
 	out: list[dict[str, Any]] = []
 	while len(out) < n:
-		block = [dict(g) for g in catalog]
-		rng.shuffle(block)
-		out.extend(block)
-	out = out[:n]
-	if len(catalog) > 1:
-		for i in range(1, len(out)):
-			if out[i]["id"] != out[i - 1]["id"]:
-				continue
-			for j in range(i + 1, len(out)):
-				if out[j]["id"] != out[i - 1]["id"]:
-					out[i], out[j] = out[j], out[i]
-					break
-	return out
+		out.extend(dict(g) for g in rng.sample(catalog, k=len(catalog)))
+	return out[:n]
 
 
 _STEP_META_KEYS = (
@@ -507,9 +495,6 @@ def sequence_to_pv_steps(
 		for k in _STEP_META_KEYS:
 			if src.get(k) is not None:
 				step_meta[k] = src[k]
-		# Dialog Initial Delay overrides every step when set.
-		if base.get("initial_delay") not in (None, ""):
-			step_meta["initial_delay"] = base["initial_delay"]
 		pwr = src.get("laser_pwr")
 		if pwr is None:
 			pwr = base.get("power", 160)
@@ -534,8 +519,7 @@ def slim_sequence_xml_text(
 	root.set("Iterations", str(meta.get("iterations", "1")))
 	root.set("IterationDelay", str(meta.get("iteration_delay", "0.00")))
 	root.set("CalcFunctMap", str(meta.get("calc_funct_map", "False")))
-	# Dialog override applies to every step; Repetitions stay from the source group.
-	delay_override = meta.get("initial_delay")
+	# InitialDelay + Repetitions stay on each source group (no dialog override).
 	for g in sequence:
 		src = dict(g.get("source_step") or {})
 		el = ET.SubElement(root, "PVMarkPointElement")
@@ -567,12 +551,7 @@ def slim_sequence_xml_text(
 			"VoltageRecCategoryName", str(src.get("voltage_rec_category", "None"))
 		)
 		galvo = ET.SubElement(el, "PVGalvoPointElement")
-		delay = (
-			delay_override
-			if delay_override not in (None, "")
-			else src.get("initial_delay", "0.00")
-		)
-		galvo.set("InitialDelay", str(delay))
+		galvo.set("InitialDelay", str(src.get("initial_delay", "0.00")))
 		galvo.set("InterPointDelay", str(src.get("inter_point_delay", "10")))
 		galvo.set("Duration", str(src.get("duration", meta.get("duration", 36))))
 		galvo.set(

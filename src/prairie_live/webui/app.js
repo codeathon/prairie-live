@@ -482,7 +482,9 @@ async function onXmlFile(ev) {
   $("xml_path").textContent = res.path;
   showXmlFields(res.fields || {});
   refreshPoints();
-  if (res.fields && res.fields.repetitions) $("gen_reps").value = res.fields.repetitions;
+  if (res.fields && res.fields.initial_delay_ms != null && res.fields.initial_delay_ms !== "") {
+    $("gen_delay").value = res.fields.initial_delay_ms;
+  }
   if (res.kind === "group_catalog") {
     $("fov_note").textContent =
       (res.fields && res.fields.fov_note) ||
@@ -570,7 +572,7 @@ async function boot() {
   const d = await jget("/api/defaults");
   $("via_relay").value = d.via_relay;
   if (!$("gen_power").value) $("gen_power").value = "160";
-  if (!$("gen_reps").value) $("gen_reps").value = d.repetitions || 1;
+  if (!$("gen_delay").value) $("gen_delay").value = d.initial_delay ?? 22.1;
   fillSelect($("serial"), d.com_ports, "device", (p) => `${p.device} — ${p.description}`, d.serial);
   fillSelect($("stim_mode"), d.stim_modes, null, null, d.stim_mode);
   fillSelect($("trigger"), d.triggers, null, null, d.trigger);
@@ -611,7 +613,6 @@ async function boot() {
       series: $("xml_path").textContent,
       powers: $("gen_power").value,
       seed: $("gen_seed").value,
-      repetitions: $("gen_reps").value,
       via_relay: $("via_relay").value,
       serial: $("serial").value,
       stim_mode: $("stim_mode").value,
@@ -655,9 +656,6 @@ async function boot() {
           : "";
         $("seq_catalog").textContent =
           `catalog: ${info.n_groups} groups · ${info.n_points} points${slimBit}`;
-        if (info.initial_delay != null && info.initial_delay !== "") {
-          $("seq_delay").value = info.initial_delay;
-        }
         $("seq_dlg").showModal();
         return;
       }
@@ -690,7 +688,7 @@ async function boot() {
       mode: "points_pool",
       n_groups: $("gen_n").value,
       power: $("gen_power").value,
-      repetitions: $("gen_reps").value,
+      initial_delay: $("gen_delay").value,
       seed: $("gen_seed").value,
     };
     const res = await jpost("/api/random-groups", body);
@@ -727,7 +725,6 @@ async function boot() {
       series: $("xml_path").textContent,
       mode: "sequence",
       n_sequences: $("seq_n").value,
-      initial_delay: $("seq_delay").value,
       seed: $("seq_seed").value,
     };
     const res = await jpost("/api/random-groups", body);
