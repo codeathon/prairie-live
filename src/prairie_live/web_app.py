@@ -498,6 +498,7 @@ class Handler(BaseHTTPRequestHandler):
 		return dict(STATE.random_groups_meta or template_meta([]))
 
 	def _series_kind(self, raw: bytes) -> None:
+		from prairie_live.markpoints import template_meta
 		from prairie_live.random_groups import (
 			catalog_groups_from_steps,
 			classify_series,
@@ -513,11 +514,19 @@ class Handler(BaseHTTPRequestHandler):
 			n_groups = 0
 			n_points = 0
 			slim = False
+			initial_delay = "22.1"
 			if kind == "group_catalog":
 				cat = catalog_groups_from_steps(steps)
 				n_groups = len(cat)
 				n_points = len({pid for g in cat for pid in g["point_ids"]})
 				slim = all(bool(g.get("slim")) for g in cat)
+				src0 = (cat[0].get("source_step") or {}) if cat else {}
+				if src0.get("initial_delay") not in (None, ""):
+					initial_delay = str(src0["initial_delay"])
+				else:
+					meta = template_meta(steps)
+					if meta.get("initial_delay") not in (None, ""):
+						initial_delay = str(meta["initial_delay"])
 			else:
 				pts = extract_unique_points(steps)
 				n_points = len(pts)
@@ -529,6 +538,7 @@ class Handler(BaseHTTPRequestHandler):
 					"n_groups": n_groups,
 					"n_points": n_points,
 					"slim": slim,
+					"initial_delay": initial_delay,
 					"series": str(series),
 				},
 			)
@@ -543,6 +553,7 @@ class Handler(BaseHTTPRequestHandler):
 			catalog_groups_from_steps,
 			catalog_power,
 			classify_series,
+			export_timestamp,
 			groups_gpl_text,
 			groups_xml_text,
 			sequence_xml_text,
@@ -590,11 +601,14 @@ class Handler(BaseHTTPRequestHandler):
 			groups = build_random_groups(pts, n_groups, seed=seed)
 			xml_text = groups_xml_text(groups, power=power, meta=meta)
 			gpl_text = groups_gpl_text(groups, power=power, meta=meta)
+			ts = export_timestamp()
+			base_name = f"random_groups_{ts}"
 			save_path = body.get("path") or body.get("save_path")
 			path_str: str | None = None
 			gpl_path: str | None = None
 			if save_path:
 				xml_path = Path(str(save_path))
+				# Keep user path stem but ensure .xml; stamp only when using defaults.
 				path_str = str(
 					write_groups_xml(groups, power=power, meta=meta, path=xml_path)
 				)
@@ -607,7 +621,7 @@ class Handler(BaseHTTPRequestHandler):
 					)
 				)
 			else:
-				dest = STATE.xml_dir / "random_groups.xml"
+				dest = STATE.xml_dir / f"{base_name}.xml"
 				path_str = str(
 					write_groups_xml(groups, power=power, meta=meta, path=dest)
 				)
@@ -650,8 +664,9 @@ class Handler(BaseHTTPRequestHandler):
 					"repetitions": repetitions,
 					"xml": xml_text,
 					"gpl": gpl_text,
-					"filename": Path(path_str).name if path_str else "random_groups.xml",
-					"gpl_filename": Path(gpl_path).name if gpl_path else "random_groups.gpl",
+					"timestamp": ts,
+					"filename": f"{base_name}.xml",
+					"gpl_filename": f"{base_name}.gpl",
 					"groups": [
 						{
 							"id": g["id"],
@@ -681,12 +696,17 @@ class Handler(BaseHTTPRequestHandler):
 		groups_gpl_text = kw["groups_gpl_text"]
 		write_groups_gpl = kw["write_groups_gpl"]
 
+		from prairie_live.random_groups import export_timestamp
+
 		n_raw = body.get("n_sequences", body.get("n_groups"))
 		n_seq = int(n_raw or 0)
 		if n_seq < 1:
 			raise ValueError("n_sequences must be >= 1")
 		catalog = catalog_groups_from_steps(steps)
 		meta = template_meta(steps)
+		delay_raw = body.get("initial_delay")
+		if delay_raw not in (None, ""):
+			meta["initial_delay"] = str(delay_raw)
 		sequence = build_group_sequence(catalog, n_seq, seed=seed)
 		power = catalog_power(catalog)
 		xml_text = sequence_xml_text(sequence, meta=meta)
@@ -695,6 +715,8 @@ class Handler(BaseHTTPRequestHandler):
 		# user keeps the existing Galvo Point List loaded in PrairieView.
 		gpl_text: str | None = None
 		gpl_path: str | None = None
+		ts = export_timestamp()
+		base_name = f"group_sequence_{ts}"
 		save_path = body.get("path") or body.get("save_path")
 		if save_path:
 			xml_path = Path(str(save_path))
@@ -710,7 +732,7 @@ class Handler(BaseHTTPRequestHandler):
 				)
 				gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
 		else:
-			dest = STATE.xml_dir / "group_sequence.xml"
+			dest = STATE.xml_dir / f"{base_name}.xml"
 			path_str = str(write_sequence_xml(sequence, meta=meta, path=dest))
 			if not slim:
 				gpl_path = str(
@@ -765,8 +787,10 @@ class Handler(BaseHTTPRequestHandler):
 				"power": power,
 				"xml": xml_text,
 				"gpl": gpl_text,
-				"filename": Path(path_str).name,
-				"gpl_filename": Path(gpl_path).name if gpl_path else None,
+				"timestamp": ts,
+				"initial_delay": meta.get("initial_delay"),
+				"filename": f"{base_name}.xml",
+				"gpl_filename": f"{base_name}.gpl" if gpl_text else None,
 				"groups": [
 					{
 						"id": g["id"],
@@ -797,6 +821,7 @@ class Handler(BaseHTTPRequestHandler):
 
 	def _selected_groups_xml(self, raw: bytes) -> None:
 		from prairie_live.random_groups import (
+			export_timestamp,
 			groups_gpl_text,
 			groups_xml_text,
 			select_groups_by_id,
@@ -819,6 +844,8 @@ class Handler(BaseHTTPRequestHandler):
 			catalog = STATE.random_groups or picked
 			xml_text = groups_xml_text(picked, power=power, meta=meta)
 			gpl_text = groups_gpl_text(catalog, power=power, meta=meta)
+			ts = export_timestamp()
+			base_name = f"selected_groups_{ts}"
 			save_path = body.get("path") or body.get("save_path")
 			if save_path:
 				path = write_groups_xml(
@@ -832,7 +859,7 @@ class Handler(BaseHTTPRequestHandler):
 					picked,
 					power=power,
 					meta=meta,
-					path=STATE.xml_dir / "selected_groups.xml",
+					path=STATE.xml_dir / f"{base_name}.xml",
 				)
 				gpl_path = write_groups_gpl(
 					catalog,
@@ -850,8 +877,9 @@ class Handler(BaseHTTPRequestHandler):
 					"n_groups": len(picked),
 					"xml": xml_text,
 					"gpl": gpl_text,
-					"filename": path.name,
-					"gpl_filename": gpl_path.name,
+					"timestamp": ts,
+					"filename": f"{base_name}.xml",
+					"gpl_filename": f"{base_name}.gpl",
 				},
 			)
 		except Exception as exc:

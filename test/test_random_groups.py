@@ -247,3 +247,93 @@ def test_slim_group_indices_catalog_and_sequence():
 		assert galvo.get("Points", "").startswith("Group")
 		assert float(el.get("UncagingLaserPower")) == pytest.approx(0.25)
 		assert el.findall("Point") == []
+
+
+def test_export_timestamp_format():
+	from prairie_live.random_groups import export_timestamp
+
+	ts = export_timestamp()
+	assert len(ts) == 15
+	assert ts[8] == "_"
+	assert ts[:8].isdigit()
+	assert ts[9:].isdigit()
+
+
+def test_slim_sequence_initial_delay_override_keeps_reps():
+	from prairie_live.markpoints import load_mark_points_file
+	from prairie_live.random_groups import (
+		build_group_sequence,
+		catalog_groups_from_steps,
+		sequence_xml_text,
+	)
+
+	slim = Path(__file__).resolve().parents[1] / "samples" / "MarkPoints_slim_groups.xml"
+	steps = load_mark_points_file(slim)
+	catalog = catalog_groups_from_steps(steps)
+	seq = build_group_sequence(catalog, 6, seed=3)
+	meta = template_meta(steps)
+	meta["initial_delay"] = "99.5"
+	xml = sequence_xml_text(seq, meta=meta)
+	root = ET.fromstring(xml)
+	for el in root.findall("PVMarkPointElement"):
+		assert el.get("Repetitions") == "4"
+		galvo = el.find("PVGalvoPointElement")
+		assert galvo.get("InitialDelay") == "99.5"
+
+
+def test_fat_sequence_initial_delay_override(tmp_path):
+	from prairie_live.markpoints import load_mark_points_file
+	from prairie_live.random_groups import (
+		build_group_sequence,
+		catalog_groups_from_steps,
+		sequence_xml_text,
+		write_groups_xml,
+	)
+
+	pts = _pool(9)
+	groups = build_random_groups(pts, 3, seed=4)
+	path = write_groups_xml(
+		groups, power=160.0, meta=template_meta([]), path=tmp_path / "fat_cat.xml"
+	)
+	steps = load_mark_points_file(path)
+	catalog = catalog_groups_from_steps(steps)
+	seq = build_group_sequence(catalog, 5, seed=2)
+	meta = template_meta(steps)
+	meta["initial_delay"] = "17.25"
+	xml = sequence_xml_text(seq, meta=meta)
+	root = ET.fromstring(xml)
+	for el in root.findall("PVMarkPointElement"):
+		galvo = el.find("PVGalvoPointElement")
+		assert galvo.get("InitialDelay") == "17.25"
+
+
+def test_sequence_shuffle_blocks_balanced_and_no_adjacent_when_possible():
+	from prairie_live.random_groups import build_group_sequence
+
+	catalog = [
+		{"id": str(i), "name": f"G{i}", "point_ids": ["1", "2", "3"], "points": []}
+		for i in range(1, 5)
+	]
+	seq = build_group_sequence(catalog, 20, seed=11)
+	ids = [g["id"] for g in seq]
+	assert len(ids) == 20
+	# Shuffle-blocks: over 5 full permutations of 4, each id appears exactly 5 times.
+	for i in range(1, 5):
+		assert ids.count(str(i)) == 5
+	# Adjacent duplicates broken when catalog has >1 group.
+	for a, b in zip(ids, ids[1:]):
+		assert a != b
+	# Seeded runs are reproducible.
+	again = build_group_sequence(catalog, 20, seed=11)
+	assert [g["id"] for g in again] == ids
+
+
+def test_unseeded_build_uses_system_entropy():
+	"""Unseeded draws should not all collapse to the same seeded-default series."""
+	pts = _pool(12)
+	a = [g["point_ids"] for g in build_random_groups(pts, 6)]
+	b = [g["point_ids"] for g in build_random_groups(pts, 6)]
+	# Extremely unlikely identical under SystemRandom; allow rare collision retry.
+	if a == b:
+		c = [g["point_ids"] for g in build_random_groups(pts, 6)]
+		assert a != c or b != c

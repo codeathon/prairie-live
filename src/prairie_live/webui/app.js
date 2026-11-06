@@ -298,6 +298,50 @@ async function refreshPoints() {
   applyMarksVisibility();
 }
 
+const SAVE_DIR_DB = "prairie_live_save";
+const SAVE_DIR_STORE = "handles";
+const SAVE_DIR_KEY = "lastSaveFile";
+
+function openSaveDirDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(SAVE_DIR_DB, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(SAVE_DIR_STORE)) {
+        db.createObjectStore(SAVE_DIR_STORE);
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function loadLastSaveHandle() {
+  try {
+    const db = await openSaveDirDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(SAVE_DIR_STORE, "readonly");
+      const req = tx.objectStore(SAVE_DIR_STORE).get(SAVE_DIR_KEY);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+async function storeLastSaveHandle(handle) {
+  try {
+    const db = await openSaveDirDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SAVE_DIR_STORE, "readwrite");
+      tx.objectStore(SAVE_DIR_STORE).put(handle, SAVE_DIR_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (_) {}
+}
+
 async function saveTextClient(text, filename, description) {
   const name = filename || "groups.xml";
   const isGpl = /\.gpl$/i.test(name);
@@ -306,14 +350,18 @@ async function saveTextClient(text, filename, description) {
     : { "application/xml": [".xml"] };
   if (window.showSaveFilePicker) {
     try {
-      const handle = await window.showSaveFilePicker({
+      const opts = {
         suggestedName: name,
         types: [{ description: description || "Mark Points file", accept }],
-      });
+      };
+      const last = await loadLastSaveHandle();
+      if (last) opts.startIn = last;
+      const handle = await window.showSaveFilePicker(opts);
       const writable = await handle.createWritable();
       await writable.write(text);
       await writable.close();
-      return { ok: true, via: "picker", name };
+      await storeLastSaveHandle(handle);
+      return { ok: true, via: "picker", name: handle.name || name };
     } catch (e) {
       if (e && e.name === "AbortError") return { ok: false, cancelled: true };
       // fall through to download
@@ -607,6 +655,9 @@ async function boot() {
           : "";
         $("seq_catalog").textContent =
           `catalog: ${info.n_groups} groups · ${info.n_points} points${slimBit}`;
+        if (info.initial_delay != null && info.initial_delay !== "") {
+          $("seq_delay").value = info.initial_delay;
+        }
         $("seq_dlg").showModal();
         return;
       }
@@ -676,6 +727,7 @@ async function boot() {
       series: $("xml_path").textContent,
       mode: "sequence",
       n_sequences: $("seq_n").value,
+      initial_delay: $("seq_delay").value,
       seed: $("seq_seed").value,
     };
     const res = await jpost("/api/random-groups", body);
