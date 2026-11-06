@@ -301,6 +301,28 @@ class Handler(BaseHTTPRequestHandler):
 			except Exception as exc:
 				_json(self, {"ok": False, "error": str(exc)}, 400)
 			return
+		if u.path == "/api/live-scale":
+			try:
+				body = json.loads(raw.decode("utf-8") or "{}")
+				if body.get("auto") or str(body.get("source") or "").lower() == "auto":
+					snap = STATE.live.set_scale(auto=True)
+				else:
+					lo = body.get("lo", body.get("clim_lo"))
+					hi = body.get("hi", body.get("clim_hi"))
+					if hi is None:
+						hi = body.get("max")
+					kwargs: dict = {}
+					if lo not in (None, ""):
+						kwargs["lo"] = float(lo)
+					if hi not in (None, ""):
+						kwargs["hi"] = float(hi)
+					if not kwargs:
+						raise ValueError("provide hi (ADU white-point), or auto")
+					snap = STATE.live.set_scale(**kwargs)
+				_json(self, {"ok": True, **snap})
+			except Exception as exc:
+				_json(self, {"ok": False, "error": str(exc)}, 400)
+			return
 		if u.path == "/api/series-kind":
 			self._series_kind(raw)
 			return

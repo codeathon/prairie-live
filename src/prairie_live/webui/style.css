@@ -127,6 +127,27 @@ h2 { margin: 0 0 6px; font-size: 0.95rem; }
   border-color: #3a4150;
   background: #12151c;
 }
+.fov-scale {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #00ffff;
+}
+.fov-scale input[type="number"] {
+  width: 4.5rem;
+  margin: 0;
+  padding: 2px 4px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  background: #102016;
+  color: #00ffff;
+  border: 1px solid #00cccc;
+  border-radius: 4px;
+}
 
 /* Two sub-columns: Rig + Session | Fat XML; log (+ candidates) share the rest. */
 .side {

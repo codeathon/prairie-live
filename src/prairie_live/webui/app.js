@@ -120,6 +120,22 @@ function applyDffToggle() {
       : "Collect a baseline first";
 }
 
+function syncScaleInput(live) {
+  const el = $("scale_hi");
+  if (!el || document.activeElement === el) return;
+  el.value = live.clim_hi != null && live.clim_hi !== "" ? live.clim_hi : "";
+}
+
+async function postLiveScale(body) {
+  const res = await jpost("/api/live-scale", body);
+  if (!res.ok) {
+    $("live_cap").textContent = res.error || "scale failed";
+    return null;
+  }
+  syncScaleInput(res);
+  return res;
+}
+
 function rgbCss(rgb) {
   const [r, g, b] = rgb || [0, 255, 255];
   return `rgb(${r},${g},${b})`;
@@ -552,16 +568,23 @@ async function tick() {
     liveMode = st.live.mode || "raw";
     baselineReady = !!st.live.baseline_ready;
     applyDffToggle();
+    syncScaleInput(st.live);
     const o = st.live.optics || {};
+    let cap = "";
     if (o.fov_width_um && o.optical_zoom) {
-      $("live_cap").textContent =
+      cap =
         (st.live.detail || "live") +
         (!String(st.live.detail || "").includes("FOV")
           ? ` · FOV ${Number(o.fov_width_um).toFixed(1)} µm · zoom ${o.optical_zoom}`
           : "");
     } else {
-      $("live_cap").textContent = st.live.detail || "";
+      cap = st.live.detail || "";
     }
+    if (st.live.clim_hi != null && liveMode !== "dff") {
+      const lo = st.live.clim_lo != null ? st.live.clim_lo : 0;
+      cap = (cap ? cap + " · " : "") + `scale ${lo}–${st.live.clim_hi}`;
+    }
+    $("live_cap").textContent = cap;
   }
   if (st.boards && st.boards.length) {
     ensurePowerTiles(st.running ? st.boards : st.boards.filter((b) => b.ready));
@@ -601,6 +624,23 @@ async function boot() {
     liveMode = res.mode || next;
     baselineReady = !!res.baseline_ready;
     applyDffToggle();
+  });
+  $("scale_hi").addEventListener("change", async () => {
+    const raw = $("scale_hi").value.trim();
+    if (raw === "") {
+      await postLiveScale({ auto: true });
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      $("live_cap").textContent = "Max must be a positive ADU white-point";
+      return;
+    }
+    await postLiveScale({ lo: 0, hi: n });
+  });
+  $("scale_auto_btn").addEventListener("click", async () => {
+    $("scale_hi").value = "";
+    await postLiveScale({ auto: true });
   });
   $("marks_toggle").addEventListener("click", () => {
     marksOn = !marksOn;

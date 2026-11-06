@@ -19,6 +19,10 @@
           <div class="fov-toggles">
             <button type="button" id="baseline_btn" class="fov-toggle" title="Recompute 60-frame ΔF/F baseline">Baseline</button>
             <button type="button" id="dff_toggle" class="fov-toggle" aria-pressed="false" title="Show raw FOV (ΔF/F needs baseline)">Raw</button>
+            <label class="fov-scale" title="Raw white-point ADU (PV LUT handle on X). Empty = auto percentile.">Max
+              <input id="scale_hi" type="number" min="1" step="1" placeholder="auto" />
+            </label>
+            <button type="button" id="scale_auto_btn" class="fov-toggle" title="Auto percentile stretch">Auto</button>
             <button type="button" id="marks_toggle" class="fov-toggle" aria-pressed="true" title="Hide Mark Points overlay">MP</button>
           </div>
         </div>

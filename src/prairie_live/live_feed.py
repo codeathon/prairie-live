@@ -18,6 +18,7 @@ from prairie_live.trial_images import (
 	dff_rgb,
 	disk_mean,
 	png_bytes_rgb,
+	to_u8,
 	to_u8_clim,
 )
 from prairie_live.viewer import orient_fov
@@ -25,9 +26,6 @@ from prairie_live.viewer import orient_fov
 BASELINE_N = 60
 # Spatial mean-bin for the GUI PNG only (full-res kept for geometry / ROI).
 DISPLAY_BIN = 4
-# Fixed Raw display clim (ADU) — match PV LUT X-axis (0–65535); avoids percentile noise pump.
-DISPLAY_CLIM_LO = 0.0
-DISPLAY_CLIM_HI = 65_535.0
 
 
 def bin_mean(img: np.ndarray, factor: int = DISPLAY_BIN) -> np.ndarray:
@@ -63,6 +61,9 @@ class LiveFeed:
 		self._baseline: np.ndarray | None = None
 		self._current: np.ndarray | None = None
 		self._mode = "raw"  # "raw" | "dff"
+		# Raw display clim (ADU). None = percentile auto (visible). Set hi to match PV LUT white.
+		self._clim_lo: float | None = None
+		self._clim_hi: float | None = None
 
 	def start(self) -> None:
 		if self._thread and self._thread.is_alive():
@@ -97,6 +98,31 @@ class LiveFeed:
 			if m == "dff" and self._baseline is None:
 				raise ValueError("baseline not ready")
 			self._mode = m
+			if self._current is not None:
+				self.png = self._encode_locked(self._current)
+			return self._snapshot_locked()
+
+	def set_scale(
+		self,
+		*,
+		lo: float | None = None,
+		hi: float | None = None,
+		auto: bool = False,
+	) -> dict[str, Any]:
+		"""Raw clim in ADU. ``auto=True`` restores percentile stretch."""
+		with self._lock:
+			if auto:
+				self._clim_lo = None
+				self._clim_hi = None
+			else:
+				if lo is not None:
+					self._clim_lo = float(lo)
+				if hi is not None:
+					if float(hi) <= 0:
+						raise ValueError("hi must be > 0")
+					self._clim_hi = float(hi)
+				if self._clim_hi is None and self._clim_lo is None:
+					raise ValueError("provide hi (and optional lo), or auto")
 			if self._current is not None:
 				self.png = self._encode_locked(self._current)
 			return self._snapshot_locked()
@@ -199,7 +225,10 @@ class LiveFeed:
 		self._mode = "raw"
 
 	def _raw_u8(self, disp: np.ndarray) -> np.ndarray:
-		return to_u8_clim(disp, DISPLAY_CLIM_LO, DISPLAY_CLIM_HI)
+		if self._clim_hi is not None:
+			lo = 0.0 if self._clim_lo is None else float(self._clim_lo)
+			return to_u8_clim(disp, lo, float(self._clim_hi))
+		return to_u8(disp)
 
 	def _encode_locked(self, oriented: np.ndarray) -> bytes:
 		# Bin display only — keep full-res _current / frame_wh for overlays.
@@ -243,8 +272,9 @@ class LiveFeed:
 			"baseline_frames": n_buf if self._collecting else self._baseline_n,
 			"baseline_n": self._baseline_n,
 			"collecting_baseline": self._collecting,
-			"clim_lo": DISPLAY_CLIM_LO,
-			"clim_hi": DISPLAY_CLIM_HI,
+			"clim_lo": self._clim_lo,
+			"clim_hi": self._clim_hi,
+			"scale_auto": self._clim_hi is None,
 		}
 
 	def _loop(self) -> None:

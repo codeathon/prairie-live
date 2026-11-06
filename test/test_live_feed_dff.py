@@ -7,13 +7,7 @@ import struct
 import numpy as np
 import pytest
 
-from prairie_live.live_feed import (
-	DISPLAY_BIN,
-	DISPLAY_CLIM_HI,
-	DISPLAY_CLIM_LO,
-	LiveFeed,
-	bin_mean,
-)
+from prairie_live.live_feed import DISPLAY_BIN, LiveFeed, bin_mean
 from prairie_live.trial_images import to_u8, to_u8_clim
 
 
@@ -111,19 +105,27 @@ def test_roi_dff_pct_positive_at_center():
 	assert out["1"] > 0
 
 
-def test_raw_clim_is_fixed_0_to_65535():
-	"""Dim ADU must stay dim vs auto percentile stretch."""
-	feed = LiveFeed(baseline_n=200)  # stay in raw
+def test_raw_defaults_to_auto_scale():
+	feed = LiveFeed(baseline_n=200)
+	feed.ingest_frame(_frame(50.0))
+	snap = feed.snapshot()
+	assert snap["scale_auto"] is True
+	assert snap["clim_hi"] is None
+
+
+def test_set_scale_fixed_clim_darkens_vs_auto():
+	feed = LiveFeed(baseline_n=200)
 	img = np.zeros((32, 32), dtype=np.float64)
 	img[8:24, 8:24] = 50.0
 	feed.ingest_frame(img)
+	auto_png = feed.png_bytes()
+	feed.set_scale(lo=0, hi=65_535)
 	snap = feed.snapshot()
-	assert snap["clim_lo"] == DISPLAY_CLIM_LO
-	assert snap["clim_hi"] == DISPLAY_CLIM_HI
-	assert DISPLAY_CLIM_LO == 0.0
-	assert DISPLAY_CLIM_HI == 65_535.0
-	# Fixed clim: 50/65535 → ~0 gray; auto percentile would blast the square white.
-	fixed = to_u8_clim(img, DISPLAY_CLIM_LO, DISPLAY_CLIM_HI)
-	auto = to_u8(img)
-	assert int(fixed[16, 16]) < 5
-	assert int(auto[16, 16]) > 200
+	assert snap["scale_auto"] is False
+	assert snap["clim_hi"] == 65_535.0
+	fixed_png = feed.png_bytes()
+	assert fixed_png and auto_png and fixed_png != auto_png
+	assert int(to_u8_clim(img, 0, 65_535)[16, 16]) < 5
+	assert int(to_u8(img)[16, 16]) > 200
+	feed.set_scale(auto=True)
+	assert feed.snapshot()["scale_auto"] is True
